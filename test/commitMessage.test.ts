@@ -85,7 +85,7 @@ describe("CommitMessageController", () => {
     mocks.getExtension.mockReturnValue(undefined);
     const { CommitMessageController } = await import("../src/scm/commitMessage.js");
     const controller = new CommitMessageController(() => "/workspace");
-    await mocks.handlers.get("localLlmHarness.generateCommitMessage")?.();
+    await mocks.handlers.get("locality.generateCommitMessage")?.();
     expect(mocks.showErrorMessage).toHaveBeenCalledWith(expect.stringContaining("VS Code Git repository is unavailable"));
     expect(mocks.complete).not.toHaveBeenCalled();
     controller.dispose();
@@ -95,10 +95,10 @@ describe("CommitMessageController", () => {
     const { CommitMessageController } = await import("../src/scm/commitMessage.js");
     const controller = new CommitMessageController(() => undefined);
 
-    await mocks.handlers.get("localLlmHarness.generateCommitMessageNoStaged")?.();
+    await mocks.handlers.get("locality.generateCommitMessageNoStaged")?.();
 
     expect(mocks.showInformationMessage).toHaveBeenCalledWith(
-      "Local LLM Harness: stage the changes you want included, then generate the commit message again."
+      "Locality: stage the changes you want included, then generate the commit message again."
     );
     controller.dispose();
   });
@@ -108,10 +108,10 @@ describe("CommitMessageController", () => {
     const { CommitMessageController } = await import("../src/scm/commitMessage.js");
     const controller = new CommitMessageController(() => "/workspace");
 
-    await mocks.handlers.get("localLlmHarness.generateCommitMessage")?.();
+    await mocks.handlers.get("locality.generateCommitMessage")?.();
 
     expect(mocks.showErrorMessage).toHaveBeenCalledWith(
-      "Local LLM Harness: could not inspect staged changes: git diff failed"
+      "Locality: could not inspect staged changes: git diff failed"
     );
     controller.dispose();
   });
@@ -144,7 +144,7 @@ describe("CommitMessageController", () => {
 
     const { CommitMessageController } = await import("../src/scm/commitMessage.js");
     const controller = new CommitMessageController(() => "/workspace");
-    await mocks.handlers.get("localLlmHarness.generateCommitMessageNoStaged")?.();
+    await mocks.handlers.get("locality.generateCommitMessageNoStaged")?.();
 
     expect(inputValue).toBe("Fix restart behavior");
     expect(events).toEqual(["open", "write"]);
@@ -181,7 +181,7 @@ describe("CommitMessageController", () => {
 
     const { CommitMessageController } = await import("../src/scm/commitMessage.js");
     const controller = new CommitMessageController(() => "/workspace");
-    await mocks.handlers.get("localLlmHarness.generateCommitMessage")?.({
+    await mocks.handlers.get("locality.generateCommitMessage")?.({
       rootUri: { fsPath: "/workspace/repo-b" }
     });
 

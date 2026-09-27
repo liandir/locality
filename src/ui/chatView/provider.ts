@@ -49,8 +49,8 @@ function newRuntime(): ChatRuntime {
 }
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
-  static readonly viewType = "localLlmHarness.chat";
-  private static readonly reviewScheme = "local-llm-harness-review";
+  static readonly viewType = "locality.chat";
+  private static readonly reviewScheme = "locality-review";
   private view?: vscode.WebviewView;
   private runtimes = new Map<string, ChatRuntime>();
   private navigationGeneration = 0;
@@ -124,13 +124,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private updateFocusContext(focused: boolean): void {
     if (this.chatFocusCtx !== focused) {
       this.chatFocusCtx = focused;
-      void vscode.commands.executeCommand("setContext", "localLlmHarness.chatFocus", focused);
+      void vscode.commands.executeCommand("setContext", "locality.chatFocus", focused);
     }
   }
 
   reveal(): void {
     this.view?.show?.(true);
-    void vscode.commands.executeCommand("localLlmHarness.chat.focus");
+    void vscode.commands.executeCommand("locality.chat.focus");
   }
 
   post(msg: UiEvent | ExtToChat): void {
@@ -336,7 +336,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const storage = this.getStorage();
     const ws = this.getWorkspaceRoot();
     if (!storage || !ws) {
-      vscode.window.showErrorMessage("Local LLM Harness: open a folder to start a chat.");
+      vscode.window.showErrorMessage("Locality: open a folder to start a chat.");
       return;
     }
     const runtime = newRuntime();
@@ -457,7 +457,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private workspaceReasoningEffort(): ReasoningEffort {
     return normalizeReasoningEffort(
       this.context.workspaceState.get<unknown>(WORKSPACE_REASONING_EFFORT_KEY)
-        ?? this.context.workspaceState.get<unknown>("localLlmHarness.workspaceThinkingMode", DEFAULT_REASONING_EFFORT)
+        ?? this.context.workspaceState.get<unknown>("locality.workspaceThinkingMode", DEFAULT_REASONING_EFFORT)
     );
   }
 
@@ -617,18 +617,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "compactNow": await this.compactNow(); break;
       case "compactInterruptAndRun": await this.compactAfterInterrupt(); break;
       case "newChat":
-        await vscode.commands.executeCommand("localLlmHarness.newChat");
+        await vscode.commands.executeCommand("locality.newChat");
         break;
       case "openChats":
         this.onOpenSideTab("chats");
-        await vscode.commands.executeCommand("workbench.view.extension.localLlmHarness");
+        await vscode.commands.executeCommand("workbench.view.extension.locality");
         break;
       case "deleteCurrent":
-        await vscode.commands.executeCommand("localLlmHarness.deleteChat");
+        await vscode.commands.executeCommand("locality.deleteChat");
         break;
       case "openSettings":
         this.onOpenSideTab("settings");
-        await vscode.commands.executeCommand("workbench.view.extension.localLlmHarness");
+        await vscode.commands.executeCommand("workbench.view.extension.locality");
         break;
       case "acceptPlan": {
         const runtime = this.active;
@@ -883,7 +883,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async openWorkspaceFile(filePath: string, line?: number): Promise<void> {
     const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) {
-      vscode.window.showErrorMessage("Local LLM Harness: open a folder to open files.");
+      vscode.window.showErrorMessage("Locality: open a folder to open files.");
       return;
     }
 
@@ -909,7 +909,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
       }
     } catch (err) {
-      vscode.window.showErrorMessage(`Local LLM Harness: could not open file: ${(err as Error).message}`);
+      vscode.window.showErrorMessage(`Locality: could not open file: ${(err as Error).message}`);
     }
   }
 
@@ -926,7 +926,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         { preview: false }
       );
     } catch (err) {
-      vscode.window.showErrorMessage(`Local LLM Harness: could not open review diff: ${(err as Error).message}`);
+      vscode.window.showErrorMessage(`Locality: could not open review diff: ${(err as Error).message}`);
     }
   }
 
@@ -949,7 +949,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         { preview: false }
       );
     } catch (err) {
-      vscode.window.showErrorMessage(`Local LLM Harness: could not open proposed diff: ${(err as Error).message}`);
+      vscode.window.showErrorMessage(`Locality: could not open proposed diff: ${(err as Error).message}`);
     }
   }
 

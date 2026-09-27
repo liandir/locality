@@ -48,27 +48,27 @@ for (const profile of targets) {
   }
   const manifest = structuredClone(base);
   manifest.displayName = `${base.displayName} — ${labels[profile]}`;
-  manifest.harnessEdition = profile;
-  manifest.description = `${labels[profile]} edition of Local LLM Harness: a local/LAN model with workspace tools.`;
+  manifest.localityEdition = profile;
+  manifest.description = `${labels[profile]} edition of ${base.displayName}: a local/LAN model with workspace tools.`;
   delete manifest.scripts;
   delete manifest.devDependencies;
   delete manifest.dependencies;
   delete manifest.overrides;
   delete manifest.allowScripts;
   const properties = manifest.contributes.configuration.properties;
-  if (profile === "no-commands" || profile === "safe-list") delete properties["localLlmHarness.autoapproveCommands"];
+  if (profile === "no-commands" || profile === "safe-list") delete properties["locality.autoapproveCommands"];
   if (profile === "safe-list") {
-    properties["localLlmHarness.autoapproveSafeCommands"] = { type: "boolean", default: false, scope: "application", description: "Auto-approve all matching safe commands in Act mode, including deletion. Review mode always asks. User settings only." };
-    properties["localLlmHarness.safeCommandPatterns"] = { type: "array", items: { type: "string", maxLength: 2048 }, maxItems: 128, default: await defaultPatterns(), scope: "application", description: "Whole-command regexes over executable and literal arguments separated by spaces. Arguments needing quoting use shell-style single quotes. Built-in workspace restrictions also apply. An empty list denies all commands. User settings only." };
+    properties["locality.autoapproveSafeCommands"] = { type: "boolean", default: false, scope: "application", description: "Auto-approve all matching safe commands in Act mode, including deletion. Review mode always asks. User settings only." };
+    properties["locality.safeCommandPatterns"] = { type: "array", items: { type: "string", maxLength: 2048 }, maxItems: 128, default: await defaultPatterns(), scope: "application", description: "Whole-command regexes over executable and literal arguments separated by spaces. Arguments needing quoting use shell-style single quotes. Built-in workspace restrictions also apply. An empty list denies all commands. User settings only." };
   }
-  if (profile === "advanced") properties["localLlmHarness.webSearchEndpoint"] = { type: "string", default: "", scope: "application", description: "SearXNG base URL with JSON search enabled. Each query requires approval. Use HTTPS, or HTTP on localhost/private IP. Blank disables search. User settings only." };
+  if (profile === "advanced") properties["locality.webSearchEndpoint"] = { type: "string", default: "", scope: "application", description: "SearXNG base URL with JSON search enabled. Each query requires approval. Use HTTPS, or HTTP on localhost/private IP. Blank disables search. User settings only." };
   await writeFile(path.join(stage, "package.json"), JSON.stringify(manifest, null, 2) + "\n");
   const instructions = profile === "safe-list"
     ? "Commands require approval by default. Enable Auto-approve safe commands to approve all matching commands uniformly. Use Edit User Settings to configure safeCommandPatterns. Patterns match the entire normalized command; shell expansion and compound commands are unsupported. Paths for built-in filesystem commands are restricted to the workspace. Custom programs may access the network or run further code; this is not an OS sandbox."
     : profile === "no-commands" ? "Workspace file tools are available. This package contains no model command execution or web search implementation."
     : "Commands require approval by default. Auto-approve commands applies in Act mode; Review mode always asks. Commands inherit the editor's OS permissions.";
   const search = profile === "advanced" ? "\n\nConfigure webSearchEndpoint in Settings with your SearXNG base URL. Enable JSON search on that service. Each query requires approval and may be sent to external search engines. Results contain source URLs and snippets, not full pages." : "";
-  await writeFile(path.join(stage, "README.md"), `# ${manifest.displayName}\n\n${instructions}${search}\n\nConfigure the local/LAN model endpoint in Settings. Commit-message generation uses the same VS Code Git integration in every edition. Installing another edition replaces this extension while preserving chats and shared preferences.\n`);
+  await writeFile(path.join(stage, "README.md"), `# ${manifest.displayName}\n\n${instructions}${search}\n\nConfigure the local/LAN model endpoint in Settings. Commit-message generation uses the same VS Code Git integration in every edition. Installing another Locality edition replaces this extension while preserving chats and shared preferences.\n\nUpgrading from Local LLM Harness: Locality has the new extension ID local.locality. Disable or uninstall the old extension after installing Locality. Available settings are copied once into unset locality.* keys; existing Locality values take precedence. Saved chats and attachments keep using the existing data directory.\n`);
   await cp(path.join(root, "LICENSE"), path.join(stage, "LICENSE"));
   await auditStage(profile, stage, metadata);
   const filename = `${base.name}-${base.version}-${profile}.vsix`;
@@ -80,7 +80,8 @@ for (const profile of targets) {
 // Promote only when every requested package has passed its archive audit.
 if (!selected) {
   for (const filename of await readdir(output)) {
-    if (filename.startsWith(`${base.name}-`) && filename.endsWith(".vsix")) await rm(path.join(output, filename));
+    // Remove obsolete filenames from before the Locality rename too.
+    if ([base.name, "local-llm-harness"].some(name => filename.startsWith(`${name}-`)) && filename.endsWith(".vsix")) await rm(path.join(output, filename));
   }
 }
 for (const profile of targets) {

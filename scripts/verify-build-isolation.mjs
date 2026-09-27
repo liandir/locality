@@ -26,7 +26,7 @@ export async function auditStage(profile, directory, metadata) {
     auditText(profile, file, await readFile(path.join(directory, file), "utf8"));
   }
   const manifest = JSON.parse(await readFile(path.join(directory, "package.json"), "utf8"));
-  if (manifest.harnessEdition !== profile) throw new Error("Manifest edition does not match build.");
+  if (manifest.localityEdition !== profile) throw new Error("Manifest edition does not match build.");
   const entries = await readdir(directory);
   if (entries.some(name => !["dist", "media", "package.json", "README.md", "LICENSE"].includes(name))) throw new Error("Unexpected file in package staging directory.");
 }
@@ -70,6 +70,6 @@ export async function auditArchive(profile, filename) {
     if (!entries.has(`extension/${file}`)) throw new Error(`Missing packaged entry: ${file}`);
   }
   const manifest = JSON.parse(entries.get("extension/package.json").toString());
-  if (manifest.harnessEdition !== profile) throw new Error("Packaged manifest has wrong edition.");
+  if (manifest.localityEdition !== profile) throw new Error("Packaged manifest has wrong edition.");
   return entries;
 }

@@ -1,6 +1,6 @@
-# Local LLM Harness
+# Locality
 
-Local LLM Harness is a VS Code extension that turns a locally hosted
+Locality is a VS Code extension that turns a locally hosted
 `llama.cpp` server into a coding assistant inside your editor. Its built-in
 model requests are restricted to the configured localhost or private-network
 endpoint.
@@ -26,13 +26,13 @@ sandboxes. File reads remain auto-approved by default; file edits are opt-in.
 ## Install
 
 1. Open this repository on GitHub and go to **Releases**.
-2. Download the latest `.vsix` asset (`local-llm-harness-<version>-<edition>.vsix`).
+2. Download the latest `.vsix` asset (`locality-<version>-<edition>.vsix`).
 3. Install it using either method:
 
    **From the terminal** (substitute the version you downloaded):
 
    ```bash
-   code --install-extension local-llm-harness-<version>-safe-list.vsix
+   code --install-extension locality-<version>-safe-list.vsix
    ```
 
    **From inside VS Code:** open the Command Palette (`Ctrl/Cmd+Shift+P`) and
@@ -46,13 +46,23 @@ shown in Settings. Commit-message generation is identical in all editions and
 requires VS Code's built-in Git extension; there is no direct Git subprocess
 fallback.
 
-The **Local LLM Harness** icon will appear in the Activity Bar on the left. The
+**Upgrading from Local LLM Harness:** Locality uses the new extension ID
+`local.locality` and the `locality.*` settings/command namespace. Disable or
+uninstall the old `local.local-llm-harness` extension after installing Locality.
+On first activation, settings available in the installed edition are copied from
+`localLlmHarness.*` into unset `locality.*` settings at the same scope. Existing
+Locality values take precedence, and the old settings are kept. Each key is
+migrated once, so resetting Locality does not restore old overrides. Custom
+keybindings should use the new command IDs. Chat files stay in
+`.local-llm-chats/`, so existing conversations and attachments remain available.
+
+The **Locality** icon will appear in the Activity Bar on the left. The
 welcome screen and the chat window both open initially; you can drag the chat
 window to a location that is more comfortable for you.
 
 ## First-time setup
 
-Click the harness icon in the Activity Bar, then switch to the **Settings**
+Click the Locality icon in the Activity Bar, then switch to the **Settings**
 tab in the side panel. Configure the server and tool calling before chatting:
 
 - **Server URL** — the address of your `llama.cpp` server, e.g.
@@ -74,7 +84,7 @@ commands) have sensible defaults and can be revisited later.
 
 
 **Safe-list configuration:** choose **Edit User Settings** in the Settings tab.
-`localLlmHarness.safeCommandPatterns` is an array of regex strings matched against
+`locality.safeCommandPatterns` is an array of regex strings matched against
 the entire normalized command. Executable and arguments are separated by single
 spaces; arguments needing quoting use shell-style single quotes. Patterns have no
 flags. An empty array denies all commands; invalid patterns fail closed. The
@@ -160,7 +170,7 @@ The brain button selects reasoning behavior per chat. **None** sends
 For example, the default `settings.json` mapping is:
 
 ```json
-"localLlmHarness.reasoningEfforts": {
+"locality.reasoningEfforts": {
   "Low": "low",
   "Medium": "medium",
   "High": "high"
@@ -234,12 +244,12 @@ before files are touched.
 
 ## Commit message generation
 
-Open VS Code's **Source Control** view after staging changes. The Local LLM
-Harness button in the Source Control title bar can generate a commit message
+Open VS Code's **Source Control** view after staging changes. The Locality
+button in the Source Control title bar can generate a commit message
 from the staged diff.
 
 - If staged changes exist, hover text reads **Generate commit message with
-  local-llm**. Click the button to send the staged diff to your configured
+  Locality**. Click the button to send the staged diff to your configured
   local `llama.cpp` endpoint and write the generated message into Git's commit
   input box.
 - If nothing is staged, hover text reads **Please stage changes before
@@ -451,13 +461,13 @@ If you'd rather build the extension yourself than download a release, package a
    ```
 
    This builds four isolated editions, audits their bundles and archives, and
-   writes `artifacts/local-llm-harness-<version>-<edition>.vsix`. The version
+   writes `artifacts/locality-<version>-<edition>.vsix`. The version
    matches `package.json`.
 
 3. Install the freshly built file the same way as a released one:
 
    ```bash
-   code --install-extension artifacts/local-llm-harness-<version>-safe-list.vsix
+   code --install-extension artifacts/locality-<version>-safe-list.vsix
    ```
 
    Or, from inside VS Code, run **Extensions: Install from VSIX…** from the
@@ -508,7 +518,7 @@ or source `~/.nvm/nvm.sh` as shown above.
 
 Enable **Settings → Workspace memory → Use workspace memories** to let the
 agent search and recall active summaries from other chats in the same workspace. It is off by
-default and is stored in workspace settings (`localLlmHarness.memoryEnabled`);
+default and is stored in workspace settings (`locality.memoryEnabled`);
 user-level activation is ignored. This switch controls whether memory tools are available. Generation and editing remain available when it is off.
 
 After a response finishes, the harness queues a short memory summary using the
@@ -554,7 +564,7 @@ suggests considering memory retrieval at the beginning of a request:
 
 Both tools return full UTC dates with minute precision, such as
 `2026-09-11T14:05Z`. **Maximum search results** sets the per-search limit from
-1 to 100, defaulting to 10 (`localLlmHarness.memoryMaxCount`). The agent chooses
+1 to 100, defaulting to 10 (`locality.memoryMaxCount`). The agent chooses
 which matches to recall. The tools work in Act, Plan, and Review modes and follow
 the read-approval setting. When workspace memories are off, both tools and their
 system-prompt guidance are omitted, and attempted calls cannot retrieve content.

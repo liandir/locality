@@ -9,7 +9,7 @@ export const DEFAULT_REASONING_EFFORTS: ReasoningEfforts = {
   Medium: "medium",
   High: "high"
 };
-export const WORKSPACE_REASONING_EFFORT_KEY = "localLlmHarness.workspaceReasoningEffort";
+export const WORKSPACE_REASONING_EFFORT_KEY = "locality.workspaceReasoningEffort";
 
 export interface ReasoningEffortChoice {
   label: string;

@@ -9,7 +9,7 @@ export function readFeatureSettings(cfg: vscode.WorkspaceConfiguration) {
   };
 }
 export async function seedFeatureSettings(): Promise<void> {
-  const cfg = vscode.workspace.getConfiguration("localLlmHarness");
+  const cfg = vscode.workspace.getConfiguration("locality");
   if (cfg.inspect("safeCommandPatterns")?.globalValue === undefined) {
     await cfg.update("safeCommandPatterns", [...DEFAULT_SAFE_PATTERNS], vscode.ConfigurationTarget.Global);
   }

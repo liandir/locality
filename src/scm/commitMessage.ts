@@ -4,11 +4,11 @@ import { readSettings } from "../config/settings.js";
 import { complete } from "../llm/client.js";
 import { gitRepositories, type GitRepositoryApi } from "./gitApi.js";
 
-const CTX_HAS_STAGED = "localLlmHarness.hasStagedChanges";
-const CTX_BUSY = "localLlmHarness.commitMessageBusy";
-const CTX_WIGGLE = "localLlmHarness.commitMessageWiggle";
+const CTX_HAS_STAGED = "locality.hasStagedChanges";
+const CTX_BUSY = "locality.commitMessageBusy";
+const CTX_WIGGLE = "locality.commitMessageWiggle";
 const WIGGLE_MS = 900;
-const NO_STAGED_MESSAGE = "Local LLM Harness: stage the changes you want included, then generate the commit message again.";
+const NO_STAGED_MESSAGE = "Locality: stage the changes you want included, then generate the commit message again.";
 
 export class CommitMessageController implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
@@ -18,12 +18,12 @@ export class CommitMessageController implements vscode.Disposable {
 
   constructor(_getWorkspaceRoot: () => string | undefined) {
     this.disposables.push(
-      vscode.commands.registerCommand("localLlmHarness.generateCommitMessage", (context?: unknown) => this.generate(context)),
+      vscode.commands.registerCommand("locality.generateCommitMessage", (context?: unknown) => this.generate(context)),
       // Context keys only choose the icon variant. Every clickable variant
       // re-checks Git so a stale SCM context can never block generation.
-      vscode.commands.registerCommand("localLlmHarness.generateCommitMessageNoStaged", (context?: unknown) => this.generate(context)),
-      vscode.commands.registerCommand("localLlmHarness.generateCommitMessageNoStagedWiggle", (context?: unknown) => this.generate(context)),
-      vscode.commands.registerCommand("localLlmHarness.generateCommitMessageBusy", () => undefined),
+      vscode.commands.registerCommand("locality.generateCommitMessageNoStaged", (context?: unknown) => this.generate(context)),
+      vscode.commands.registerCommand("locality.generateCommitMessageNoStagedWiggle", (context?: unknown) => this.generate(context)),
+      vscode.commands.registerCommand("locality.generateCommitMessageBusy", () => undefined),
       vscode.workspace.onDidChangeWorkspaceFolders(() => void this.resetGitWatcher()),
       vscode.window.onDidChangeWindowState(e => {
         if (e.focused) void this.refreshStagedContext();
@@ -55,7 +55,7 @@ export class CommitMessageController implements vscode.Disposable {
       diff = await repository.diff(true);
     } catch (err) {
       await vscode.window.showErrorMessage(
-        `Local LLM Harness: could not inspect staged changes: ${(err as Error).message}`
+        `Locality: could not inspect staged changes: ${(err as Error).message}`
       );
       return;
     }
@@ -74,7 +74,7 @@ export class CommitMessageController implements vscode.Disposable {
       await vscode.commands.executeCommand("workbench.view.scm");
       await writeCommitMessage(gitRoot, message);
     } catch (err) {
-      vscode.window.showErrorMessage(`Local LLM Harness: could not generate commit message: ${(err as Error).message}`);
+      vscode.window.showErrorMessage(`Locality: could not generate commit message: ${(err as Error).message}`);
     } finally {
       await this.setBusy(false);
       await this.refreshStagedContext();
@@ -189,7 +189,7 @@ async function writeCommitMessage(gitRoot: string, message: string): Promise<voi
     return;
   }
   await vscode.env.clipboard.writeText(message);
-  vscode.window.showWarningMessage("Local LLM Harness: generated commit message copied to clipboard because the Git input box was unavailable.");
+  vscode.window.showWarningMessage("Locality: generated commit message copied to clipboard because the Git input box was unavailable.");
 }
 
 async function findGitRepository(gitRoot: string): Promise<GitRepositoryApi | undefined> {

@@ -48,5 +48,5 @@ jobs:
           else
             gh release create "${GITHUB_REF_NAME}" artifacts/*.vsix \
               --title "${GITHUB_REF_NAME}" \
-              --notes "VS Code extension package for Local LLM Harness."
+              --notes "VS Code extension package for Locality."
           fi

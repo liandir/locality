@@ -1,4 +1,4 @@
-# Local LLM Harness contributor guide
+# Locality contributor guide
 
 This file applies to the entire repository.
 

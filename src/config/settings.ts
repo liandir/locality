@@ -4,7 +4,7 @@ import { DEFAULT_MEMORY_MAX_COUNT, MAX_MEMORY_COUNT } from "../chat/memoryLimits
 import { normalizeToolCallingProfile, type ToolCallingProfile } from "../llm/toolCallingProfile.js";
 import { normalizeReasoningEfforts, type ReasoningEfforts } from "../chat/reasoningEffort.js";
 
-const NS = "localLlmHarness";
+const NS = "locality";
 
 export const DEFAULT_TITLE_PROMPT =
   "Summarize the user message in 2-6 words. Output ONLY the summary.";
@@ -109,7 +109,7 @@ export async function writeSetting<K extends keyof HarnessSettings>(
 }
 
 /** Every harness setting key; maps 1:1 to the package.json configuration properties. */
-const SETTING_KEYS: (keyof HarnessSettings)[] = [
+export const SETTING_KEYS: (keyof HarnessSettings)[] = [
   "endpoint",
   "model",
   "toolCallingMode",

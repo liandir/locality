@@ -15,6 +15,7 @@ import {
   type ReasoningEffort
 } from "./reasoningEffort.js";
 
+// Keep the data directory stable across the Locality rename, including attachments.
 export const CHATS_DIR = ".local-llm-chats";
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 export const VISION_TOKEN_RESERVE = 4096;

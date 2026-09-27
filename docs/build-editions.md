@@ -10,10 +10,23 @@ to produce four packages in `artifacts/`:
 | `commands` | General shell/native execution | Absent |
 | `advanced` | Same general executor | SearXNG |
 
-The packages retain the same extension ID. Installing another edition replaces
+The packages share the extension ID `local.locality`. Installing another edition replaces
 the installed edition while retaining chats and common preferences. Normal
 `npm run build` uses Commands. To package one edition during development:
 `npm run package:vsix -- --profile=safe-list`.
+
+The Locality rename changed the extension ID and settings/command namespace.
+See the README's upgrade instructions for replacing the former extension.
+The settings migration uses the selected edition's keys, so installing a less
+capable edition cannot import unavailable capabilities or permission settings.
+VSIX files are named `locality-<version>-<edition>.vsix`.
+
+Rename verification, September 27, 2026: all 826 tests across 59 files,
+typecheck, lint, build, and the four package-isolation audits passed. An isolated
+VS Code extension host also verified migration from the old namespace, user and
+workspace scopes, preservation of existing Locality values, rejection of
+workspace permission overrides, and resetting settings without restoring legacy
+values. The chat data directory remains unchanged.
 
 ## Ownership and isolation
 
