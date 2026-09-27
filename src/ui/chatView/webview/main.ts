@@ -562,12 +562,13 @@ function renderCopyableCodeBlock(
   code: string,
   language: string | undefined,
   displayPrefix = "",
-  extraAction = ""
+  extraAction = "",
+  decoration = ""
 ): string {
   const languageClass = language ? ` language-${escapeHtml(language)}` : "";
   const renderedCode = highlightCode(code, language);
   const codeContent = displayPrefix
-    ? `<span class="code-display-prefix" aria-hidden="true">${escapeHtml(displayPrefix)}</span><span class="copy-code-source">${renderedCode}</span>`
+    ? `${decoration}<span class="code-display-prefix" aria-hidden="true">${escapeHtml(displayPrefix)}</span><span class="copy-code-source">${renderedCode}</span>`
     : renderedCode;
   const codeClass = `${displayPrefix ? "command-code-display" : "copy-code-source"}${languageClass}`;
   return `<div class="copy-code-block${displayPrefix ? " tool-output-header" : ""}${extraAction ? " has-extra-actions" : ""}">
@@ -4148,13 +4149,16 @@ function loadFromRecord(rec: ChatRecord): void {
         argsJson: m.toolCall?.argsJson ?? "{}",
         category: malformedToolCall ? "unknown" : "read",
         status: restoredToolStatus(m.toolCall?.status, m.content, malformedToolCall),
-        resultPreview: showsFullResult ? m.content : m.content.slice(0, 400),
+        resultPreview: m.toolCall?.status === "failed" && m.toolCall.processOutput !== undefined
+          ? m.toolCall.processOutput : showsFullResult ? m.content : m.content.slice(0, 400),
         diffPreview: fileChange?.diffPreview,
         added: fileChange?.added,
         removed: fileChange?.removed,
         diffUnavailable: !fileChange,
         createsNewFile: restoredCreatesNewFile(restoredName, m.toolCall?.createsNewFile),
         processCommand: m.toolCall?.processCommand,
+        processOutput: m.toolCall?.processOutput,
+        processExitCode: m.toolCall?.processExitCode,
         expanded: false
       };
       last.toolCards.push(tc);
@@ -4486,6 +4490,8 @@ function handleHostMessage(msg: ExtToChat): void {
           processJobId: msg.processJobId,
           processCommand: msg.processCommand,
           processRunning: msg.processRunning,
+          processOutput: msg.processOutput,
+          processExitCode: msg.processExitCode,
           expanded: false
         };
         m.toolCards.push(card);
@@ -4505,6 +4511,8 @@ function handleHostMessage(msg: ExtToChat): void {
         card.processJobId = msg.processJobId;
         card.processCommand = msg.processCommand;
         card.processRunning = msg.processRunning;
+        card.processOutput = msg.processOutput;
+        card.processExitCode = msg.processExitCode;
       }
       render();
       break;
@@ -4514,6 +4522,7 @@ function handleHostMessage(msg: ExtToChat): void {
         const tc = m.toolCards.find(t => t.toolId === msg.toolId);
         if (tc && isActiveToolCard(tc)) {
           tc.resultPreview = msg.resultPreview;
+          if (msg.processOutput !== undefined) tc.processOutput = msg.processOutput;
           break;
         }
       }
@@ -4543,6 +4552,8 @@ function handleHostMessage(msg: ExtToChat): void {
           if (msg.processJobId) tc.processJobId = msg.processJobId;
           if (msg.processCommand !== undefined) tc.processCommand = msg.processCommand;
           if (typeof msg.processRunning === "boolean") tc.processRunning = msg.processRunning;
+          if (msg.processOutput !== undefined) tc.processOutput = msg.processOutput;
+          if (msg.processExitCode !== undefined) tc.processExitCode = msg.processExitCode;
           // A write resolving while its card is already open should show its
           // diff without another toggle — fetch it now.
           if (msg.status === "executed" && isWriteToolCard(tc) && !tc.diffPreview && !tc.diffRequested) {

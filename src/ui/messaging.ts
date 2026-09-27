@@ -30,6 +30,9 @@ export interface ChatToolProcess {
   processJobId?: string;
   processCommand?: string;
   processRunning?: boolean;
+  /** Display-only output, kept separate from the model's stream-labeled result. */
+  processOutput?: string;
+  processExitCode?: number;
 }
 
 /** Authoritative list of activities whose results the model is still consuming. */

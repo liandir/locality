@@ -1,17 +1,14 @@
-import type { ChatToExt } from "../ui/messaging.js";
+import type { ChatToExt, ChatToolProcess } from "../ui/messaging.js";
 import type { UiEvent } from "../chat/session.js";
-export interface FeatureCard {
+export interface FeatureCard extends ChatToolProcess {
   toolId: string;
   toolName: string;
   status: "streaming" | "pending" | "approved" | "rejected" | "executed" | "failed";
-  processCommand?: string;
-  processJobId?: string;
-  processRunning?: boolean;
   processStopping?: boolean;
   resultPreview?: string;
 }
 export interface ChatFeature {
-  renderHeader?(card: FeatureCard, args: Record<string, unknown>, code: (text: string, language: string, prefix: string, actions?: string) => string, escape: (value: string) => string, icon: string, error?: boolean): string;
+  renderHeader?(card: FeatureCard, args: Record<string, unknown>, code: (text: string, language: string, prefix: string, actions?: string, decoration?: string) => string, escape: (value: string) => string, icon: string, error?: boolean): string;
   formatResult?(card: FeatureCard, text: string): string | undefined;
   activityClass?(card: FeatureCard): string;
   renderResult?(card: FeatureCard, escape: (value: string) => string, separator: string): string | undefined;

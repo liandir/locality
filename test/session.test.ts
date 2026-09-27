@@ -120,7 +120,7 @@ function contextActivityIds(events: UiEvent[]): string[] {
 
 function mockCommandHandle(result: Promise<{ exitCode: number; stdout: string; stderr: string; truncated: boolean }>) {
   let output = { stdout: "", stderr: "", truncated: false };
-  void result.then(value => { output = value; });
+  void result.then(value => { output = value; }, () => undefined);
   return {
     result,
     snapshot: () => output,
@@ -1669,12 +1669,49 @@ describe("ChatSession", () => {
     }));
   });
 
+  it.each([0, 1, 127, "runner-error"])("separates command outcome %s from tool status and persists display data", async outcome => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-command-history-"));
+    try {
+      mocks.settings.toolCallingMode = "native";
+      mocks.settings.autoapproveCommands = true;
+      if (outcome === "runner-error") mocks.runProcess.mockRejectedValue(new Error("runner unavailable"));
+      else mocks.runProcess.mockResolvedValue({ exitCode: outcome, stdout: "out\n", stderr: "err\n", output: "err\nout\n", truncated: false });
+      let pass = 0;
+      mocks.streamChat.mockImplementation(async function* () {
+        if (pass++ === 0) yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["test"]}', id: "command_outcome" };
+        else yield { kind: "text", text: "done" };
+      });
+      const { ChatStorage } = await import("../src/chat/storage.js");
+      const { ChatSession } = await import("../src/chat/session.js");
+      const storage = new ChatStorage(ws, path.join(ws, "chats"));
+      const record = storage.newRecord("native");
+      const events: UiEvent[] = [];
+      const session = new ChatSession({ storage, workspaceRoot: ws, record, emit: event => events.push(event) });
+      await session.sendUserMessage("Run the command");
+      await session.shutdown();
+      const reloaded = await storage.load(record.id);
+      const message = reloaded?.messages.find(item => item.toolCall?.id === "command_outcome");
+      const status = outcome === "runner-error" ? "failed" : "executed";
+      expect(message?.toolCall?.status).toBe(status);
+      expect(events).toContainEqual(expect.objectContaining({ kind: "toolCallResolved", status }));
+      if (outcome === "runner-error") {
+        expect(message?.content).toContain("runner unavailable");
+        expect(message?.toolCall?.processExitCode).toBeUndefined();
+      } else {
+        expect(message?.toolCall).toMatchObject({ processOutput: "err\nout\n", processExitCode: outcome });
+        expect(message?.content).toBe(`exit ${outcome}\n--- stdout ---\nout\n\n--- stderr ---\nerr\n`);
+      }
+    } finally {
+      await fs.rm(ws, { recursive: true, force: true });
+    }
+  });
+
   it.each(["run_command", "run_process"])("shows the command when checking a long-running %s", async toolName => {
     const legacy = toolName === "run_command";
     mocks.settings.toolCallingMode = legacy ? "compat-qwen3" : "native";
     mocks.settings.autoapproveCommands = true;
-    const finalResult = { exitCode: 0, stdout: "started\ndone\n", stderr: "", truncated: false };
-    let output = { stdout: "started\n", stderr: "", truncated: false };
+    const finalResult = { exitCode: 0, stdout: "started\ndone\n", stderr: "", output: "started\ndone\n", truncated: false };
+    let output = { stdout: "started\n", stderr: "", output: "started\n", truncated: false };
     let resolveResult = (_value: typeof finalResult): void => undefined;
     const result = new Promise<typeof finalResult>(resolve => { resolveResult = resolve; });
     let waits = 0;
@@ -1733,6 +1770,39 @@ describe("ChatSession", () => {
     });
     expect(record.messages.filter(message => message.role === "tool").map(message => message.toolCall?.processCommand))
       .toEqual(["npm test", "npm test"]);
+    expect(record.messages.filter(message => message.role === "tool").map(message => ({
+      output: message.toolCall?.processOutput, exitCode: message.toolCall?.processExitCode
+    }))).toEqual([{ output: "started\ndone\n", exitCode: 0 }, { output: "done\n", exitCode: 0 }]);
+  });
+
+  it("persists a runner failure after the initial command has yielded", async () => {
+    mocks.settings.toolCallingMode = "native";
+    mocks.settings.autoapproveCommands = true;
+    let fail!: (error: Error) => void;
+    const result = new Promise<never>((_resolve, reject) => { fail = reject; });
+    mocks.startProcess.mockReturnValue({
+      result,
+      snapshot: () => ({ stdout: "started\n", stderr: "", output: "started\n", truncated: false }),
+      wait: vi.fn(async () => ({ running: true as const })),
+      stop: vi.fn(async () => result)
+    });
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (pass++ === 0) yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["test"]}', id: "yield_then_fail" };
+      else {
+        fail(new Error("runner connection lost"));
+        await Promise.resolve();
+        yield { kind: "text", text: "done" };
+      }
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const session = new ChatSession({ storage: { save: vi.fn() } as never, workspaceRoot: "/tmp/workspace", record, emit: event => events.push(event) });
+    await session.sendUserMessage("Run the command");
+    expect(events).toContainEqual(expect.objectContaining({ kind: "processJobState", status: "failed", resultPreview: "error: runner connection lost" }));
+    expect(record.messages.find(message => message.toolCall?.id === "yield_then_fail")?.toolCall)
+      .toMatchObject({ status: "failed", processOutput: "error: runner connection lost" });
   });
 
   it("lets the user stop a process during an active check and records the update for the model", async () => {

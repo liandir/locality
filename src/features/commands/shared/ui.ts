@@ -1,15 +1,18 @@
 import type { ChatFeature } from "../../../build/chatContracts.js";
 import { toolCommandText } from "../../../ui/commandDisplay.js";
-import { sanitizeTerminalText } from "../../../util/terminalText.js";
+import { commandPresentation } from "./presentation.js";
 
 const names = ["run_command", "run_process", "wait_process", "stop_process"];
 const starts = ["run_command", "run_process"];
 export const chatFeature: ChatFeature = {
   activityClass: card => card.processRunning && starts.includes(card.toolName) ? " process-running" : "",
-  formatResult: (card, text) => names.includes(card.toolName) ? sanitizeTerminalText(text) : undefined,
+  formatResult: (card, text) => names.includes(card.toolName) ? commandPresentation(card, text).output : undefined,
   renderHeader(card, args, code, escape, icon, error) {
     const command = chatFeature.operation?.(card, args);
-    return command ? code(command, "bash", "$ ", error ? "" : chatFeature.actions?.(card, escape, icon)) : "";
+    const exitCode = commandPresentation(card).exitCode;
+    const decoration = !error && !card.processRunning && Number.isInteger(exitCode)
+      ? `<span class="command-exit-dot ${exitCode === 0 ? "success" : "failure"}" role="img" aria-label="Exit code ${escape(String(exitCode))}" data-tip="Exit code ${escape(String(exitCode))}"></span>` : "";
+    return command ? code(command, "bash", "$ ", error ? "" : chatFeature.actions?.(card, escape, icon), decoration) : "";
   },
   recognizes: name => names.includes(name),
   operation: (card, args) => names.includes(card.toolName) ? card.processCommand ?? toolCommandText(card.toolName, args) : "",
@@ -37,7 +40,13 @@ export const chatFeature: ChatFeature = {
       card.processJobId = event.jobId;
       card.processRunning = event.running;
       card.processStopping = false;
-      if (event.resultPreview) card.resultPreview = event.resultPreview;
+      // Check/stop cards retain their own output slice; the origin owns the full stream.
+      if (card.toolId === event.toolId) {
+        if (event.status) card.status = event.status;
+        if (event.resultPreview !== undefined) card.resultPreview = event.resultPreview;
+        if (event.processOutput !== undefined) card.processOutput = event.processOutput;
+      }
+      if (event.processExitCode !== undefined) card.processExitCode = event.processExitCode;
     }
     return true;
   },

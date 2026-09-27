@@ -20,6 +20,8 @@ interface ManagedProcessJob {
   stoppedBy?: "model" | "user" | "cancel" | "turn";
   stdoutOffset: number;
   stderrOffset: number;
+  outputOffset: number;
+  exitCode?: number;
 }
 
 const INITIAL_PROCESS_WAIT_MS = 10_000;
@@ -46,11 +48,12 @@ export class CommandRuntime implements FeatureRuntime {
     let result: string;
     let processJobId: string | undefined;
     let processRunning: boolean | undefined;
+    let display: ChatToolProcess = {};
     if (name === "wait_process") {
       const job = this.requireProcessJob(args);
       const waitMs = normalizeProcessWaitMs(args.wait_ms);
       const waited = await job.handle.wait(waitMs);
-      ({ result, processJobId, processRunning } = this.processWaitResult(job, waited, waitMs));
+      return this.processWaitResult(job, waited, waitMs);
     } else if (name === "stop_process") {
       const job = this.requireProcessJob(args);
       const wasRunning = job.running;
@@ -61,19 +64,21 @@ export class CommandRuntime implements FeatureRuntime {
       job.running = false;
       processJobId = job.id;
       processRunning = false;
+      const output = this.consumeProcessOutput(job);
+      display = displayResult(output, job.exitCode);
       result = processJobResult(
-        this.consumeProcessOutput(job),
+        output,
         wasRunning ? `Process ${job.id} was stopped.` : `Process ${job.id} had already finished.`
       );
 
     } else {
       const handle = await this.policy.launch(name, args, this.context.workspaceRoot, signal,
-        output => this.context.emit({ kind: "toolCallOutput", toolId, resultPreview: commandOutputText(output) }));
+        output => this.context.emit({ kind: "toolCallOutput", toolId, resultPreview: commandOutputText(output), ...displayResult(output) }));
       const job = this.registerProcessJob(handle, toolId, this.policy.display?.(name, args) ?? toolCommandText(name, args));
       const waited = await handle.wait(INITIAL_PROCESS_WAIT_MS);
       return this.processWaitResult(job, waited, INITIAL_PROCESS_WAIT_MS);
     }
-    return { result, processJobId, processRunning };
+    return { result, processJobId, processRunning, ...display };
   }
   cancel(): void {
     for (const job of this.processJobs.values()) {
@@ -103,9 +108,10 @@ export class CommandRuntime implements FeatureRuntime {
       toolId: job.originToolId,
       jobId: job.id,
       running: false,
-      resultPreview: result
+      resultPreview: result,
+      ...displayResult(job.handle.snapshot(), job.exitCode)
     });
-    await this.context.appendResult("stop_process", JSON.stringify({ job_id: job.id }), result, { processCommand: job.command });
+    await this.context.appendResult("stop_process", JSON.stringify({ job_id: job.id }), result, { processCommand: job.command, ...displayResult(job.handle.snapshot(), job.exitCode) });
   }
 
   private registerProcessJob(handle: CommandHandle, originToolId: string, command: string): ManagedProcessJob {
@@ -127,13 +133,17 @@ export class CommandRuntime implements FeatureRuntime {
       running: true,
       announced: false,
       stdoutOffset: 0,
-      stderrOffset: 0
+      stderrOffset: 0,
+      outputOffset: 0
     };
     this.processJobs.set(id, job);
     void handle.result.then(
       result => {
         job.running = false;
+        job.exitCode = result.exitCode;
         if (!job.announced || this.processJobs.get(job.id) !== job) return;
+        const display = { ...displayResult(result, result.exitCode), processRunning: false };
+        this.context.updateResult?.(job.originToolId, display);
         const lead = job.stoppedBy === "turn"
           ? `Process ${job.id} stopped after the model response completed (exit ${result.exitCode}).`
           : job.stoppedBy
@@ -144,18 +154,23 @@ export class CommandRuntime implements FeatureRuntime {
           toolId: job.originToolId,
           jobId: job.id,
           running: false,
-          resultPreview: processJobResult(result, lead)
+          resultPreview: processJobResult(result, lead),
+          ...display
         });
       },
       error => {
         job.running = false;
         if (!job.announced || this.processJobs.get(job.id) !== job) return;
+        const diagnostic = `error: ${(error as Error).message}`;
+        const display = { processOutput: diagnostic, processRunning: false, status: "failed" as const };
+        this.context.updateResult?.(job.originToolId, display);
         this.context.emit({
           kind: "processJobState",
           toolId: job.originToolId,
           jobId: job.id,
           running: false,
-          resultPreview: `Process ${job.id} failed: ${(error as Error).message}`
+          resultPreview: diagnostic,
+          ...display
         });
       }
     );
@@ -174,10 +189,12 @@ export class CommandRuntime implements FeatureRuntime {
     const output = {
       stdout: snapshot.stdout.slice(job.stdoutOffset),
       stderr: snapshot.stderr.slice(job.stderrOffset),
+      output: snapshot.output?.slice(job.outputOffset),
       truncated: snapshot.truncated
     };
     job.stdoutOffset = snapshot.stdout.length;
     job.stderrOffset = snapshot.stderr.length;
+    job.outputOffset = snapshot.output?.length ?? 0;
     return output;
   }
 
@@ -199,11 +216,11 @@ export class CommandRuntime implements FeatureRuntime {
     job: ManagedProcessJob,
     waited: CommandWaitResult,
     waitMs: number
-  ): { result: string; processJobId?: string; processRunning?: boolean } {
+  ): { result: string } & ChatToolProcess {
     if (!waited.running && !job.announced) {
       job.running = false;
       this.processJobs.delete(job.id);
-      return { result: commandOutputText(waited.result) };
+      return { result: commandOutputText(waited.result), ...displayResult(waited.result, waited.result.exitCode) };
     }
     const output = this.consumeProcessOutput(job);
     if (waited.running) {
@@ -214,7 +231,8 @@ export class CommandRuntime implements FeatureRuntime {
           `Process ${job.id} is still running after ${waitMs} ms. Call wait_process again to wait for more output, or stop_process when it is no longer needed.`
         ),
         processJobId: job.id,
-        processRunning: true
+        processRunning: true,
+        ...displayResult(output)
       };
     }
     job.running = false;
@@ -226,10 +244,15 @@ export class CommandRuntime implements FeatureRuntime {
     return {
       result: processJobResult(output, lead),
       processJobId: job.id,
-      processRunning: false
+      processRunning: false,
+      ...displayResult(output, waited.result.exitCode)
     };
   }
 
+}
+
+function displayResult(output: CommandProgress, exitCode?: number): ChatToolProcess {
+  return { processOutput: output.output ?? output.stdout + output.stderr, processExitCode: exitCode };
 }
 
 function commandOutputText(output: CommandProgress | CommandResult): string {

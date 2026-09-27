@@ -2,10 +2,13 @@ import type { HarnessSettings } from "../config/settings.js";
 import type { UiEvent } from "../chat/session.js";
 import type { ChatToolProcess } from "../ui/messaging.js";
 
+export type FeatureResultUpdate = ChatToolProcess & { status?: "failed" };
+
 export interface FeatureContext {
   workspaceRoot: string;
   emit(event: UiEvent): void;
   appendResult(name: string, args: string, result: string, metadata: ChatToolProcess): Promise<unknown>;
+  updateResult?(toolId: string, metadata: FeatureResultUpdate): void;
 }
 
 export interface FeatureRuntime {

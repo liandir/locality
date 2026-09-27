@@ -16,7 +16,7 @@ import {
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
 import type { ChatContextActivity, ChatContextState, ChatMemoryCreations, ChatToolProcess, ChatTurnEnd, ChatTurnPreparation } from "../ui/messaging.js";
 import { createFeatures } from "../build/runtime.js";
-import type { FeatureRuntime } from "../build/contracts.js";
+import type { FeatureRuntime, FeatureResultUpdate } from "../build/contracts.js";
 import { loadRootAgentsMd } from "../llm/agentsMd.js";
 import { makeNativeTextRecoveryParser, makeParser, type ParsedEvent } from "../llm/parser/index.js";
 import { classifyToolName } from "../tools/forbiddenTools.js";
@@ -79,9 +79,9 @@ export type UiEvent =
   | { kind: "thought"; messageId: string; delta: string }
   | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentLines: number; added?: number; removed?: number; createsNewFile?: boolean; replacedLines?: number; startLine?: number; endLine?: number; line?: number }
   | ({ kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; approvalRequired: boolean; reason?: string; diffPreview?: string; createsNewFile?: boolean } & ChatToolProcess)
-  | { kind: "toolCallOutput"; toolId: string; resultPreview: string }
+  | ({ kind: "toolCallOutput"; toolId: string; resultPreview: string } & ChatToolProcess)
   | ({ kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; added?: number; removed?: number; createsNewFile?: boolean } & ChatToolProcess)
-  | { kind: "processJobState"; toolId: string; jobId: string; running: boolean; resultPreview?: string }
+  | ({ kind: "processJobState"; toolId: string; jobId: string; running: boolean; resultPreview?: string; status?: "failed" } & ChatToolProcess)
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
   | { kind: "summary"; messageId: string; text: string }
   | { kind: "planFinal"; messageId: string; markdown: string }
@@ -221,6 +221,8 @@ export class ChatSession {
   private toolProtocol: "native" | "legacy" = "native";
   private completedCallIds = new Map<string, { name: string; argsJson: string }>();
   private features: FeatureRuntime[];
+  private featureDisplays = new Map<string, FeatureResultUpdate>();
+  private featureMessages = new Map<string, ChatMessage>();
   /** Only reopened history uses the standalone context-loading status. */
   private loadedChatContextPending: boolean;
   /** Tools and compaction own the wait while their results enter the next prompt. */
@@ -246,7 +248,16 @@ export class ChatSession {
       emit: event => this.emit(event),
       appendResult: (name, argsJson, result, metadata) => this.appendToolResult(
         readSettings(), name, argsJson, result, undefined, { status: "executed", ...metadata }
-      )
+      ),
+      updateResult: (toolId, metadata) => {
+        this.featureDisplays.set(toolId, metadata);
+        const message = this.featureMessages.get(toolId);
+        if (!message?.toolCall) return;
+        message.toolCall.processOutput = metadata.processOutput;
+        message.toolCall.processExitCode = metadata.processExitCode;
+        if (metadata.status) message.toolCall.status = metadata.status;
+        void this.saveRecord().catch(() => this.emit({ kind: "notice", text: "Could not save the latest tool output." }));
+      }
     });
     this.memory = args.memory;
     this.loadedChatContextPending = args.record.messages.length > 0;
@@ -910,7 +921,9 @@ export class ChatSession {
       createsNewFile,
       processJobId,
       processCommand,
-      processRunning
+      processRunning,
+      processOutput,
+      processExitCode
     } = completion;
     const change = status === "executed" ? this.toolDiffSources.get(toolId) : undefined;
     const fileChange = change ? {
@@ -919,19 +932,25 @@ export class ChatSession {
       diffPreview: change.diffPreview ?? renderLineDiff(change.previous, change.next)
     } : undefined;
     if (change && fileChange) change.diffPreview = fileChange.diffPreview;
-    const event = (resultPreview: string): Extract<UiEvent, { kind: "toolCallResolved" }> => ({
-      kind: "toolCallResolved",
-      toolId,
-      status,
-      resultPreview,
-      diffPreview: fileChange?.diffPreview ?? diffPreview,
-      added,
-      removed,
-      createsNewFile,
-      processJobId,
-      processCommand,
-      processRunning
-    });
+    const event = (resultPreview: string): Extract<UiEvent, { kind: "toolCallResolved" }> => {
+      const latest = this.featureDisplays.get(toolId);
+      return {
+        kind: "toolCallResolved",
+        toolId,
+        status,
+        resultPreview: latest?.status === "failed" ? latest.processOutput : resultPreview,
+        diffPreview: fileChange?.diffPreview ?? diffPreview,
+        added,
+        removed,
+        createsNewFile,
+        processJobId,
+        processCommand,
+        processRunning,
+        processOutput,
+        processExitCode,
+        ...latest
+      };
+    };
     if (!this.abort?.signal.aborted) this.trackContextActivity(toolId);
     this.emit(event(fullResult ? content : previewOf(content)));
     const storedResult = await this.appendToolResult(
@@ -940,7 +959,7 @@ export class ChatSession {
       argsJson,
       content,
       callId,
-      { status, createsNewFile, processCommand, fileChange, attachments: completion.attachments }
+      { status, createsNewFile, processJobId, processCommand, processOutput, processExitCode, toolId, fileChange, attachments: completion.attachments }
     );
     if (storedResult !== content) {
       this.emit(event(fullResult ? storedResult : previewOf(storedResult)));
@@ -994,7 +1013,7 @@ export class ChatSession {
     argsJson: string,
     content: string,
     callId?: string,
-    outcome: { status: "executed" | "failed" | "rejected"; createsNewFile?: boolean; processCommand?: string; fileChange?: FileChangeSummary; attachments?: ChatAttachment[] } = { status: "executed" }
+    outcome: { status: "executed" | "failed" | "rejected"; createsNewFile?: boolean; toolId?: string; fileChange?: FileChangeSummary; attachments?: ChatAttachment[] } & ChatToolProcess = { status: "executed" }
   ): Promise<string> {
     const guardedContent = await this.prepareToolResultForContext(s, toolName, content);
     const message: ChatMessage = {
@@ -1008,10 +1027,21 @@ export class ChatSession {
         status: outcome.status,
         createsNewFile: outcome.createsNewFile,
         processCommand: outcome.processCommand,
+        processOutput: outcome.processOutput,
+        processExitCode: outcome.processExitCode,
         fileChange: outcome.fileChange
       },
       ts: Date.now()
     };
+    if (outcome.toolId && outcome.processJobId) {
+      this.featureMessages.set(outcome.toolId, message);
+      const display = this.featureDisplays.get(outcome.toolId);
+      if (display && message.toolCall) {
+        message.toolCall.processOutput = display.processOutput;
+        message.toolCall.processExitCode = display.processExitCode;
+        if (display.status) message.toolCall.status = display.status;
+      }
+    }
     // Exact count via /tokenize — a char/4 estimate here becomes the permanent
     // cached count (recomputeTokens skips already-counted messages), and tool
     // results are the largest messages, so under-counting them is what let the
@@ -1471,6 +1501,8 @@ export class ChatSession {
 
     this.completeContextIngestion();
     await Promise.all(this.features.map(feature => feature.endTurn?.()));
+    this.featureDisplays.clear();
+    this.featureMessages.clear();
     this.activeFileWrites = undefined;
     this.failUnfinishedStreamingTools();
     await this.saveRecord();
@@ -1818,6 +1850,8 @@ export class ChatSession {
     let removed: number | undefined;
     let processJobId: string | undefined;
     let processRunning: boolean | undefined;
+    let processOutput: string | undefined;
+    let processExitCode: number | undefined;
     try {
       if (isMemoryToolName(e.name)) {
         if (!readSettings().memoryEnabled) throw new Error("Workspace memories are disabled.");
@@ -1983,7 +2017,7 @@ export class ChatSession {
         if (!approvalRequired && category !== "process" && feature.needsApproval(readSettings())) {
           throw new Error("Approval settings changed. Request the action again for approval.");
         }
-        ({ result, processJobId, processRunning } = await feature.execute(e.name, args, toolId, this.abort?.signal));
+        ({ result, processJobId, processRunning, processOutput, processExitCode } = await feature.execute(e.name, args, toolId, this.abort?.signal));
       } else {
         result = `[harness] unknown tool: ${e.name}`;
       }
@@ -2016,7 +2050,9 @@ export class ChatSession {
       createsNewFile: executedCreatesNewFile,
       processJobId,
       processCommand,
-      processRunning
+      processRunning,
+      processOutput,
+      processExitCode
     });
     return "executed";
   }
