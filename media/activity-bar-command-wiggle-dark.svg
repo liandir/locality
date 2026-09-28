@@ -1,8 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#f0f0f0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
   <g>
-    <animateTransform attributeName="transform" type="translate" values="0 0;-1.5 0;1.5 0;-1 0;1 0;0 0" dur="0.45s" repeatCount="2"/>
-    <circle cx="12" cy="12" r="9.25" stroke-opacity="0.45"/>
-    <circle cx="12" cy="12" r="5"/>
-    <circle cx="12" cy="12" r="1.75" fill="#f0f0f0" stroke="none"/>
+    <animateTransform attributeName="transform" type="translate" values="0 0;-2 0;2 0;-1 0;1 0;0 0" dur="0.45s" repeatCount="2"/>
+    <g stroke="#f0f0f0" stroke-width="3"><circle cx="24" cy="24" r="10"/><circle cx="24" cy="24" r="20" stroke-opacity=".5"/></g><circle cx="24" cy="24" r="3.5" fill="#f0f0f0"/>
   </g>
 </svg>
