@@ -43,23 +43,15 @@ export interface HarnessSettings {
 
 export function readSettings(): HarnessSettings {
   const cfg = vscode.workspace.getConfiguration(NS);
-  const legacyFamily = cfg.get<string>("modelFamily");
-  const explicitProfile = explicitConfigurationValue(cfg, "toolCallingMode");
-  const explicitLegacyFamily = explicitConfigurationValue(cfg, "modelFamily");
-  const explicitReasoningBudget = explicitConfigurationValue(cfg, "reasoningBudget");
-  const legacyCappedTokens = explicitConfigurationValue(cfg, "cappedThinkingTokens");
   return {
     endpoint: cfg.get<string>("endpoint") ?? "http://localhost:8080/v1",
     model: cfg.get<string>("model")?.trim() || "local",
-    toolCallingMode: normalizeToolCallingProfile(
-      explicitProfile ?? (explicitLegacyFamily === undefined ? cfg.get<string>("toolCallingMode") : "auto"),
-      legacyFamily
-    ),
+    toolCallingMode: normalizeToolCallingProfile(cfg.get<unknown>("toolCallingMode")),
     temperature: clampNumber(cfg.get<number>("temperature") ?? 0.8, 0, 2, 0.8),
     topK: Math.round(clampNumber(cfg.get<number>("topK") ?? 40, 0, Number.MAX_SAFE_INTEGER, 40)),
     topP: clampNumber(cfg.get<number>("topP") ?? 0.95, 0, 1, 0.95),
     reasoningBudget: Math.round(clampNumber(
-      Number(explicitReasoningBudget ?? legacyCappedTokens ?? cfg.get<number>("reasoningBudget") ?? -1),
+      Number(cfg.get<number>("reasoningBudget") ?? -1),
       -1,
       Number.MAX_SAFE_INTEGER,
       -1
@@ -79,17 +71,6 @@ export function readSettings(): HarnessSettings {
     autoapproveWrites: cfg.get<boolean>("autoapproveWrites") ?? false,
     ...readFeatureSettings(cfg)
   };
-}
-
-function explicitConfigurationValue(cfg: vscode.WorkspaceConfiguration, key: string): unknown {
-  if (typeof cfg.inspect !== "function") return undefined;
-  const inspect = cfg.inspect<unknown>(key);
-  return inspect?.workspaceFolderLanguageValue
-    ?? inspect?.workspaceFolderValue
-    ?? inspect?.workspaceLanguageValue
-    ?? inspect?.workspaceValue
-    ?? inspect?.globalLanguageValue
-    ?? inspect?.globalValue;
 }
 
 function clampPercent(value: number): number {
@@ -160,11 +141,6 @@ export async function resetAllSettings(): Promise<void> {
     await cfg.update(key, undefined, vscode.ConfigurationTarget.Global);
     await cfg.update(key, undefined, vscode.ConfigurationTarget.Workspace);
   }
-  // Removed in the unified-profile migration; clear stale overrides too.
-  await cfg.update("modelFamily", undefined, vscode.ConfigurationTarget.Global);
-  await cfg.update("modelFamily", undefined, vscode.ConfigurationTarget.Workspace);
-  await cfg.update("cappedThinkingTokens", undefined, vscode.ConfigurationTarget.Global);
-  await cfg.update("cappedThinkingTokens", undefined, vscode.ConfigurationTarget.Workspace);
 }
 
 export function onSettingsChange(handler: () => void): vscode.Disposable {

@@ -9,8 +9,6 @@ export interface PromptOptions {
   featureSettings?: HarnessSettings;
   family: CompatibilityFamily;
   mode?: ChatMode;
-  /** Legacy caller compatibility; new callers should pass mode. */
-  planMode?: boolean;
   workspaceRoot: string;
   /** Native mode sends schemas in the API request; legacy mode embeds syntax in text. */
   nativeTools?: boolean;
@@ -120,7 +118,7 @@ function policySections(opts: PromptOptions): string[] {
 }
 
 function promptMode(opts: PromptOptions): ChatMode {
-  return normalizeChatMode(opts.mode, opts.planMode);
+  return normalizeChatMode(opts.mode);
 }
 
 function renderGemma4ToolBlock(tools: ToolSpec[]): string {

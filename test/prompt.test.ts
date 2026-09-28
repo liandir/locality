@@ -7,7 +7,7 @@ describe("Gemma prompt rendering", () => {
   it("uses native Gemma declarations and call examples", () => {
     const prompt = buildSystemPrompt({
       family: "gemma4",
-      planMode: false,
+      mode: "act",
       workspaceRoot: "/tmp/ws"
     });
 
@@ -26,7 +26,7 @@ describe("Gemma prompt rendering", () => {
   it("uses named arguments in the generic Gemma call shape", () => {
     const prompt = buildSystemPrompt({
       family: "gemma4",
-      planMode: false,
+      mode: "act",
       workspaceRoot: "/tmp/ws"
     });
 
@@ -37,7 +37,7 @@ describe("Gemma prompt rendering", () => {
   it("preserves nested schema constraints in Gemma declarations", () => {
     const prompt = buildSystemPrompt({
       family: "gemma4",
-      planMode: false,
+      mode: "act",
       workspaceRoot: "/tmp/ws"
     });
 
@@ -67,7 +67,7 @@ describe("Gemma prompt rendering", () => {
   it("renders Muse Glimmer declarations and transcript calls in ATEM format", () => {
     const prompt = buildSystemPrompt({
       family: "muse-glimmer",
-      planMode: false,
+      mode: "act",
       workspaceRoot: "/tmp/ws"
     });
     expect(prompt).toContain("Muse Glimmer ATEM format");
@@ -87,7 +87,7 @@ describe("Gemma prompt rendering", () => {
   it("tells Qwen how to emit a single tool-call block", () => {
     const prompt = buildSystemPrompt({
       family: "qwen3",
-      planMode: false,
+      mode: "act",
       workspaceRoot: "/tmp/ws"
     });
 
@@ -96,8 +96,8 @@ describe("Gemma prompt rendering", () => {
   });
 
   it("gives Qwen the same concrete per-tool examples as Gemma", () => {
-    const qwen = buildSystemPrompt({ family: "qwen3", planMode: false, workspaceRoot: "/tmp/ws" });
-    const gemma = buildSystemPrompt({ family: "gemma4", planMode: false, workspaceRoot: "/tmp/ws" });
+    const qwen = buildSystemPrompt({ family: "qwen3", mode: "act", workspaceRoot: "/tmp/ws" });
+    const gemma = buildSystemPrompt({ family: "gemma4", mode: "act", workspaceRoot: "/tmp/ws" });
 
     expect(qwen).toContain("Examples:");
     for (const name of ["read_file", "write_file", "insert_text", "replace_range", "list_dir", "glob", "run_command"]) {
@@ -113,8 +113,8 @@ describe("Gemma prompt rendering", () => {
   });
 
   it("gives both legacy families equivalent schema constraints", () => {
-    const qwen = buildSystemPrompt({ family: "qwen3", planMode: false, workspaceRoot: "/tmp/ws" });
-    const gemma = buildSystemPrompt({ family: "gemma4", planMode: false, workspaceRoot: "/tmp/ws" });
+    const qwen = buildSystemPrompt({ family: "qwen3", mode: "act", workspaceRoot: "/tmp/ws" });
+    const gemma = buildSystemPrompt({ family: "gemma4", mode: "act", workspaceRoot: "/tmp/ws" });
 
     for (const fragment of [
       '"items": {',
@@ -136,8 +136,8 @@ describe("Gemma prompt rendering", () => {
 });
 
 describe("system prompt policy", () => {
-  const normal = buildSystemPrompt({ family: "qwen3", planMode: false, workspaceRoot: "/tmp/ws" });
-  const plan = buildSystemPrompt({ family: "qwen3", planMode: true, workspaceRoot: "/tmp/ws" });
+  const normal = buildSystemPrompt({ family: "qwen3", mode: "act", workspaceRoot: "/tmp/ws" });
+  const plan = buildSystemPrompt({ family: "qwen3", mode: "plan", workspaceRoot: "/tmp/ws" });
   const review = buildSystemPrompt({ family: "qwen3", mode: "review", workspaceRoot: "/tmp/ws" });
 
   it("avoids administrative tool loops and inaccurate failure instructions", () => {
@@ -165,7 +165,7 @@ describe("system prompt policy", () => {
   });
 
   it("renders the official GPT-OSS Harmony declarations and call envelope", () => {
-    const prompt = buildSystemPrompt({ family: "gpt-oss", planMode: false, workspaceRoot: "/tmp/ws" });
+    const prompt = buildSystemPrompt({ family: "gpt-oss", mode: "act", workspaceRoot: "/tmp/ws" });
     expect(prompt).toContain("Available tools (GPT-OSS Harmony format)");
     expect(prompt).toContain("namespace functions {");
     expect(prompt).toContain("type read_file = (_: {");
@@ -184,7 +184,7 @@ describe("system prompt policy", () => {
   it("keeps the GPT-OSS native prompt free of the Harmony fallback block", () => {
     const native = buildSystemPrompt({
       family: "gpt-oss",
-      planMode: false,
+      mode: "act",
       workspaceRoot: "/tmp/ws",
       nativeTools: true
     });
@@ -193,7 +193,7 @@ describe("system prompt policy", () => {
     expect(native).not.toContain("<|channel|>commentary to=functions.");
     expect(native).toBe(buildSystemPrompt({
       family: "gemma4",
-      planMode: false,
+      mode: "act",
       workspaceRoot: "/tmp/ws",
       nativeTools: true
     }));
@@ -215,7 +215,7 @@ describe("system prompt policy", () => {
   });
 
   it("shows update_todos with a concrete array-of-objects example", () => {
-    const gemma = buildSystemPrompt({ family: "gemma4", planMode: false, workspaceRoot: "/tmp/ws" });
+    const gemma = buildSystemPrompt({ family: "gemma4", mode: "act", workspaceRoot: "/tmp/ws" });
     expect(gemma).toContain(
       `call:update_todos{todos:[{content:<|"|>Inspect the relevant files<|"|>,status:<|"|>in_progress<|"|>}`
     );
@@ -243,7 +243,7 @@ describe("system prompt policy", () => {
 
   it("declares edit preconditions as required and keeps old and new content distinct", () => {
     for (const family of ["gemma4", "qwen3"] as const) {
-      const prompt = buildSystemPrompt({ family, planMode: false, workspaceRoot: "/tmp/ws" });
+      const prompt = buildSystemPrompt({ family, mode: "act", workspaceRoot: "/tmp/ws" });
       expect(prompt).toContain("expectedLine");
       expect(prompt).toContain("expectedContent");
       expect(prompt).toContain("OLD/CURRENT text");
@@ -256,7 +256,7 @@ describe("system prompt policy", () => {
   it("keeps native prompts free of handwritten tool syntax and reasoning tags", () => {
     const prompt = buildSystemPrompt({
       family: "qwen3",
-      planMode: false,
+      mode: "act",
       workspaceRoot: "/tmp/ws",
       nativeTools: true
     });
@@ -284,7 +284,7 @@ describe("system prompt policy", () => {
 
     const native = buildSystemPrompt({
       family: "qwen3",
-      planMode: false,
+      mode: "act",
       workspaceRoot: "/tmp/ws",
       nativeTools: true
     });
@@ -353,20 +353,20 @@ describe("system prompt policy", () => {
 
 describe("AGENTS.md project instructions", () => {
   it("omits the project-instruction block when no AGENTS.md is supplied", () => {
-    const prompt = buildSystemPrompt({ family: "qwen3", planMode: false, workspaceRoot: "/tmp/ws" });
+    const prompt = buildSystemPrompt({ family: "qwen3", mode: "act", workspaceRoot: "/tmp/ws" });
     expect(prompt).not.toContain("PROJECT INSTRUCTIONS");
     expect(prompt).not.toContain("begin AGENTS.md");
   });
 
   it("omits the block for empty/whitespace AGENTS.md content", () => {
-    const prompt = buildSystemPrompt({ family: "qwen3", planMode: false, workspaceRoot: "/tmp/ws", agentsMd: "   \n  " });
+    const prompt = buildSystemPrompt({ family: "qwen3", mode: "act", workspaceRoot: "/tmp/ws", agentsMd: "   \n  " });
     expect(prompt).not.toContain("PROJECT INSTRUCTIONS");
   });
 
   it("embeds the framed AGENTS.md block before the tool-format block", () => {
     const prompt = buildSystemPrompt({
       family: "qwen3",
-      planMode: false,
+      mode: "act",
       workspaceRoot: "/tmp/ws",
       agentsMd: "Use tabs for indentation.\nRun npm test before finishing."
     });
@@ -382,7 +382,7 @@ describe("AGENTS.md project instructions", () => {
   it("includes the block in plan mode too", () => {
     const prompt = buildSystemPrompt({
       family: "qwen3",
-      planMode: true,
+      mode: "plan",
       workspaceRoot: "/tmp/ws",
       agentsMd: "Project rule: prefer composition over inheritance."
     });
@@ -393,20 +393,20 @@ describe("AGENTS.md project instructions", () => {
 
 describe("AGENTS.md project instructions", () => {
   it("omits the project-instruction block when no AGENTS.md is supplied", () => {
-    const prompt = buildSystemPrompt({ family: "qwen3", planMode: false, workspaceRoot: "/tmp/ws" });
+    const prompt = buildSystemPrompt({ family: "qwen3", mode: "act", workspaceRoot: "/tmp/ws" });
     expect(prompt).not.toContain("PROJECT INSTRUCTIONS");
     expect(prompt).not.toContain("begin AGENTS.md");
   });
 
   it("omits the block for empty/whitespace AGENTS.md content", () => {
-    const prompt = buildSystemPrompt({ family: "qwen3", planMode: false, workspaceRoot: "/tmp/ws", agentsMd: "   \n  " });
+    const prompt = buildSystemPrompt({ family: "qwen3", mode: "act", workspaceRoot: "/tmp/ws", agentsMd: "   \n  " });
     expect(prompt).not.toContain("PROJECT INSTRUCTIONS");
   });
 
   it("embeds the framed AGENTS.md block before the tool-format block", () => {
     const prompt = buildSystemPrompt({
       family: "qwen3",
-      planMode: false,
+      mode: "act",
       workspaceRoot: "/tmp/ws",
       agentsMd: "Use tabs for indentation.\nRun npm test before finishing."
     });
@@ -423,7 +423,7 @@ describe("AGENTS.md project instructions", () => {
   it("includes the block in plan mode too", () => {
     const prompt = buildSystemPrompt({
       family: "qwen3",
-      planMode: true,
+      mode: "plan",
       workspaceRoot: "/tmp/ws",
       agentsMd: "Project rule: prefer composition over inheritance."
     });

@@ -8,7 +8,7 @@ dist/
 .claude/
 
 # Locality saved chats
-.local-llm-chats/
+.locality/
 
 # Editor / OS
 .vscode/

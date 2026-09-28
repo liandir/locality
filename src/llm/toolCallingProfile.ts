@@ -15,12 +15,10 @@ const PROFILES = new Set<ToolCallingProfile>([
   "compat-gpt-oss"
 ]);
 
-/** Normalize current profiles and the former mode + family setting pair. */
-export function normalizeToolCallingProfile(value: unknown, legacyFamily?: unknown): ToolCallingProfile {
+/** Use the default compatibility profile for missing or invalid settings. */
+export function normalizeToolCallingProfile(value: unknown): ToolCallingProfile {
   if (PROFILES.has(value as ToolCallingProfile)) return value as ToolCallingProfile;
-  if (value === "native") return "native";
-  const family = legacyFamily === "qwen3" ? "qwen3" : "gemma4";
-  return `compat-${family}`;
+  return "compat-gemma4";
 }
 
 export function compatibilityFamily(profile: ToolCallingProfile): CompatibilityFamily | undefined {

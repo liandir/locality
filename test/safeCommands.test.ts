@@ -12,7 +12,7 @@ import { startProcess } from "../src/features/commands/shared/process.js";
 
 let root: string;
 const settings = (patterns: unknown = DEFAULT_SAFE_PATTERNS) => ({ safeCommandPatterns: patterns } as HarnessSettings);
-beforeEach(async () => { root = await fs.mkdtemp(path.join(os.tmpdir(), "llh-safe-")); });
+beforeEach(async () => { root = await fs.mkdtemp(path.join(os.tmpdir(), "locality-safe-")); });
 afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
 
 describe("safe command syntax and policy", () => {

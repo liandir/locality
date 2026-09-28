@@ -19,7 +19,7 @@ let storage: ChatStorage;
 let memory: WorkspaceMemory;
 let releases: (() => void)[];
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), "llh-memory-"));
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), "locality-memory-"));
   storage = new ChatStorage(path.join(dir, "workspace"), path.join(dir, "chats"));
   memory = new WorkspaceMemory(() => storage, 5);
   releases = [];
@@ -218,7 +218,7 @@ describe("memory generation", () => {
     rec.messages.push({ role: "tool", content: "RAW_TOOL_SENTINEL", ts: 3 });
     rec.messages[1].reasoningContent = "REASONING_SENTINEL";
     rec.contextMessages = [{ role: "system", content: "CONTEXT_SENTINEL", ts: 4 }];
-    rec.memorySelection = [{ sourceId: rec.id, title: "Imported", text: "IMPORTED_SENTINEL", generatedAt: 1, sourceRevision: transcriptRevision(rec) }];
+    rec.recalledMemories = [{ sourceId: rec.id, title: "Imported", text: "IMPORTED_SENTINEL", generatedAt: 1, sourceRevision: transcriptRevision(rec) }];
     const text = await generateMemory(rec, mocks.settings.endpoint, "test", new AbortController().signal);
     expect(Math.ceil(text.length / 4)).toBeLessThanOrEqual(384);
     expect(mocks.complete.mock.calls.length).toBeGreaterThan(1);
@@ -377,12 +377,12 @@ describe("workspace memory persistence", () => {
     await storage.delete(rec.id);
     expect(await activeSnapshots(storage, snapshots)).toEqual([]);
   });
-  it("forks without inheriting a summary or imported memory selection", async () => {
+  it("forks without inheriting a summary or recalled memory sources", async () => {
     const rec = await chat(); await memory.edit(rec.id, "Parser decisions");
     await memory.setEnabled(rec.id, true);
     const loaded = (await storage.load(rec.id))!;
-    loaded.memorySelection = rankMemories("parser", [loaded], "other");
+    loaded.recalledMemories = rankMemories("parser", [loaded], "other");
     const fork = await storage.fork(loaded);
-    expect(fork.memory).toBeUndefined(); expect(fork.memorySelection).toBeUndefined();
+    expect(fork.memory).toBeUndefined(); expect(fork.recalledMemories).toBeUndefined();
   });
 });

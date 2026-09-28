@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 const [endpoint = 'http://localhost:8080', model = 'local', output] = process.argv.slice(2);
 let partialReport;
-const temporary = await mkdtemp(join(tmpdir(), 'llh-memory-eval-'));
+const temporary = await mkdtemp(join(tmpdir(), 'locality-memory-eval-'));
 try {
   const bundle = join(temporary, 'eval.mjs');
   await build({ stdin: { contents: `

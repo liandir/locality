@@ -145,8 +145,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     } else if ("kind" in msg && msg.kind === "chatLoaded") {
       const { contextMessages, ...transcript } = msg.record;
       delete transcript.memory;
-      delete transcript.memorySelection;
-      delete transcript.memoryUsage;
       delete transcript.recalledMemories;
       payload = {
         ...msg,
@@ -456,8 +454,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private workspaceReasoningEffort(): ReasoningEffort {
     return normalizeReasoningEffort(
-      this.context.workspaceState.get<unknown>(WORKSPACE_REASONING_EFFORT_KEY)
-        ?? this.context.workspaceState.get<unknown>("locality.workspaceThinkingMode", DEFAULT_REASONING_EFFORT)
+      this.context.workspaceState.get<unknown>(WORKSPACE_REASONING_EFFORT_KEY, DEFAULT_REASONING_EFFORT)
     );
   }
 

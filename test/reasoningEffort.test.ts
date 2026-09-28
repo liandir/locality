@@ -8,13 +8,9 @@ import {
   reasoningRequestOverrides
 } from "../src/chat/reasoningEffort.js";
 
-describe("reasoning effort migration", () => {
-  it.each([
-    ["instant", "none"],
-    ["capped", "effort:medium"],
-    ["unlimited", "effort:high"]
-  ] as const)("maps legacy %s to %s", (legacy, expected) => {
-    expect(normalizeReasoningEffort(legacy)).toBe(expected);
+describe("reasoning effort settings", () => {
+  it.each(["none", "default", "effort:low", "effort:medium", "effort:high", "effort:xhigh"] as const)("preserves the current %s selection", effort => {
+    expect(normalizeReasoningEffort(effort)).toBe(effort);
   });
 
   it("uses Default for missing or unknown values", () => {

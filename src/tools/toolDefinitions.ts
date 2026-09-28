@@ -1,4 +1,4 @@
-import { normalizeChatMode, type ChatMode } from "../chat/mode.js";
+import type { ChatMode } from "../chat/mode.js";
 
 import { featureTools } from "../build/tools.js";
 import { objectParameters, type ToolSpec, type JsonSchema } from "./schema.js";
@@ -160,21 +160,20 @@ export function isMemoryToolName(name: string): boolean {
   return name === "search_memories" || name === "recall_memory";
 }
 
-export function toolsForMode(mode: ChatMode | boolean, transport: "native" | "legacy" = "legacy", memoryEnabled = false, supportsVision = false, settings?: object): ToolSpec[] {
-  const normalizedMode = typeof mode === "boolean" ? normalizeChatMode(undefined, mode) : mode;
+export function toolsForMode(mode: ChatMode, transport: "native" | "legacy" = "legacy", memoryEnabled = false, supportsVision = false, settings?: object): ToolSpec[] {
   const available = ALL_TOOLS.filter(tool =>
     (!tool.availability?.setting || !!(settings as Record<string, unknown> | undefined)?.[tool.availability.setting])
     && (!isMemoryToolName(tool.name) || memoryEnabled)
     && (tool.name !== "view_image" || (supportsVision && transport === "native"))
-    && (!tool.availability || (tool.availability.modes.includes(normalizedMode) && (!tool.availability.transport || tool.availability.transport === transport)))
+    && (!tool.availability || (tool.availability.modes.includes(mode) && (!tool.availability.transport || tool.availability.transport === transport)))
   );
-  if (normalizedMode === "plan") return available.filter(tool => PLAN_MODE_TOOL_NAMES.has(tool.name) || isMemoryToolName(tool.name) || !!tool.availability);
+  if (mode === "plan") return available.filter(tool => PLAN_MODE_TOOL_NAMES.has(tool.name) || isMemoryToolName(tool.name) || !!tool.availability);
   const excluded = transport === "native"
     ? new Set(["write_file"])
     : new Set(["create_file", "edit_file"]);
   return available.filter(tool =>
     !excluded.has(tool.name)
-    && (normalizedMode !== "review" || REVIEW_MODE_TOOL_NAMES.has(tool.name) || isMemoryToolName(tool.name) || !!tool.availability)
+    && (mode !== "review" || REVIEW_MODE_TOOL_NAMES.has(tool.name) || isMemoryToolName(tool.name) || !!tool.availability)
   );
 }
 

@@ -47,30 +47,13 @@ export function reasoningEffortChoices(efforts: ReasoningEfforts): ReasoningEffo
   ];
 }
 
-/** Normalize saved selections and migrate both Intelligence and old effort values. */
+/** Validate a saved built-in or configurable reasoning selection. */
 export function normalizeReasoningEffort(value: unknown): ReasoningEffort {
   if (value === REASONING_NONE || value === REASONING_DEFAULT) return value;
   if (typeof value === "string" && value.startsWith("effort:") && value.length > "effort:".length) {
     return value as ReasoningEffort;
   }
-  const legacyNames: Record<string, ReasoningEffort> = {
-    instant: REASONING_NONE,
-    capped: effortSelection("medium"),
-    unlimited: effortSelection("high"),
-    low: effortSelection("low"),
-    medium: effortSelection("medium"),
-    high: effortSelection("high"),
-    novice: REASONING_NONE,
-    apprentice: effortSelection("low"),
-    adept: effortSelection("medium"),
-    master: effortSelection("medium"),
-    genius: effortSelection("high"),
-    singularity: effortSelection("high"),
-    expert: effortSelection("high")
-  };
-  return typeof value === "string"
-    ? legacyNames[value] ?? DEFAULT_REASONING_EFFORT
-    : DEFAULT_REASONING_EFFORT;
+  return DEFAULT_REASONING_EFFORT;
 }
 
 /** Fall back to Default when a saved configurable value is no longer offered. */

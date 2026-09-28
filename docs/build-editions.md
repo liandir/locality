@@ -1,32 +1,79 @@
 # Build editions
 
-Implemented on `feat-multi-build`, September 25, 2026. Run `npm run package:vsix`
-to produce four packages in `artifacts/`:
+[Back to Locality](../README.md) · [Developer guide](developer-guide.md) · [User guide](user-guide.md) · [Tools reference](tools.md)
 
-| Edition | Command executor | Dedicated search |
+Locality ships four editions with the same chat interface and local/LAN model
+connection. Each package includes only its selected optional capabilities.
+
+| Edition | Command executor | Built-in web tools |
 | --- | --- | --- |
 | `no-commands` | Absent | Absent |
 | `safe-list` | Regex policy and literal argument execution | Absent |
 | `commands` | General shell/native execution | Absent |
-| `advanced` | Same general executor | SearXNG |
+| `advanced` | Same general executor | Brave Search, SearXNG, and public webpage reading |
 
-The packages share the extension ID `local.locality`. Installing another edition replaces
-the installed edition while retaining chats and common preferences. Normal
-`npm run build` uses Commands. To package one edition during development:
-`npm run package:vsix -- --profile=safe-list`.
+The packages share the extension ID `local.locality`. Installing another edition
+replaces the installed edition while retaining chats and common preferences.
+For approval behavior and configuration, see the [tools reference](tools.md).
 
-The Locality rename changed the extension ID and settings/command namespace.
-See the README's upgrade instructions for replacing the former extension.
-The settings migration uses the selected edition's keys, so installing a less
-capable edition cannot import unavailable capabilities or permission settings.
-VSIX files are named `locality-<version>-<edition>.vsix`.
+## Build and package
 
-Rename verification, September 27, 2026: all 826 tests across 59 files,
-typecheck, lint, build, and the four package-isolation audits passed. An isolated
-VS Code extension host also verified migration from the old namespace, user and
-workspace scopes, preservation of existing Locality values, rejection of
-workspace permission overrides, and resetting settings without restoring legacy
-values. The chat data directory remains unchanged.
+Follow the [developer setup](developer-guide.md#set-up-and-build) to install
+dependencies and run checks before packaging.
+
+`npm run build` builds Commands into `dist/`. To build a different edition, use
+one of `no-commands`, `safe-list`, `commands`, or `advanced`:
+
+```bash
+node esbuild.config.mjs --profile=safe-list
+```
+
+To build and package all four editions:
+
+```bash
+npm run package:vsix
+```
+
+Packaging audits the bundles, staged contents, and actual VSIX archives before
+placing the packages in `artifacts/`. Local filenames include the version from
+`package.json`, such as `locality-2.0.0-safe-list.vsix`.
+
+To package one edition during development:
+
+```bash
+npm run package:vsix -- --profile=safe-list
+```
+
+Install the resulting package with the VS Code CLI:
+
+```bash
+code --install-extension artifacts/locality-2.0.0-safe-list.vsix
+```
+
+Alternatively, use **Extensions: Install from VSIX…** in VS Code's Command
+Palette. Add `--force` to the CLI command when replacing a local build of the
+same version. Node.js is needed for development, not for installing a released
+VSIX.
+
+## Release downloads
+
+The [release workflow](../.github/workflows/release.yml) runs when a `v*` tag is
+pushed. After tests, checks, packaging, and isolation audits, it copies the four
+versioned files from `artifacts/` into `.build/release-assets/` with stable names:
+
+- `locality-no-commands.vsix`
+- `locality-safe-list.vsix`
+- `locality-commands.vsix`
+- `locality-advanced.vsix`
+
+Only these copies are uploaded to the GitHub release. Local build filenames and
+the version inside each VSIX stay unchanged. All four copies must be prepared
+successfully before the upload step runs.
+
+The README's [download links](../README.md#four-levels-of-locality) use
+`https://github.com/liandir/locality/releases/latest/download/<filename>`.
+They follow the release marked **Latest** on GitHub and need no version-specific
+updates. The release must contain the stable filenames for those links to work.
 
 ## Ownership and isolation
 
@@ -40,68 +87,40 @@ modules contribute no optional tools or executors.
 
 The resolver rejects forbidden imports, including unused transitive imports.
 Packaging audits input graphs, staged manifests, emitted bundles, and the actual
-VSIX archives. No commands excludes subprocess imports, command schemas, job
-management, settings, controls, and command styles. Safe list excludes the
-general shell runner. Search and its additional network policy exist only in
-Advanced. Safe-list code/settings exist only in Safe list. Source files, maps,
-development dependencies, and other editions' outputs are excluded from VSIXs.
+VSIX archives:
+
+- No commands excludes subprocess imports, command schemas, job management,
+  settings, controls, and command styles.
+- Safe list excludes the general shell runner. Its code and settings exist only
+  in Safe list.
+- Web search, webpage reading, and their additional network policy exist only
+  in Advanced.
+- Source files, maps, development dependencies, and other editions' outputs are
+  excluded from VSIXs.
 
 All editions share `src/scm/commitMessage.ts` and the fixed VS Code Git adapter in
-`src/scm/gitApi.ts`. There is no direct subprocess fallback in this integration.
-
-## Runtime behavior
-
-- Commands require approval by default. Safe list's single auto-approval switch
-  treats every matching command identically, including deletion. Review always
-  asks; Plan exposes no command tools.
-- Safe-list settings are read from user configuration only. Edit User Settings
-  opens user JSON and seeds defaults when absent. Empty lists deny everything;
-  malformed patterns fail closed. Entire normalized commands must match. Native
-  and legacy calls share the same policy. Matching uses a timed worker.
-- Built-in path checks protect workspace containment, the root, and Git metadata.
-  Read-only Git forms suppress configured helpers and lazy network fetches.
-  Policy and command/workspace identity are checked again before launch.
-- Advanced exposes `web_search` only with a configured SearXNG base URL. Every
-  query requires approval, including Plan and Review. Only the approved query
-  and search options are sent. Results are bounded text and escaped source links;
-  there is no automatic page fetching. Endpoint changes invalidate pending
-  approvals. All HTTP goes through `safeFetch`; model endpoint restrictions stay
-  unchanged.
+`src/scm/gitApi.ts`. Commit-message generation requires VS Code's built-in Git
+extension; there is no direct subprocess fallback.
 
 ## Verification
 
-- TypeScript checks, ESLint, default build, and all 819 tests across 58 Vitest files passed.
-- Build probes for all four editions, three modes, two transports, and four
-  compatibility families; deliberate forbidden imports verify build rejection.
-- Safe-policy tests cover quoting, whole matches, regex timeouts, path escapes,
-  symlinks, deletion flags, Git subcommands/helpers, approval changes, and
-  workspace replacement. Actual file operations use temporary fixtures.
-- Search tests cover endpoint policy, query forwarding, input bounds, invalid
-  responses, output escaping, and changed destinations. Shared transport tests
-  cover redirects, model isolation, and bounded response reads.
-- Shared Git tests cover staged diffs, repository selection, nested repositories,
-  unavailable Git integration, and missing baselines.
-- All four staged builds and actual VSIX archives passed isolation audits.
-- All four VSIXs installed and replaced one another successfully using the VS Code
-  CLI with temporary extension/user-data directories; installed manifests were
-  checked after each replacement.
-- Packaged chat and settings webviews passed headless Electron smoke checks for
-  all four editions in light and dark themes. Search-card spacing was inspected.
-  Existing scroll checks passed for manual input, streamed updates, compaction,
-  nested command panes, jump-to-latest, and restored chats.
-- `git diff --check` passed.
+Follow the [contributor guide](../AGENTS.md) when changing the implementation.
+Edition and tool coverage includes:
 
-## Implementation limits
+- Build probes for every edition, chat mode, transport, and compatibility family,
+  plus deliberate forbidden imports to verify build rejection.
+- Safe-list policy checks for quoting, full-command matches, path escapes,
+  symlinks, deletion, Git helpers, and approval changes.
+- Web-search and webpage checks for endpoint policy, credentials, redirects,
+  bounded responses, and changed destinations.
+- Shared Git checks for staged diffs, repository selection, and unavailable
+  integration.
 
-Safe list is a command policy, not OS sandboxing. Custom patterns can admit
-programs that access the network or run further code. Filesystem validation is
-not race-proof isolation against other local processes. Recursive checks stop
-after 10,000 entries; narrow search paths in larger workspaces. Safe Git currently
-requires a `.git` directory inside the workspace, so linked worktrees are refused.
-On Windows, Safe list executes `.exe`/`.com` programs without a batch-file shell
-fallback. Native Windows execution was not tested in this Linux environment.
+Run `npm run package:vsix` after changing optional tools or build wiring. This
+runs the bundle and archive isolation audits for all four editions. Finish with
+`git diff --check`.
 
-SearXNG must have JSON search enabled. Automated search tests use mocked HTTP;
-no live provider or live model session was used for this verification. VSIX
-installation and browser smoke checks do not replace an interactive end-to-end
-session with a configured model and search service.
+Safe list is a command policy, not OS sandboxing. Custom programs can access the
+network or run further code, and filesystem checks do not isolate execution from
+other local processes. See the [safe-list limits](tools.md#safe-list-configuration)
+for supported commands, platforms, and repository layouts.

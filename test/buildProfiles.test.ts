@@ -110,7 +110,7 @@ describe("edition composition", () => {
     }
   });
 
-  it.each(["", "https://unverified.example"])("omits both web tools and prompt instructions until verified (%s)", async endpoint => {
+  it.each([undefined, "", "https://unverified.example"])("omits both web tools and prompt instructions until verified (%s)", async endpoint => {
     const { api } = await probe("advanced", { webSearchEndpoint: endpoint, webToolsEnabled: true }, { webToolsEnabled: true }, false);
     const settings = api.readSettings();
     expect(settings.webToolsEnabled).toBe(false);
@@ -139,13 +139,15 @@ describe("edition composition", () => {
     await expect(feature.prepare("web_search", { query: "docs" }, api.readSettings())).rejects.toThrow("Verify");
   });
 
-  it("keeps search unconfigured by default and ignores workspace overrides", async () => {
+  it("defaults to Brave without enabling web tools and ignores workspace overrides", async () => {
     const { api } = await probe("advanced", {}, { webSearchEndpoint: "https://workspace.example", autoapproveWebSearch: true });
     const settings = api.readSettings();
-    expect(settings.webSearchEndpoint).toBe("");
+    expect(settings.webSearchEndpoint).toBe("https://api.search.brave.com/res/v1/web/search");
+    expect(settings.webToolsEnabled).toBe(false);
     expect(settings.autoapproveWebSearch).toBe(false);
     const feature = api.createFeatures({ workspaceRoot: "/tmp", emit() {}, async appendResult() {} }).find(item => item.tools.includes("web_search"))!;
     expect(feature.needsApproval(settings)).toBe(true);
+    await expect(feature.prepare("web_search", { query: "docs" }, settings)).rejects.toThrow("Verify");
     expect(api.toolsForMode("act", "native", false, false, settings).map(tool => tool.name)).not.toContain("web_search");
     await api.writeSetting("webSearchEndpoint", "https://search.example");
     expect(api.readSettings().webToolsEnabled).toBe(false);
@@ -182,7 +184,7 @@ describe("edition composition", () => {
     expect(feature.needsApproval(api.readSettings())).toBe(true);
   });
 
-  it("does not seed a public URL and preserves configured endpoints", async () => {
+  it("does not persist the default endpoint and preserves configured or disabled endpoints", async () => {
     const values: Record<string, unknown> = {};
     const { api } = await probe("advanced", values);
     await api.seedFeatureSettings();
@@ -204,7 +206,7 @@ describe("edition composition", () => {
 
   it("rechecks safe policy, command identity and workspace identity after approval", async () => {
     const { api } = await probe("safe-list", { safeCommandPatterns: ["mkdir [a-z]+"] });
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "llh-approval-"));
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "locality-approval-"));
     try {
       await fs.mkdir(path.join(directory, "first"));
       await fs.mkdir(path.join(directory, "second"));
