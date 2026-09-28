@@ -26,19 +26,32 @@ sandboxes. File reads remain auto-approved by default; file edits are opt-in.
 ## Install
 
 1. Open this repository on GitHub and go to **Releases**.
-2. Download the latest `.vsix` asset (`locality-<version>-<edition>.vsix`).
+2. Download the latest `.vsix` asset (`locality-<edition>.vsix`).
 3. Install it using either method:
 
-   **From the terminal** (substitute the version you downloaded):
+   **From the terminal** (substitute your chosen edition):
 
    ```bash
-   code --install-extension locality-<version>-safe-list.vsix
+   code --install-extension locality-safe-list.vsix
    ```
 
    **From inside VS Code:** open the Command Palette (`Ctrl/Cmd+Shift+P`) and
    run **Extensions: Install from VSIX…**, then pick the file you downloaded.
 
 4. Reload VS Code when prompted.
+
+Direct downloads from the latest release:
+
+| Edition | Download |
+| --- | --- |
+| No commands | [locality-no-commands.vsix](https://github.com/liandir/locality/releases/latest/download/locality-no-commands.vsix) |
+| Safe list | [locality-safe-list.vsix](https://github.com/liandir/locality/releases/latest/download/locality-safe-list.vsix) |
+| Commands | [locality-commands.vsix](https://github.com/liandir/locality/releases/latest/download/locality-commands.vsix) |
+| Advanced | [locality-advanced.vsix](https://github.com/liandir/locality/releases/latest/download/locality-advanced.vsix) |
+
+These URLs follow the release marked **Latest** on GitHub. Release assets keep
+stable filenames across versions; the release tag and VSIX metadata identify the
+version. Locally built packages retain the version in their filenames.
 
 Editions use the same extension ID. Installing another edition replaces the
 current one and preserves chats and shared settings. The installed edition is
@@ -477,6 +490,19 @@ If you'd rather build the extension yourself than download a release, package a
 To rebuild after changing the source, re-run `npm run package:vsix` and install
 the new file again (add `--force` to `code --install-extension` to overwrite the
 previous install of the same version).
+
+### Release downloads
+
+The release workflow runs when a `v*` tag is pushed. After packaging and auditing
+all four editions, it copies the versioned files from `artifacts/` into
+`.build/release-assets/` using the stable filenames listed under **Install**.
+Only those copies are uploaded to the GitHub release; local build filenames and
+the version inside each VSIX stay unchanged. All four copies must be prepared
+successfully before the upload step runs.
+
+Website download buttons can use the `/releases/latest/download/` links above
+without being updated for every release. The links become available once a
+release containing the stable filenames is published and marked **Latest**.
 
 ### Development setup
 
