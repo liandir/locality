@@ -91,8 +91,8 @@ function renderWelcome(): string {
     <div class="panel welcome-panel">
       <section class="welcome-section welcome-hero">
         <span class="welcome-logo" aria-hidden="true"></span>
-        <h2>Welcome to Locality Harness</h2>
-        <p class="welcome-copy">Vibe with your locally hosted language model.</p>
+        <h2>Welcome to Locality</h2>
+        <p class="welcome-copy">Your local AI coding assistant.</p>
       </section>
 
       <section class="welcome-actions">
