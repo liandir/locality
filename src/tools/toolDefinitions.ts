@@ -1,45 +1,32 @@
-import { normalizeChatMode, type ChatMode } from "../chat/mode.js";
+import type { ChatMode } from "../chat/mode.js";
 
-export interface JsonSchema {
-  type: "object" | "array" | "string" | "integer" | "number" | "boolean";
-  description?: string;
-  properties?: Record<string, JsonSchema>;
-  required?: string[];
-  items?: JsonSchema;
-  enum?: string[];
-  minItems?: number;
-  maxItems?: number;
-  minimum?: number;
-  maximum?: number;
-  additionalProperties?: boolean;
-}
-
-export interface ToolSpec {
-  name: string;
-  description: string;
-  parameters: JsonSchema & { type: "object"; properties: Record<string, JsonSchema> };
-}
-
-export interface OpenAiTool {
-  type: "function";
-  function: ToolSpec;
-}
-
-export function asOpenAiTools(tools: ToolSpec[]): OpenAiTool[] {
-  return tools.map(tool => ({ type: "function", function: tool }));
-}
-
-const objectParameters = (
-  properties: Record<string, JsonSchema>,
-  required: string[]
-): ToolSpec["parameters"] => ({
-  type: "object",
-  properties,
-  required,
-  additionalProperties: false
-});
+import { featureTools } from "../build/tools.js";
+import { objectParameters, type ToolSpec, type JsonSchema } from "./schema.js";
+export { asOpenAiTools, type JsonSchema, type ToolSpec, type OpenAiTool } from "./schema.js";
 
 export const ALL_TOOLS: ToolSpec[] = [
+  {
+    name: "search_memories",
+    description: "Search active memories from other chats in this workspace by deterministic keywords. Returns matching names, IDs, and full UTC dates, ranked by relevance; no memory contents. Use recall_memory to read a match.",
+    parameters: objectParameters({
+      query: { type: "string", description: "Non-empty keywords, names, paths, or symbols related to the current request." }
+    }, ["query"])
+  },
+  {
+    name: "recall_memory",
+    description: "Read one active workspace memory using the exact name and ID from search_memories. Returns its name, ID, full UTC date, and contents. If the source changed or is no longer active, search again.",
+    parameters: objectParameters({
+      name: { type: "string", description: "Exact memory name from search_memories." },
+      id: { type: "string", description: "Exact memory ID from search_memories." }
+    }, ["name", "id"])
+  },
+  {
+    name: "view_image",
+    description: "View a JPEG, PNG, or WebP image inside the open workspace. Use this to inspect image files found by list_dir or glob; read_file only reads text. The image is supplied with the tool result for visual inspection.",
+    parameters: objectParameters({
+      path: { type: "string", description: "Workspace-relative image path." }
+    }, ["path"])
+  },
   {
     name: "read_file",
     description: "Read a UTF-8 text file inside the open workspace, optionally only a line range. Each returned line is prefixed with its real 1-based line number in the file and a tab (e.g. `12\\t...`); that prefix is not part of the file. Pass those numbers to insert_text and replace_range. Prefer a range for large files; a range read is prefixed with `[lines X-Y of N]`.",
@@ -122,44 +109,7 @@ export const ALL_TOOLS: ToolSpec[] = [
       pattern: { type: "string", description: "Glob pattern, e.g. 'src/**/*.ts'." }
     }, ["pattern"])
   },
-  {
-    name: "run_command",
-    description:
-      "Run a shell command as an isolated managed process in the workspace. Short commands return normally; a command still running after a bounded initial wait returns a job_id. Use wait_process to observe it without busy-polling, or stop_process to terminate it. Output is bounded and no visible terminal is opened. Call the tool directly when it would help.",
-    parameters: objectParameters({
-      command: { type: "string", description: "Exact command line." }
-    }, ["command"])
-  },
-  {
-    name: "run_process",
-    description:
-      "Run a program and argument vector as an isolated managed process in the workspace. No shell interprets the arguments. Short processes return normally; one still running after a bounded initial wait returns a job_id. Use wait_process to observe it without busy-polling, or stop_process to terminate it. Output is bounded and no visible terminal is opened. Call the tool directly when it would help.",
-    parameters: objectParameters({
-      program: { type: "string", description: "Executable name, for example npm, git, or ls." },
-      args: {
-        type: "array",
-        description: "Arguments passed directly to the program without shell parsing.",
-        items: { type: "string" }
-      }
-    }, ["program", "args"])
-  },
-  {
-    name: "wait_process",
-    description:
-      "Wait for a managed process job previously returned by run_command or run_process. Waits for at most wait_ms without consuming model tokens, then returns new output and whether the job is still running. If it is still running, call wait_process again later or stop_process when it is no longer needed.",
-    parameters: objectParameters({
-      job_id: { type: "string", description: "Harness job ID returned by run_command or run_process." },
-      wait_ms: { type: "integer", minimum: 0, maximum: 30000, description: "Maximum time to wait, from 0 to 30000 milliseconds. Defaults to 10000." }
-    }, ["job_id"])
-  },
-  {
-    name: "stop_process",
-    description:
-      "Stop a managed process job previously returned by run_command or run_process. The harness terminates only that chat-owned process tree, escalating to a forced stop if it does not exit promptly, and returns its final output.",
-    parameters: objectParameters({
-      job_id: { type: "string", description: "Harness job ID returned by run_command or run_process." }
-    }, ["job_id"])
-  },
+  ...featureTools,
   {
     name: "ask_user_question",
     description:
@@ -197,27 +147,33 @@ export const ALL_TOOLS: ToolSpec[] = [
   }
 ];
 
-const PLAN_MODE_TOOL_NAMES = new Set(["read_file", "list_dir", "glob", "ask_user_question"]);
+const PLAN_MODE_TOOL_NAMES = new Set(["view_image", "read_file", "list_dir", "glob", "ask_user_question"]);
 const REVIEW_MODE_TOOL_NAMES = new Set([
+  "view_image",
   "read_file",
   "list_dir",
   "glob",
   "ask_user_question",
-  "run_command",
-  "run_process",
-  "wait_process",
-  "stop_process"
 ]);
 
-export function toolsForMode(mode: ChatMode | boolean, transport: "native" | "legacy" = "legacy"): ToolSpec[] {
-  const normalizedMode = typeof mode === "boolean" ? normalizeChatMode(undefined, mode) : mode;
-  if (normalizedMode === "plan") return ALL_TOOLS.filter(tool => PLAN_MODE_TOOL_NAMES.has(tool.name));
+export function isMemoryToolName(name: string): boolean {
+  return name === "search_memories" || name === "recall_memory";
+}
+
+export function toolsForMode(mode: ChatMode, transport: "native" | "legacy" = "legacy", memoryEnabled = false, supportsVision = false, settings?: object): ToolSpec[] {
+  const available = ALL_TOOLS.filter(tool =>
+    (!tool.availability?.setting || !!(settings as Record<string, unknown> | undefined)?.[tool.availability.setting])
+    && (!isMemoryToolName(tool.name) || memoryEnabled)
+    && (tool.name !== "view_image" || (supportsVision && transport === "native"))
+    && (!tool.availability || (tool.availability.modes.includes(mode) && (!tool.availability.transport || tool.availability.transport === transport)))
+  );
+  if (mode === "plan") return available.filter(tool => PLAN_MODE_TOOL_NAMES.has(tool.name) || isMemoryToolName(tool.name) || !!tool.availability);
   const excluded = transport === "native"
-    ? new Set(["run_command", "write_file"])
-    : new Set(["run_process", "create_file", "edit_file"]);
-  return ALL_TOOLS.filter(tool =>
+    ? new Set(["write_file"])
+    : new Set(["create_file", "edit_file"]);
+  return available.filter(tool =>
     !excluded.has(tool.name)
-    && (normalizedMode !== "review" || REVIEW_MODE_TOOL_NAMES.has(tool.name))
+    && (mode !== "review" || REVIEW_MODE_TOOL_NAMES.has(tool.name) || isMemoryToolName(tool.name) || !!tool.availability)
   );
 }
 

@@ -6,7 +6,7 @@ scripts/
 .agents/
 .claude/
 .codex/
-.local-llm-chats/
+.locality/
 .vscode/
 .vscode-test/
 

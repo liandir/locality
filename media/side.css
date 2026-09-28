@@ -7,6 +7,7 @@
 }
 
 html, body { min-height: 100%; }
+html { scrollbar-gutter: stable; }
 body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-sideBar-background); margin: 0; padding: 10px; font-size: var(--vscode-font-size); box-sizing: border-box; }
 body.vscode-light, body.vscode-high-contrast-light { color-scheme: light; }
 body.vscode-dark, body.vscode-high-contrast { color-scheme: dark; }
@@ -32,14 +33,14 @@ button.primary:hover, button.primary:focus-visible { background: color-mix(in sr
 .search-box input:focus { outline: none; box-shadow: none; }
 .search-box input::placeholder { color: var(--vscode-input-placeholderForeground); }
 .chat-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0; }
-.chat-row { height: 22px; padding: 0 4px; display: flex; gap: 6px; align-items: center; border-radius: var(--control-radius); cursor: pointer; box-sizing: border-box; }
+.chat-row { height: 24px; padding: 0 4px; display: flex; gap: 6px; align-items: center; border-radius: var(--control-radius); cursor: pointer; box-sizing: border-box; }
 .chat-row:hover { background: var(--vscode-list-hoverBackground, var(--surface-fill)); }
 .chat-row:focus-visible { outline: none; background: var(--vscode-list-inactiveSelectionBackground, var(--surface-fill-strong)); color: var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground)); }
 .chat-row > .chat-row-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-entry { min-width: 0; }
 .chat-list li > .chat-row time { color: var(--vscode-descriptionForeground); font-size: 0.85em; }
 .chat-list button.delete, .chat-list button.memory-reveal { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; flex: 0 0 auto; background: transparent; border: 1px solid transparent; border-radius: var(--control-radius); padding: 0; color: var(--vscode-descriptionForeground); }
-.chat-list li button.delete:hover, .chat-list li button.delete:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); border-color: transparent; color: var(--vscode-errorForeground); }
+.chat-list li button.delete:hover, .chat-list li button.delete:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); border-color: transparent; color: var(--error-highlight-foreground); }
 .chat-list button.memory-reveal.memory-usable { color: var(--vscode-textLink-foreground); }
 .chat-list button.memory-reveal[aria-expanded=true] { background: var(--surface-fill-strong); }
 .chat-list button.memory-reveal:hover, .chat-list button.memory-reveal:focus-visible, button.memory-generate:hover, button.memory-generate:focus-visible { background: color-mix(in srgb, var(--vscode-textLink-foreground) 12%, transparent); color: var(--vscode-textLink-foreground); }
@@ -52,12 +53,13 @@ button.primary:hover, button.primary:focus-visible { background: color-mix(in sr
 .intro-section .muted { margin: 0; line-height: 1.45; }
 .welcome-panel { display: flex; flex-direction: column; min-height: 100%; padding: 16px 2px 12px; text-align: center; }
 .welcome-section { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 34px 0 28px; }
+.welcome-logo { display: block; width: 64px; height: 64px; flex-shrink: 0; background: url("./locality-mark.svg") center / contain no-repeat; }
 .welcome-hero h2 { margin: 0; font-size: 1.18em; line-height: 1.35; }
 .welcome-copy { max-width: 240px; margin: 0; color: var(--vscode-descriptionForeground); line-height: 1.45; }
 .welcome-actions { display: flex; flex-direction: column; gap: 22px; margin-top: 26px; }
 .welcome-group { display: flex; flex-direction: column; align-items: center; gap: 9px; }
 .welcome-caption { margin: 0; max-width: 240px; color: var(--vscode-descriptionForeground); line-height: 1.4; }
-.welcome-button { width: 100%; min-height: 36px; }
+.welcome-button, .wide-button { width: 100%; min-height: 30px; padding: 4px 12px; box-sizing: border-box; }
 .panel-section .welcome-button + .wide-button { margin-top: 8px; }
 .welcome-footer { display: flex; align-items: center; justify-content: center; gap: 7px; margin-top: auto; padding-top: 36px; color: var(--vscode-descriptionForeground); font-size: .9em; }
 .link-button { min-width: 0; padding: 2px 0; color: var(--vscode-textLink-foreground); background: transparent; border-color: transparent; }
@@ -66,8 +68,8 @@ button.primary:hover, button.primary:focus-visible { background: color-mix(in sr
 .icon-label svg { flex: 0 0 auto; }
 .empty-state { margin: 0; color: var(--vscode-descriptionForeground); line-height: 1.45; }
 .field-label { display: block; margin: 12px 0 6px; color: var(--vscode-descriptionForeground); font-size: 0.86em; }
-.panel-section input[type=text], .panel-section input[type=number], .panel-section select { display: block; width: 100%; min-height: 32px; padding: 5px 14px; background: var(--surface-fill); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: var(--control-radius); box-sizing: border-box; font: inherit; outline: none; transition: background 0.12s; }
-.panel-section input[type=text]:focus, .panel-section input[type=number]:focus, .panel-section select:focus { background: var(--surface-fill-strong); border-color: transparent; outline: none; }
+.panel-section input[type=text], .panel-section input[type=password], .panel-section input[type=number], .panel-section select { display: block; width: 100%; min-height: 30px; padding: 4px 12px; background: var(--surface-fill); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: var(--control-radius); box-sizing: border-box; font: inherit; outline: none; transition: background 0.12s; }
+.panel-section input[type=text]:focus, .panel-section input[type=password]:focus, .panel-section input[type=number]:focus, .panel-section select:focus { background: var(--surface-fill-strong); border-color: transparent; outline: none; }
 .panel-section input[type=number] { appearance: textfield; }
 .panel-section input[type=number]::-webkit-inner-spin-button,
 .panel-section input[type=number]::-webkit-outer-spin-button { margin: 0; -webkit-appearance: none; appearance: none; }
@@ -79,9 +81,8 @@ button.primary:hover, button.primary:focus-visible { background: color-mix(in sr
 .field-row input[type=number] { padding-left: 10px; padding-right: 6px; }
 .setting-action-row { display: flex; gap: 8px; align-items: stretch; }
 .setting-action-row input { min-width: 0; flex: 1; }
-.wide-button { width: 100%; min-height: 32px; }
 .panel-section .wide-button + .wide-button { margin-top: 8px; }
-button.danger:hover, button.danger:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); border-color: transparent; color: var(--vscode-errorForeground); }
+button.danger:hover, button.danger:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); border-color: transparent; color: var(--error-highlight-foreground); }
 .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; margin: 12px 0; color: var(--vscode-foreground); cursor: pointer; }
 .switch-row input { position: absolute; opacity: 0; pointer-events: none; }
 .switch { width: 38px; height: 20px; flex: 0 0 auto; border-radius: var(--control-radius); background: var(--surface-fill); border: 1px solid transparent; position: relative; transition: background 0.15s; }
@@ -98,13 +99,15 @@ button.danger:hover, button.danger:focus-visible { background: color-mix(in srgb
 .range-setting input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 20px; margin: 0; padding: 0; background: transparent; outline: none; cursor: pointer; }
 .range-setting input[type=range]:focus { outline: none; }
 .range-setting input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: var(--control-radius); background: var(--surface-fill-strong); }
-.range-setting input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -5px; border-radius: 50%; background: var(--vscode-descriptionForeground); transition: background 0.12s, box-shadow 0.12s; }
+.range-setting input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -5px; border-radius: var(--control-radius); background: var(--vscode-descriptionForeground); transition: background 0.12s, box-shadow 0.12s; }
 .range-setting input[type=range]:hover::-webkit-slider-thumb { background: var(--vscode-foreground); box-shadow: 0 0 0 4px var(--surface-fill); }
 .range-setting input[type=range]:active::-webkit-slider-thumb { background: var(--vscode-foreground); box-shadow: 0 0 0 5px var(--surface-fill-strong); }
 .range-setting input[type=range]:focus-visible::-webkit-slider-thumb { background: var(--vscode-foreground); box-shadow: none; }
 .validation { font-size: 0.85em; padding: 7px 0 0; min-height: 1em; color: var(--vscode-descriptionForeground); }
 .validation.ok { color: var(--vscode-testing-iconPassed, #3fb950); }
-.validation.err { color: var(--vscode-errorForeground); }
+.validation.err { color: var(--error-foreground); }
+.validation.err:not(:empty) { margin-top: 7px; padding: 9px 10px; border: 1px solid transparent; border-radius: var(--control-radius); background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); overflow-wrap: anywhere; }
+.connection-settings { margin-bottom: 14px; }
 .endpoint-metadata { margin-top: 8px; padding: 9px 10px; border: 1px solid transparent; border-radius: var(--control-radius); background: var(--surface-fill); }
 .endpoint-metadata div { display: flex; justify-content: space-between; gap: 12px; line-height: 1.6; }
 .endpoint-metadata span { color: var(--vscode-descriptionForeground); }
@@ -115,13 +118,12 @@ button.danger:hover, button.danger:focus-visible { background: color-mix(in srgb
 .memory-editor { width: 100%; min-height: 120px; margin-top: 8px; resize: vertical; box-sizing: border-box; padding: 10px; border: 1px solid transparent; border-radius: var(--control-radius); background: var(--surface-fill); color: var(--vscode-input-foreground); font: inherit; outline: none; }
 .memory-editor:focus { background: var(--surface-fill-strong); }
 .memory-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.memory-error { color: var(--vscode-errorForeground); }
+.memory-error { color: var(--error-foreground); }
 
 .chats-panel { gap: 0; }
 .chats-panel .panel-section { padding: 6px 0 8px; }
 .chats-panel .panel-section:first-child { padding-top: 0; }
 .chats-panel h3 { display: flex; align-items: center; min-height: 22px; margin: 0 0 2px; padding: 0 4px; font-size: 0.85em; letter-spacing: 0; }
-.chats-panel .welcome-button, .chats-panel .wide-button { min-height: 26px; padding: 3px 8px; }
 .chats-panel .wide-button + .wide-button, .chats-panel .welcome-button + .wide-button { margin-top: 4px; }
 .chats-panel .search-box { min-height: 26px; padding: 0 8px; }
 .chats-panel .search-box input { padding: 3px 0; }

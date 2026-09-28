@@ -1,7 +1,8 @@
+import { chatFeature } from "../../../build/chat.js";
 export type ToolActivityStatus = "streaming" | "pending" | "approved" | "rejected" | "executed" | "failed";
 
 export type WorkActivity =
-  | { kind: "thought" }
+  | { kind: "thought"; active?: boolean }
   | {
       kind: "tool";
       toolName: string;
@@ -13,20 +14,22 @@ export type WorkActivity =
     };
 
 const WRITE_TOOLS = new Set(["write_file", "create_file", "edit_file", "insert_text", "replace_range"]);
-const COMMAND_TOOLS = new Set(["run_command", "run_process", "wait_process", "stop_process"]);
 
-/** A completed tool is active only when it owns a background command process. */
+/** Include prompt ingestion and running processes, but not ingestion queued behind a title request. */
 export function toolActivityIsActive(
   toolName: string,
   status: ToolActivityStatus,
-  processRunning = false
+  processRunning = false,
+  contextPending = false,
+  waitingForTitle = false
 ): boolean {
   return ["streaming", "pending", "approved"].includes(status)
+    || (status === "executed" && contextPending && !waitingForTitle)
     || toolOwnsRunningProcess(toolName, processRunning);
 }
 
 export function toolOwnsRunningProcess(toolName: string, processRunning = false): boolean {
-  return processRunning && (toolName === "run_command" || toolName === "run_process");
+  return chatFeature.ownsActivity?.(toolName, processRunning) ?? false;
 }
 
 interface ActivityGroup {
@@ -35,9 +38,8 @@ interface ActivityGroup {
 }
 
 /**
- * Summarize a settled sub-session in first-occurrence order. Thought remains
- * in a two-type summary, but gives way to up to three concrete tool types in a
- * busier sub-session.
+ * Summarize up to three activity types in first-occurrence order, with tools
+ * taking precedence over thoughts. Callers omit thoughts when they are hidden.
  */
 export function finishedWorkSummary(activities: WorkActivity[]): string | undefined {
   return workSummary(activities);
@@ -46,31 +48,50 @@ export function finishedWorkSummary(activities: WorkActivity[]): string | undefi
 /**
  * Summarize a live sub-session. While fewer than three completed activity
  * types occupy the buffer, include the current type using progressive tense.
- * Once the buffer is full, leave the current activity to its dedicated row.
+ * Once the buffer is full, update a type already shown there; new types stay
+ * in their dedicated rows.
+ * Thoughts follow tool types; a live status may occupy a remaining text slot.
  */
-export function liveWorkSummary(activities: WorkActivity[]): string | undefined {
-  if (activities.length === 0) return undefined;
-  const current = activities[activities.length - 1];
-  if (!workActivityIsActive(current)) return finishedWorkSummary(activities);
-  if (!liveWorkSummaryIncludesCurrent(activities)) {
-    return finishedWorkSummary(activities.slice(0, -1));
+export function liveWorkSummary(activities: WorkActivity[], liveStatus?: string): string | undefined {
+  const tools = activities.filter(activity => activity.kind === "tool");
+  const current = tools.at(-1);
+  let summary = finishedWorkSummary(tools);
+  if (current && workActivityIsActive(current)) {
+    summary = liveWorkSummaryIncludesCurrent(tools)
+      ? workSummary(tools, workActivityType(current), current)
+      : finishedWorkSummary(tools.slice(0, -1));
   }
-  return workSummary(activities, workActivityType(current), current);
+  const toolTypes = new Set(tools.map(workActivityType).filter(type => type !== undefined));
+  const thoughts = activities.filter(activity => activity.kind === "thought");
+  const labels = summary ? [summary] : [];
+  let typeCount = toolTypes.size;
+  if (thoughts.length && typeCount < 3) {
+    labels.push(liveStatus === "Thinking" || thoughts.some(workActivityIsActive) ? "thinking" : "thought");
+    typeCount++;
+  }
+  // A delayed title wait explains why the server is unavailable, even when
+  // the completed-work summary has already filled its three activity slots.
+  if (liveStatus && (typeCount < 3 || liveStatus === "Generating title") && !(liveStatus === "Thinking" && thoughts.length)) {
+    labels.push(lowerFirst(liveStatus));
+  }
+  return labels.length ? capitalizeSentence(labels.join(", ")) : undefined;
 }
 
 export function liveWorkSummaryIncludesCurrent(activities: WorkActivity[]): boolean {
   const current = activities[activities.length - 1];
-  if (!current || !workActivityType(current)) return false;
+  const currentType = current && workActivityType(current);
+  if (!currentType) return false;
   if (!workActivityIsActive(current)) return true;
   const completedTypes = new Set(activities
     .slice(0, -1)
+    .filter(activity => activity.kind === "tool")
     .map(workActivityType)
     .filter((type): type is string => type !== undefined));
-  return completedTypes.size < 3;
+  return completedTypes.size < 3 || [...completedTypes].slice(0, 3).includes(currentType);
 }
 
 function workActivityIsActive(activity: WorkActivity): boolean {
-  if (activity.kind === "thought") return true;
+  if (activity.kind === "thought") return activity.active ?? false;
   if (activity.active !== undefined) return activity.active;
   return activity.status === undefined || ["streaming", "pending", "approved"].includes(activity.status);
 }
@@ -89,13 +110,9 @@ function workSummary(
     groups.set(key, group);
   }
   if (groups.size === 0) return undefined;
-  const ordered = [...groups.values()];
-  // Thought is useful context beside one other activity. In a busier
-  // sub-session, reserve the three text labels for concrete tool types; the
-  // thought icon is still retained by the UI's complete icon strip.
-  const labels = ordered.length <= 2
-    ? ordered
-    : ordered.filter(group => group.key !== "thought" || group.key === activeType).slice(0, 3);
+  const labels = [...groups.values()]
+    .sort((a, b) => Number(a.key === "thought") - Number(b.key === "thought"))
+    .slice(0, 3);
   return capitalizeSentence(labels.map(group =>
     group.key === activeType && activeActivity
       ? activeActivityLabel(activeActivity)
@@ -119,14 +136,38 @@ export function workActivityType(activity: WorkActivity): string | undefined {
 export function workActivityIconType(activity: WorkActivity): string | undefined {
   const type = workActivityType(activity);
   if (!type || activity.kind === "thought") return type;
-  if (COMMAND_TOOLS.has(activity.toolName)) return "command";
+  const featureIcon = chatFeature.icons?.[activity.toolName];
+  if (featureIcon) return featureIcon;
+  if (chatFeature.recognizes?.(activity.toolName)) return "command";
   if (WRITE_TOOLS.has(activity.toolName)) return "write";
+  if (activity.toolName === "view_image") return "view_image";
   if (activity.toolName === "read_file") return "read_file";
-  if (activity.toolName === "list_dir" || activity.toolName === "glob") return "search";
+  if (activity.toolName === "search_memories" || activity.toolName === "recall_memory") return "memory";
+  if (activity.toolName === "list_dir") return "folder";
+  if (activity.toolName === "glob") return "search";
   if (["update_todos", "ask_user_question", "compact_context"].includes(activity.toolName)) {
     return activity.toolName;
   }
   return "fallback";
+}
+
+/** Keep every icon category, including active tools omitted by the summary's text limit. */
+export function workSummaryIcons(
+  activities: WorkActivity[],
+  live: boolean
+): { activityIndex: number; active: boolean }[] {
+  const icons = new Map<string, { activityIndex: number; active: boolean }>();
+  activities.forEach((activity, activityIndex) => {
+    const type = workActivityIconType(activity);
+    if (!type) return;
+    const active = live && workActivityIsActive(activity);
+    const existing = icons.get(type);
+    if (existing) existing.active ||= active;
+    else icons.set(type, { activityIndex, active });
+  });
+  return [...icons.entries()]
+    .sort(([a], [b]) => Number(a === "thought") - Number(b === "thought"))
+    .map(([, icon]) => icon);
 }
 
 /** Present-progress label for an actively executing tool or live summary. */
@@ -135,33 +176,21 @@ export function activeToolLabel(toolName: string, createsNewFile = false, includ
     return includeFileNoun ? "Creating file" : "Creating";
   }
   if (WRITE_TOOLS.has(toolName)) return includeFileNoun ? "Editing file" : "Editing";
+  if (toolName === "view_image") return includeFileNoun ? "Viewing image" : "Viewing";
   if (toolName === "read_file") return includeFileNoun ? "Reading file" : "Reading";
   const labels: Record<string, string> = {
-    list_dir: "Reading directory",
+    search_memories: "Searching memories",
+    recall_memory: "Recalling memory",
+    list_dir: includeFileNoun ? "Listing directory" : "Listing",
     glob: "Searching for files",
-    run_command: "Running command",
-    run_process: "Running command",
-    wait_process: "Waiting for process",
-    stop_process: "Stopping process",
     update_todos: "Updating todos",
     ask_user_question: "Asking question",
     compact_context: "Compacting context"
   };
-  return labels[toolName] ?? capitalizeSentence(humanizeToolName(toolName));
+  return chatFeature.active?.[toolName] ?? labels[toolName] ?? capitalizeSentence(humanizeToolName(toolName));
 }
 
-export function commandToolLabel(
-  status: "streaming" | "pending" | "approved" | "rejected" | "executed" | "failed"
-): string {
-  switch (status) {
-    case "pending": return "Run command";
-    case "streaming":
-    case "approved": return "Running command";
-    case "executed": return "Ran command";
-    case "failed": return "Command failed";
-    case "rejected": return "Command rejected";
-  }
-}
+export const commandToolLabel = chatFeature.commandLabel!;
 
 /** Past-tense label for an individual successfully completed tool card. */
 export function settledToolLabel(toolName: string, createsNewFile = false, includeFileNoun = true): string {
@@ -171,17 +200,18 @@ export function settledToolLabel(toolName: string, createsNewFile = false, inclu
       ? includeFileNoun ? "Created file" : "Created"
       : includeFileNoun ? "Edited file" : "Edited";
   }
+  if (toolName === "view_image") return includeFileNoun ? "Viewed image" : "Viewed";
   if (toolName === "read_file") return includeFileNoun ? "Read file" : "Read";
   const labels: Record<string, string> = {
-    list_dir: "Read directory",
+    search_memories: "Searched memories",
+    recall_memory: "Recalled memory",
+    list_dir: includeFileNoun ? "Listed directory" : "Listed",
     glob: "Searched",
-    wait_process: "Checked process",
-    stop_process: "Stopped process",
     update_todos: "Updated todos",
     ask_user_question: "Asked question",
     compact_context: "Compacted context"
   };
-  return labels[toolName] ?? capitalizeSentence(humanizeToolName(toolName));
+  return chatFeature.settled?.[toolName] ?? labels[toolName] ?? capitalizeSentence(humanizeToolName(toolName));
 }
 
 /** Explicit outcome label for an individual unsuccessful tool card. */
@@ -193,14 +223,17 @@ export function erroredToolLabel(
   if (toolName === "ask_user_question" && status === "rejected") return "Question dismissed";
   const outcome = status === "failed" ? "failed" : "rejected";
   const subjects: Record<string, string> = {
+    view_image: "View image",
     read_file: "Read",
-    list_dir: "Directory read",
+    search_memories: "Memory search",
+    recall_memory: "Memory recall",
+    list_dir: "Directory listing",
     glob: "File search",
     update_todos: "Todo update",
     ask_user_question: "Question",
     compact_context: "Compaction"
   };
-  const subject = subjects[toolName] ?? capitalizeSentence(humanizeToolName(toolName));
+  const subject = chatFeature.subjects?.[toolName] ?? subjects[toolName] ?? capitalizeSentence(humanizeToolName(toolName));
   return `${subject} ${outcome}`;
 }
 
@@ -244,16 +277,17 @@ function activityType(toolName: string, createsNewFile = false): string {
 function finishedGroupLabel(group: ActivityGroup): string {
   if (group.key === "thought") return "thought";
   const count = subjectCount(group.activities);
+  const featureLabel = chatFeature.groupLabel?.(group.key, count);
+  if (featureLabel) return featureLabel;
   switch (group.key) {
+    case "view_image": return count === 1 ? "viewed image" : "viewed images";
     case "read_file": return count === 1 ? "read file" : "read files";
-    case "list_dir": return count === 1 ? "read directory" : "read directories";
+    case "list_dir": return count === 1 ? "listed directory" : "listed directories";
     case "write": return count === 1 ? "edited file" : "edited files";
     case "create": return count === 1 ? "created file" : "created files";
+    case "search_memories": return "searched memories";
+    case "recall_memory": return count === 1 ? "recalled memory" : "recalled memories";
     case "glob": return "searched for files";
-    case "run_command": return count === 1 ? "ran command" : "ran commands";
-    case "run_process": return count === 1 ? "ran command" : "ran commands";
-    case "wait_process": return count === 1 ? "waited for process" : "waited for processes";
-    case "stop_process": return count === 1 ? "stopped process" : "stopped processes";
     case "update_todos": return "updated todos";
     case "ask_user_question": return count === 1 ? "asked question" : "asked questions";
     case "compact_context": return "compacted context";

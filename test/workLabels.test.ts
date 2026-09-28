@@ -10,6 +10,7 @@ import {
   settledToolLabel,
   toolActivityIsActive,
   workActivityIconType,
+  workSummaryIcons,
   type WorkActivity
 } from "../src/ui/chatView/webview/workLabels.js";
 
@@ -38,7 +39,7 @@ describe("work session labels", () => {
       { kind: "tool", toolName: "list_dir", resource: "src" },
       { kind: "tool", toolName: "replace_range", resource: "src/a.ts" },
       { kind: "tool", toolName: "insert_text", resource: "src/b.ts" }
-    ])).toBe("Read directory, edited files");
+    ])).toBe("Listed directory, edited files");
   });
 
   it("uses singular labels when repeated calls target the same resource", () => {
@@ -46,6 +47,30 @@ describe("work session labels", () => {
       { kind: "tool", toolName: "read_file", resource: "a.ts" },
       { kind: "tool", toolName: "read_file", resource: "a.ts" }
     ])).toBe("Read file");
+  });
+
+  it.each([
+    [["."], "Listed directory"],
+    [["src"], "Listed directory"],
+    [[".", "."], "Listed directory"],
+    [[".", "src"], "Listed directories"]
+  ])("keeps directory summaries generic for %j", (paths, expected) => {
+    const activities: WorkActivity[] = paths.map(resource => ({
+      kind: "tool", toolName: "list_dir", resource, status: "executed"
+    }));
+    expect(finishedWorkSummary(activities)).toBe(expected);
+    expect(liveWorkSummary(activities)).toBe(expected);
+    expect(liveWorkSummary(activities, "Generating title")).toBe(`${expected}, generating title`);
+  });
+
+  it("keeps active directory summaries generic and excludes unsuccessful paths from pluralization", () => {
+    const listed: WorkActivity = { kind: "tool", toolName: "list_dir", resource: ".", status: "executed" };
+    const current: WorkActivity = { kind: "tool", toolName: "list_dir", resource: "src", status: "approved" };
+    expect(liveWorkSummary([current])).toBe("Listing directory");
+    expect(liveWorkSummary([listed, current])).toBe("Listing directory");
+    for (const status of ["failed", "rejected"] as const) {
+      expect(finishedWorkSummary([listed, { ...current, status }])).toBe("Listed directory");
+    }
   });
 
   it("omits thought and shows up to three concrete types in a busy session", () => {
@@ -63,12 +88,12 @@ describe("work session labels", () => {
       { kind: "tool", toolName: "ask_user_question" },
       { kind: "tool", toolName: "tool_call" },
       { kind: "tool", toolName: "list_dir", resource: "src" }
-    ])).toBe("Asked question, read directory");
+    ])).toBe("Asked question, listed directory");
   });
 
   it("uses present-progress tense for active tool labels", () => {
     expect(activeToolLabel("read_file")).toBe("Reading file");
-    expect(activeToolLabel("list_dir")).toBe("Reading directory");
+    expect(activeToolLabel("list_dir")).toBe("Listing directory");
     expect(activeToolLabel("glob")).toBe("Searching for files");
     expect(activeToolLabel("replace_range")).toBe("Editing file");
     expect(activeToolLabel("compact_context")).toBe("Compacting context");
@@ -78,6 +103,8 @@ describe("work session labels", () => {
   });
 
   it("omits the generic file noun when an action label precedes a filename", () => {
+    expect(activeToolLabel("list_dir", false, false)).toBe("Listing");
+    expect(settledToolLabel("list_dir", false, false)).toBe("Listed");
     expect(activeToolLabel("read_file", false, false)).toBe("Reading");
     expect(activeToolLabel("replace_range", false, false)).toBe("Editing");
     expect(activeToolLabel("create_file", false, false)).toBe("Creating");
@@ -116,10 +143,10 @@ describe("work session labels", () => {
     for (const toolName of ["write_file", "create_file", "edit_file", "insert_text", "replace_range"]) {
       expect(workActivityIconType({ kind: "tool", toolName })).toBe("write");
     }
-    for (const toolName of ["list_dir", "glob"]) {
-      expect(workActivityIconType({ kind: "tool", toolName })).toBe("search");
-    }
+    expect(workActivityIconType({ kind: "tool", toolName: "list_dir" })).toBe("folder");
+    expect(workActivityIconType({ kind: "tool", toolName: "glob" })).toBe("search");
     expect(workActivityIconType({ kind: "tool", toolName: "read_file" })).toBe("read_file");
+    expect(workActivityIconType({ kind: "tool", toolName: "view_image" })).toBe("view_image");
     expect(workActivityIconType({ kind: "tool", toolName: "custom_tool" })).toBe("fallback");
     expect(workActivityIconType({ kind: "thought" })).toBe("thought");
   });
@@ -162,7 +189,7 @@ describe("work session labels", () => {
       { kind: "tool", toolName: "replace_range", resource: "a.ts" } as const
     ];
     expect(liveWorkSummaryIncludesCurrent(activities)).toBe(true);
-    expect(liveWorkSummary(activities)).toBe("Thought, editing file");
+    expect(liveWorkSummary(activities)).toBe("Editing file, thought");
   });
 
   it("uses settled wording when a live session's latest tool has finished", () => {
@@ -172,7 +199,49 @@ describe("work session labels", () => {
     expect(toolActivityIsActive("list_dir", "pending")).toBe(true);
     expect(liveWorkSummary([
       { kind: "tool", toolName: "list_dir", resource: "src", status: "executed", active: false }
-    ])).toBe("Read directory");
+    ])).toBe("Listed directory");
+  });
+
+  it.each([
+    ["read_file", "Reading file"],
+    ["list_dir", "Listing directory"],
+    ["glob", "Searching for files"],
+    ["edit_file", "Editing file"],
+    ["run_command", "Running command"],
+    ["wait_process", "Checking process"],
+    ["compact_context", "Compacting context"]
+  ])("keeps %s active while its result enters the model prompt", (toolName, label) => {
+    const active = toolActivityIsActive(toolName, "executed", false, true);
+    const activities: WorkActivity[] = [{ kind: "tool", toolName, status: "executed", active }];
+    expect(active).toBe(true);
+    expect(liveWorkSummary(activities)).toBe(label);
+    expect(workSummaryIcons(activities, true)).toEqual([{ activityIndex: 0, active: true }]);
+    expect(toolActivityIsActive(toolName, "executed", false, false)).toBe(false);
+    expect(toolActivityIsActive(toolName, "failed", false, true)).toBe(false);
+  });
+
+  it.each(["list_dir", "read_file", "edit_file", "view_image", "wait_process", "compact_context"])(
+    "settles %s while title generation blocks ingestion of its completed result",
+    toolName => {
+      const activity: WorkActivity = {
+        kind: "tool", toolName, status: "executed",
+        active: toolActivityIsActive(toolName, "executed", false, true, true)
+      };
+      expect(activity.active).toBe(false);
+      expect(liveWorkSummary([activity], "Generating title"))
+        .toBe(`${finishedWorkSummary([activity])}, generating title`);
+      expect(workSummaryIcons([activity], true)).toEqual([{ activityIndex: 0, active: false }]);
+      expect(toolActivityIsActive(toolName, "executed", false, true, false)).toBe(true);
+    }
+  );
+
+  it("preserves actual tool and process activity during a title wait", () => {
+    expect(toolActivityIsActive("list_dir", "approved", false, false, true)).toBe(true);
+    expect(toolActivityIsActive("read_file", "streaming", false, false, true)).toBe(true);
+    expect(toolActivityIsActive("run_process", "executed", true, true, true)).toBe(true);
+    expect(toolActivityIsActive("run_command", "executed", true, true, true)).toBe(true);
+    expect(toolActivityIsActive("run_command", "executed", false, true, true)).toBe(false);
+    expect(toolActivityIsActive("wait_process", "executed", true, true, true)).toBe(false);
   });
 
   it("keeps a launched command active while its background process is running", () => {
@@ -186,10 +255,44 @@ describe("work session labels", () => {
     expect(toolActivityIsActive("run_process", "executed", true)).toBe(true);
     expect(liveWorkSummary([
       { kind: "tool", toolName: "wait_process", status: "executed", active: false }
-    ])).toBe("Waited for process");
+    ])).toBe("Checked process");
   });
 
-  it("leaves the current type out once three completed types occupy the buffer", () => {
+  it.each([
+    ["read_file", "Reading file, compacted context, edited files"],
+    ["compact_context", "Read files, compacting context, edited files"],
+    ["replace_range", "Read files, compacted context, editing file"]
+  ])("uses progressive tense for repeated %s in a full summary", (toolName, expected) => {
+    const history: WorkActivity[] = [
+      { kind: "thought" },
+      { kind: "tool", toolName: "read_file", resource: "Game.tsx", status: "executed" },
+      { kind: "tool", toolName: "compact_context", status: "executed" },
+      { kind: "tool", toolName: "edit_file", resource: "Game.tsx", status: "executed" },
+      { kind: "tool", toolName: "read_file", resource: "gameEngine.ts", status: "executed" },
+      { kind: "tool", toolName: "edit_file", resource: "gameEngine.ts", status: "executed" }
+    ];
+    const current: WorkActivity = { kind: "tool", toolName, resource: "gameEngine.ts", status: "approved" };
+    expect(liveWorkSummaryIncludesCurrent([...history, current])).toBe(true);
+    expect(liveWorkSummary([...history, current])).toBe(expected);
+    for (const status of ["executed", "failed", "rejected"] as const) {
+      expect(liveWorkSummary([...history, { ...current, status }]))
+        .toBe("Read files, compacted context, edited files");
+    }
+  });
+
+  it("keeps a repeated fourth type outside the summary text limit", () => {
+    const history: WorkActivity[] = [
+      { kind: "tool", toolName: "read_file", status: "executed" },
+      { kind: "tool", toolName: "list_dir", resource: "src", status: "executed" },
+      { kind: "tool", toolName: "run_command", status: "executed" },
+      { kind: "tool", toolName: "compact_context", status: "executed" }
+    ];
+    const activities: WorkActivity[] = [...history, { kind: "tool", toolName: "compact_context", status: "approved" }];
+    expect(liveWorkSummaryIncludesCurrent(activities)).toBe(false);
+    expect(liveWorkSummary(activities)).toBe("Read file, listed directory, ran command");
+  });
+
+  it("leaves a new type out once three completed types occupy the buffer", () => {
     const activities = [
       { kind: "tool", toolName: "read_file", resource: "a.ts" } as const,
       { kind: "tool", toolName: "list_dir", resource: "src" } as const,
@@ -197,6 +300,174 @@ describe("work session labels", () => {
       { kind: "tool", toolName: "compact_context" } as const
     ];
     expect(liveWorkSummaryIncludesCurrent(activities)).toBe(false);
-    expect(liveWorkSummary(activities)).toBe("Read file, read directory, ran command");
+    expect(liveWorkSummary(activities)).toBe("Read file, listed directory, ran command");
+  });
+});
+
+describe("live statuses in work summaries", () => {
+  const read: WorkActivity = { kind: "tool", toolName: "read_file", resource: "a.ts", status: "executed" };
+  const listed: WorkActivity = { kind: "tool", toolName: "list_dir", resource: "src", status: "executed" };
+  const command: WorkActivity = { kind: "tool", toolName: "run_command", status: "executed" };
+
+  it.each(["Thinking", "Generating title", "Server pending", "Loading chat context"])(
+    "appends %s after fewer than three distinct tool types",
+    status => {
+      const suffix = status.toLowerCase();
+      expect(liveWorkSummary([read], status)).toBe(`Read file, ${suffix}`);
+      expect(liveWorkSummary([read, listed], status)).toBe(`Read file, listed directory, ${suffix}`);
+      expect(liveWorkSummary([read, listed, command], status)).toBe(
+        "Read file, listed directory, ran command" + (status === "Generating title" ? ", generating title" : "")
+      );
+    }
+  );
+
+  it("counts types rather than calls, thoughts, or unsuccessful tools", () => {
+    expect(liveWorkSummary([
+      read, { kind: "thought" }, read, listed, { ...command, status: "failed" },
+      { kind: "tool", toolName: "compact_context", status: "rejected" }
+    ], "Thinking")).toBe("Read file, listed directory, thinking");
+  });
+
+  it("appends current thinking after the tools instead of retaining its earlier position", () => {
+    expect(liveWorkSummary([{ kind: "thought" }, read, listed, { kind: "thought" }], "Thinking"))
+      .toBe("Read file, listed directory, thinking");
+  });
+
+  it("drops finished statuses without losing the tool summary when thoughts are hidden", () => {
+    const activities: WorkActivity[] = [read];
+    expect(liveWorkSummary(activities, "Thinking")).toBe("Read file, thinking");
+    expect(liveWorkSummary(activities)).toBe("Read file");
+    expect(finishedWorkSummary(activities)).toBe("Read file");
+  });
+
+  it.each(["Thinking", "Generating title", "Server pending", "Loading chat context"])(
+    "shows only %s when unsuccessful calls have no summary text",
+    liveStatus => {
+      for (const status of ["failed", "rejected"] as const) {
+        expect(liveWorkSummary([{ ...read, status }], liveStatus)).toBe(liveStatus);
+      }
+    }
+  );
+
+  it("shows thinking alone when there are no tools to summarize", () => {
+    expect(liveWorkSummary([{ kind: "thought" }], "Thinking")).toBe("Thinking");
+  });
+
+  it("keeps hidden thinking text-only and preserves running tool animation", () => {
+    expect(liveWorkSummary([{ ...read, status: "approved" }], "Thinking")).toBe("Reading file, thinking");
+    expect(workSummaryIcons([{ ...read, status: "approved" }], true))
+      .toEqual([{ activityIndex: 0, active: true }]);
+  });
+});
+
+describe("visible thoughts in work summaries", () => {
+  const read: WorkActivity = { kind: "tool", toolName: "read_file", status: "executed" };
+  const compact: WorkActivity = { kind: "tool", toolName: "compact_context", status: "executed" };
+  const edit: WorkActivity = { kind: "tool", toolName: "edit_file", status: "executed" };
+  const thought: WorkActivity = { kind: "thought", active: false };
+  const thinking: WorkActivity = { kind: "thought", active: true };
+
+  it("summarizes thinking after tool types and animates its deduplicated icon", () => {
+    const activities = [compact, thought, read, thinking];
+    expect(liveWorkSummary(activities, "Thinking")).toBe("Compacted context, read file, thinking");
+    expect(liveWorkSummary(activities)).toBe("Compacted context, read file, thinking");
+    expect(workSummaryIcons(activities, true)).toEqual([
+      { activityIndex: 0, active: false },
+      { activityIndex: 2, active: false },
+      { activityIndex: 1, active: true }
+    ]);
+  });
+
+  it("retains completed thoughts with a settled label and icon", () => {
+    const activities = [thought, compact, read, thought];
+    expect(liveWorkSummary(activities)).toBe("Compacted context, read file, thought");
+    expect(finishedWorkSummary(activities)).toBe("Compacted context, read file, thought");
+    expect(workSummaryIcons(activities, false)).toEqual([
+      { activityIndex: 1, active: false },
+      { activityIndex: 2, active: false },
+      { activityIndex: 0, active: false }
+    ]);
+  });
+
+  it("reserves the third text slot for tools even when thoughts came first", () => {
+    const activities = [thought, compact, read, { ...edit, active: true }];
+    expect(liveWorkSummaryIncludesCurrent(activities)).toBe(true);
+    expect(liveWorkSummary(activities)).toBe("Compacted context, read file, editing file");
+    expect(finishedWorkSummary(activities)).toBe("Compacted context, read file, edited file");
+    expect(liveWorkSummary([...activities, thinking], "Thinking"))
+      .toBe("Compacted context, read file, editing file");
+    expect(workSummaryIcons([...activities, thinking], true)).toEqual([
+      { activityIndex: 1, active: false },
+      { activityIndex: 2, active: false },
+      { activityIndex: 3, active: true },
+      { activityIndex: 0, active: true }
+    ]);
+  });
+
+  it("fits transient statuses around visible thoughts within the three-type limit", () => {
+    expect(liveWorkSummary([thought, read], "Generating title")).toBe("Read file, thought, generating title");
+    expect(liveWorkSummary([thought, compact, read], "Generating title"))
+      .toBe("Compacted context, read file, thought, generating title");
+    expect(liveWorkSummary([thought, compact, read], "Server pending"))
+      .toBe("Compacted context, read file, thought");
+  });
+
+  it("uses only thinking when the preceding tool failed", () => {
+    const activities = [{ ...read, status: "failed" as const }, thinking];
+    expect(liveWorkSummary(activities, "Thinking")).toBe("Thinking");
+    expect(workSummaryIcons(activities, true)).toEqual([{ activityIndex: 1, active: true }]);
+  });
+});
+
+describe("work summary icons", () => {
+  it("animates the shared icon when a later call of the same visual category is active", () => {
+    const activities: WorkActivity[] = [
+      { kind: "tool", toolName: "replace_range", status: "executed" },
+      { kind: "tool", toolName: "read_file", status: "executed" },
+      { kind: "tool", toolName: "create_file", status: "approved" }
+    ];
+    expect(workSummaryIcons(activities, true)).toEqual([
+      { activityIndex: 0, active: true },
+      { activityIndex: 1, active: false }
+    ]);
+    expect(workSummaryIcons(activities, false)).toEqual([
+      { activityIndex: 0, active: false },
+      { activityIndex: 1, active: false }
+    ]);
+  });
+
+  it("shows the running tool's icon even when the summary's text buffer is full", () => {
+    const activities: WorkActivity[] = [
+      { kind: "tool", toolName: "read_file", status: "executed" },
+      { kind: "tool", toolName: "list_dir", resource: "src", status: "executed" },
+      { kind: "tool", toolName: "run_command", status: "executed" },
+      { kind: "tool", toolName: "compact_context", status: "pending" }
+    ];
+    expect(liveWorkSummary(activities)).toBe("Read file, listed directory, ran command");
+    expect(workSummaryIcons(activities, true)).toEqual([
+      { activityIndex: 0, active: false },
+      { activityIndex: 1, active: false },
+      { activityIndex: 2, active: false },
+      { activityIndex: 3, active: true }
+    ]);
+  });
+
+  it("stops animation when calls finish and omits failed or rejected icons", () => {
+    const activities: WorkActivity[] = [
+      { kind: "tool", toolName: "read_file", status: "executed" },
+      { kind: "tool", toolName: "list_dir", status: "failed" },
+      { kind: "tool", toolName: "run_command", status: "rejected" }
+    ];
+    expect(workSummaryIcons(activities, true)).toEqual([{ activityIndex: 0, active: false }]);
+  });
+
+  it("keeps a background process animated while later tools have finished", () => {
+    expect(workSummaryIcons([
+      { kind: "tool", toolName: "run_process", status: "executed", active: true },
+      { kind: "tool", toolName: "read_file", status: "executed", active: false }
+    ], true)).toEqual([
+      { activityIndex: 0, active: true },
+      { activityIndex: 1, active: false }
+    ]);
   });
 });

@@ -42,6 +42,8 @@ export interface ChatCompletionRequest {
   tools?: OpenAiTool[];
   tool_choice?: "auto" | "required" | "none";
   parallel_tool_calls?: boolean;
+  /** llama.cpp extension: report prompt processing before generation starts. */
+  return_progress?: boolean;
   /** Called once llama.cpp has accepted this generation request. Not sent over the wire. */
   onResponseAccepted?: () => void;
 }
@@ -83,6 +85,7 @@ export type LlmStreamChunk =
   | { kind: "thought"; text: string }
   | { kind: "finish"; reason?: string }
   | { kind: "usage"; promptTokens: number; completionTokens?: number }
+  | { kind: "promptProgress"; processedTokens: number; totalTokens: number }
   | { kind: "toolCallProgress"; name: string; path?: string; content?: string; contentBytes: number; contentLines: number; startLine?: number; endLine?: number; line?: number; id?: string }
   | { kind: "toolCall"; name: string; argsJson: string; id?: string };
 
@@ -108,6 +111,7 @@ interface StreamChoice {
 interface StreamPayload {
   choices?: StreamChoice[];
   usage?: { prompt_tokens?: unknown; completion_tokens?: unknown };
+  prompt_progress?: { processed?: unknown; total?: unknown };
 }
 
 /**
@@ -144,7 +148,7 @@ async function* streamChatRequest(
     body: JSON.stringify({
       model: req.model ?? "local",
       stream: true,
-      temperature: req.temperature ?? 0.3,
+      temperature: req.temperature ?? 0.8,
       // llama.cpp accepts its native sampling params alongside the OpenAI
       // fields; undefined values are dropped so the server defaults apply.
       top_k: req.top_k,
@@ -157,6 +161,7 @@ async function* streamChatRequest(
       tools: req.tools,
       tool_choice: req.tools?.length ? (req.tool_choice ?? "auto") : undefined,
       parallel_tool_calls: req.tools?.length ? (req.parallel_tool_calls ?? false) : undefined,
+      return_progress: req.return_progress,
       stream_options: { include_usage: true }
     }),
     signal
@@ -213,6 +218,7 @@ async function* streamChatRequest(
   let finished = false;
   let sawText = false;
   let sawTool = false;
+  let generationStarted = false;
   let lastFinishReason: string | undefined;
   try {
     while (!finished) {
@@ -228,9 +234,19 @@ async function* streamChatRequest(
         if (payload === "[DONE]") { finished = true; break; }
         let obj: StreamPayload;
         try {
-          obj = JSON.parse(payload) as { choices?: StreamChoice[] };
+          obj = JSON.parse(payload) as StreamPayload;
         } catch {
           continue;
+        }
+        // llama.cpp sends these before output, including an initial update
+        // when a queued request starts evaluating its prompt. Older servers
+        // omit them, leaving the caller's generic pending status intact.
+        const total = obj.prompt_progress?.total;
+        const processed = obj.prompt_progress?.processed;
+        if (!generationStarted
+          && typeof total === "number" && Number.isSafeInteger(total) && total > 0
+          && typeof processed === "number" && Number.isSafeInteger(processed) && processed >= 0 && processed <= total) {
+          yield { kind: "promptProgress", processedTokens: processed, totalTokens: total };
         }
         const promptTokens = Number(obj.usage?.prompt_tokens);
         const completionTokens = Number(obj.usage?.completion_tokens);
@@ -244,7 +260,6 @@ async function* streamChatRequest(
         const choice = obj.choices?.[0];
         if (!choice) continue;
         const delta = choice?.delta ?? {};
-        for (const tc of collectToolCalls(delta)) yield tc;
         const thought = delta.reasoning_content
           ?? delta.reasoning
           ?? delta.thought
@@ -253,6 +268,8 @@ async function* streamChatRequest(
         const text = delta.content
           ?? choice?.text
           ?? "";
+        generationStarted ||= !!(thought || text || delta.tool_calls?.length || choice.finish_reason);
+        for (const tc of collectToolCalls(delta)) yield tc;
         if (thought) yield { kind: "thought", text: String(thought) };
         if (text) { sawText = true; yield { kind: "text", text: String(text) }; }
 
@@ -328,6 +345,7 @@ export async function complete(
 export interface ServerMetadata {
   modelAlias: string;
   contextSize: number;
+  supportsVision: boolean;
 }
 
 export interface ServerModel {
@@ -350,6 +368,7 @@ export async function fetchServerMetadata(
   const cached = serverMetadataCache.get(cacheKey);
   if (!options.force && cached && Date.now() - cached.at < SERVER_CTX_TTL_MS) return cached.value;
 
+  serverMetadataCache.delete(cacheKey);
   const url = new URL("/props", endpoint);
   if (options.model) url.searchParams.set("model", options.model);
   const res = await safeFetch(endpoint, url.toString(), {
@@ -357,6 +376,7 @@ export async function fetchServerMetadata(
   });
   if (!res.ok) throw new Error(`llama.cpp /props returned HTTP ${res.status}.`);
   const obj = (await res.json()) as {
+    modalities?: { vision?: unknown };
     model_alias?: unknown;
     model_path?: unknown;
     default_generation_settings?: { n_ctx?: unknown; model?: unknown };
@@ -371,7 +391,7 @@ export async function fetchServerMetadata(
     : modelNameFromPath(obj.model_path);
   if (!modelAlias) throw new Error("llama.cpp /props did not report a model alias or model path.");
 
-  const value = { modelAlias, contextSize: Math.floor(n) };
+  const value = { modelAlias, contextSize: Math.floor(n), supportsVision: obj.modalities?.vision === true };
   serverMetadataCache.set(cacheKey, { value, at: Date.now() });
   return value;
 }

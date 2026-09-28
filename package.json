@@ -1,11 +1,11 @@
 {
-  "name": "local-llm-harness",
-  "displayName": "Local LLM Harness",
+  "name": "locality",
+  "displayName": "Locality",
   "description": "Drive a LAN-hosted llama.cpp LLM from VS Code with hard network isolation, workspace-scoped tools, and an approval-gated terminal.",
-  "version": "1.7.0",
+  "version": "2.0.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/liandir/local-llm-harness.git"
+    "url": "https://github.com/liandir/locality.git"
   },
   "publisher": "local",
   "engines": {
@@ -26,21 +26,21 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "localLlmHarness",
-          "title": "Local LLM Harness",
+          "id": "locality",
+          "title": "Locality",
           "icon": "media/activity-bar.svg"
         }
       ]
     },
     "views": {
-      "localLlmHarness": [
+      "locality": [
         {
-          "id": "localLlmHarness.side",
-          "name": "Harness",
+          "id": "locality.side",
+          "name": "Locality",
           "type": "webview"
         },
         {
-          "id": "localLlmHarness.chat",
+          "id": "locality.chat",
           "name": "Chat",
           "type": "webview"
         }
@@ -48,31 +48,31 @@
     },
     "commands": [
       {
-        "command": "localLlmHarness.newChat",
-        "title": "Local LLM: New Chat"
+        "command": "locality.newChat",
+        "title": "Locality: New Chat"
       },
       {
-        "command": "localLlmHarness.openSettings",
-        "title": "Local LLM: Open Settings"
+        "command": "locality.openSettings",
+        "title": "Locality: Open Settings"
       },
       {
-        "command": "localLlmHarness.togglePlanMode",
-        "title": "Local LLM: Toggle Plan Mode"
+        "command": "locality.togglePlanMode",
+        "title": "Locality: Toggle Plan Mode"
       },
       {
-        "command": "localLlmHarness.compactNow",
-        "title": "Local LLM: Compact Context"
+        "command": "locality.compactNow",
+        "title": "Locality: Compact Context"
       },
       {
-        "command": "localLlmHarness.generateCommitMessage",
-        "title": "Generate commit message with local-llm",
+        "command": "locality.generateCommitMessage",
+        "title": "Generate commit message with Locality",
         "icon": {
           "light": "media/activity-bar-command-light.svg",
           "dark": "media/activity-bar-command-dark.svg"
         }
       },
       {
-        "command": "localLlmHarness.generateCommitMessageNoStaged",
+        "command": "locality.generateCommitMessageNoStaged",
         "title": "Please stage changes before generating a commit message.",
         "icon": {
           "light": "media/activity-bar-command-light.svg",
@@ -80,7 +80,7 @@
         }
       },
       {
-        "command": "localLlmHarness.generateCommitMessageNoStagedWiggle",
+        "command": "locality.generateCommitMessageNoStagedWiggle",
         "title": "Please stage changes before generating a commit message.",
         "icon": {
           "light": "media/activity-bar-command-wiggle-light.svg",
@@ -88,74 +88,74 @@
         }
       },
       {
-        "command": "localLlmHarness.generateCommitMessageBusy",
-        "title": "Generating commit message with local-llm...",
+        "command": "locality.generateCommitMessageBusy",
+        "title": "Generating commit message with Locality...",
         "icon": {
           "light": "media/activity-bar-command-bounce-light.svg",
           "dark": "media/activity-bar-command-bounce-dark.svg"
         }
       },
       {
-        "command": "localLlmHarness.openChat",
-        "title": "Local LLM: Open Chat"
+        "command": "locality.openChat",
+        "title": "Locality: Open Chat"
       },
       {
-        "command": "localLlmHarness.deleteChat",
-        "title": "Local LLM: Delete Current Chat"
+        "command": "locality.deleteChat",
+        "title": "Locality: Delete Current Chat"
       }
     ],
     "menus": {
       "commandPalette": [
         {
-          "command": "localLlmHarness.generateCommitMessageNoStaged",
+          "command": "locality.generateCommitMessageNoStaged",
           "when": "false"
         },
         {
-          "command": "localLlmHarness.generateCommitMessageNoStagedWiggle",
+          "command": "locality.generateCommitMessageNoStagedWiggle",
           "when": "false"
         },
         {
-          "command": "localLlmHarness.generateCommitMessageBusy",
+          "command": "locality.generateCommitMessageBusy",
           "when": "false"
         }
       ],
       "scm/title": [
         {
-          "command": "localLlmHarness.generateCommitMessageBusy",
-          "when": "localLlmHarness.commitMessageBusy",
+          "command": "locality.generateCommitMessageBusy",
+          "when": "scmProvider == git && locality.commitMessageBusy",
           "group": "navigation@1"
         },
         {
-          "command": "localLlmHarness.generateCommitMessageNoStagedWiggle",
-          "when": "!localLlmHarness.commitMessageBusy && localLlmHarness.commitMessageWiggle",
+          "command": "locality.generateCommitMessageNoStagedWiggle",
+          "when": "scmProvider == git && !locality.commitMessageBusy && locality.commitMessageWiggle",
           "group": "navigation@1"
         },
         {
-          "command": "localLlmHarness.generateCommitMessage",
-          "when": "!localLlmHarness.commitMessageBusy && !localLlmHarness.commitMessageWiggle && localLlmHarness.hasStagedChanges",
+          "command": "locality.generateCommitMessage",
+          "when": "scmProvider == git && !locality.commitMessageBusy && !locality.commitMessageWiggle && locality.hasStagedChanges",
           "group": "navigation@1"
         },
         {
-          "command": "localLlmHarness.generateCommitMessageNoStaged",
-          "when": "!localLlmHarness.commitMessageBusy && !localLlmHarness.commitMessageWiggle && !localLlmHarness.hasStagedChanges",
+          "command": "locality.generateCommitMessageNoStaged",
+          "when": "scmProvider == git && !locality.commitMessageBusy && !locality.commitMessageWiggle && !locality.hasStagedChanges",
           "group": "navigation@1"
         }
       ]
     },
     "configuration": {
-      "title": "Local LLM Harness",
+      "title": "Locality",
       "properties": {
-        "localLlmHarness.endpoint": {
+        "locality.endpoint": {
           "type": "string",
           "default": "http://localhost:8080/v1",
           "description": "URL of the llama.cpp server. Use localhost or a private IP literal such as http://127.0.0.1:8080/v1 or http://192.168.1.50:8080/v1; DNS hostnames are refused."
         },
-        "localLlmHarness.model": {
+        "locality.model": {
           "type": "string",
           "default": "local",
           "description": "Model id sent to llama.cpp. The Settings view populates this from the server's /v1/models endpoint."
         },
-        "localLlmHarness.toolCallingMode": {
+        "locality.toolCallingMode": {
           "type": "string",
           "enum": [
             "native",
@@ -174,33 +174,33 @@
           "default": "compat-gemma4",
           "description": "Tool-call transport and compatibility profile. Native server only requires a tool-aware server template; family profiles add narrowly scoped recovery and, where reliable, a legacy fallback."
         },
-        "localLlmHarness.temperature": {
+        "locality.temperature": {
           "type": "number",
-          "default": 0.3,
+          "default": 0.8,
           "minimum": 0,
           "maximum": 2,
-          "description": "Sampling temperature for chat requests. Lower is more deterministic, higher more varied. Agentic tool use needs exact line numbers and arguments, so the default is deliberately low."
+          "description": "Sampling temperature for chat requests. Lower is more deterministic, higher more varied."
         },
-        "localLlmHarness.topK": {
+        "locality.topK": {
           "type": "number",
           "default": 40,
           "minimum": 0,
           "description": "Top-k sampling: keep only the K most likely tokens at each step (0 disables)."
         },
-        "localLlmHarness.topP": {
+        "locality.topP": {
           "type": "number",
           "default": 0.95,
           "minimum": 0,
           "maximum": 1,
           "description": "Top-p (nucleus) sampling: keep the smallest token set whose cumulative probability reaches p (1 disables)."
         },
-        "localLlmHarness.reasoningBudget": {
+        "locality.reasoningBudget": {
           "type": "number",
-          "default": 16384,
+          "default": -1,
           "minimum": -1,
           "description": "Per-request llama.cpp reasoning budget: -1 is unlimited, 0 ends reasoning immediately, and a positive number sets the token threshold."
         },
-        "localLlmHarness.reasoningEfforts": {
+        "locality.reasoningEfforts": {
           "type": "object",
           "default": {
             "Low": "low",
@@ -212,176 +212,82 @@
           },
           "description": "Additional reasoning-effort choices shown in chat. Each key is the display label and its value is sent as llama.cpp reasoning_effort. None and Default are built in."
         },
-        "localLlmHarness.titlePrompt": {
+        "locality.titlePrompt": {
           "type": "string",
           "default": "Summarize the user message in 2-6 words. Output ONLY the summary.",
           "description": "Instructions for generating a new chat's title. The first user message is appended automatically."
         },
-        "localLlmHarness.commitMessagePrompt": {
+        "locality.commitMessagePrompt": {
           "type": "string",
           "default": "Write a concise Git commit message. Use an imperative subject line and add a short body only when it materially improves clarity.",
           "description": "Instructions for commit-message generation. The staged diff is appended automatically; use this to require formats such as Conventional Commits."
         },
-        "localLlmHarness.showThinking": {
+        "locality.showThinking": {
           "type": "boolean",
-          "default": true,
+          "default": false,
           "description": "Show completed model thoughts in chat and tool history. Current thinking remains visible while active."
         },
-        "localLlmHarness.memoryEnabled": {
+        "locality.memoryEnabled": {
           "type": "boolean",
           "default": false,
           "scope": "window",
-          "description": "Load relevant summaries from other chats in this workspace into context. Summary generation and editing remain available when off. Enable in workspace settings; user-level values are ignored."
+          "description": "Enable search_memories and recall_memory for active summaries from other chats in this workspace. Summary generation and editing remain available when off. Enable in workspace settings; user-level values are ignored."
         },
-        "localLlmHarness.memoryMaxCount": {
+        "locality.memoryMaxCount": {
           "type": "integer",
           "default": 10,
           "minimum": 1,
           "maximum": 100,
           "scope": "window",
-          "description": "Maximum number of workspace memories loaded into a chat. Token budgets may reduce this number. Existing chats retain their saved selection."
+          "description": "Maximum number of matches returned by each search_memories call. The agent chooses which results to recall."
         },
-        "localLlmHarness.autoCompact": {
+        "locality.autoCompact": {
           "type": "boolean",
           "default": true,
           "description": "Automatically compact context when usage reaches the configured threshold."
         },
-        "localLlmHarness.autoCompactThresholdPercent": {
+        "locality.autoCompactThresholdPercent": {
           "type": "number",
           "default": 80,
           "minimum": 50,
           "maximum": 95,
           "description": "Context usage percentage at which auto-compaction runs."
         },
-        "localLlmHarness.tailBudgetPercent": {
+        "locality.tailBudgetPercent": {
           "type": "number",
           "default": 30,
           "minimum": 5,
           "maximum": 60,
           "description": "Share of the context window (percent) reserved for keeping the most recent messages verbatim through compaction."
         },
-        "localLlmHarness.maxMessageTokensPercent": {
+        "locality.maxMessageTokensPercent": {
           "type": "number",
           "default": 25,
           "minimum": 5,
           "maximum": 50,
           "description": "Per-message size cap (percent of the context window). A single message larger than this (e.g. a big file read or command output) is middle-truncated with an elision marker so it can never overflow the context on its own."
         },
-        "localLlmHarness.templateOverheadTokensPerMessage": {
+        "locality.templateOverheadTokensPerMessage": {
           "type": "number",
           "default": 4,
           "minimum": 0,
           "maximum": 64,
           "description": "Approximate chat-template/special tokens llama.cpp adds per message. Added to the exact /tokenize counts so the context guard does not under-count the rendered prompt."
         },
-        "localLlmHarness.autoapproveReads": {
+        "locality.autoapproveReads": {
           "type": "boolean",
           "default": true,
           "description": "Auto-approve read_file / list_dir / glob tool calls."
         },
-        "localLlmHarness.autoapproveWrites": {
+        "locality.autoapproveWrites": {
           "type": "boolean",
           "default": false,
           "description": "Auto-approve file edit tool calls (workspace only)."
         },
-        "localLlmHarness.autoapproveCommands": {
+        "locality.autoapproveCommands": {
           "type": "boolean",
           "default": false,
-          "description": "Auto-approve command tool calls that match the safe-command list. Commands outside the list always require explicit approval. Off by default."
-        },
-        "localLlmHarness.safeCommands": {
-          "type": "array",
-          "default": [
-            {
-              "match": "pwd",
-              "description": "Print the current workspace directory."
-            },
-            {
-              "match": "ls(?: -[laF]{1,3})?(?: (?:\\.|(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*)/?)?",
-              "description": "List the workspace root or a simple relative path, optionally with -l, -a, or -F."
-            },
-            {
-              "match": "cat (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*",
-              "description": "Print a file at a simple relative workspace path."
-            },
-            {
-              "match": "grep(?: -[rRnil]{1,4}){0,4} (?:[A-Za-z0-9_./:@%+=,-]+|\"[A-Za-z0-9_./:@%+=, -]+\"|'[A-Za-z0-9_./:@%+=, -]+') (?:\\.|(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*)",
-              "description": "Search for a simple text pattern in a simple relative workspace path."
-            },
-            {
-              "match": "mkdir(?: -p)? (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*(?: (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*){0,15}",
-              "description": "Create up to sixteen directories at simple relative workspace paths."
-            },
-            {
-              "match": "mv (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))* (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*",
-              "description": "Move or rename a file or directory between simple relative workspace paths."
-            },
-            {
-              "match": "cp (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))* (?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:/(?:\\.[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*))*",
-              "description": "Copy a file or directory between simple relative workspace paths."
-            },
-            {
-              "match": "rm [A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*(?: [A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*){0,15}",
-              "description": "Remove up to sixteen simple, non-hidden relative workspace paths without flags."
-            },
-            {
-              "match": "find \\. -maxdepth [1-3] -type f",
-              "description": "List workspace files with a shallow max depth."
-            },
-            {
-              "match": "find \\. -maxdepth [1-3] -name (?:\"[A-Za-z0-9_.*?-]+\"|'[A-Za-z0-9_.*?-]+')(?: -o -name (?:\"[A-Za-z0-9_.*?-]+\"|'[A-Za-z0-9_.*?-]+')){0,5}",
-              "description": "Find workspace entries by up to six quoted name patterns at a shallow max depth."
-            },
-            {
-              "match": "git status(?: --(?:short|branch|porcelain(?:=v[12])?|untracked-files(?:=(?:no|normal|all))?))*",
-              "description": "Inspect repository status."
-            },
-            {
-              "match": "git (?:diff|diff-files|diff-index|diff-tree)(?: --(?:cached|staged|stat|numstat|shortstat|name-only|name-status|check|summary|compact-summary|no-color|full-index|root|ignore-space-at-eol|ignore-space-change|ignore-all-space|ignore-blank-lines)){0,8}(?: (?:[A-Za-z0-9][A-Za-z0-9._/@:+,~^-]*|--)){0,8}",
-              "description": "Inspect Git differences without external diff tools or output files."
-            },
-            {
-              "match": "git (?:log|show|shortlog|reflog)(?: (?:-[0-9]+|--(?:oneline|stat|shortstat|name-only|name-status|graph|decorate|all|branches|tags|remotes|no-merges|merges|reverse|no-color)|[A-Za-z0-9][A-Za-z0-9._/@:+,~^-]*|--)){0,16}",
-              "description": "Inspect Git history, commits, and reflogs."
-            },
-            {
-              "match": "git (?:(?:branch|tag)(?: --list)?(?: [A-Za-z0-9*?][A-Za-z0-9._/@*?+~^-]*)?|show-ref(?: --(?:heads|tags|dereference|hash))*|for-each-ref(?: [A-Za-z0-9][A-Za-z0-9._/-]*)?|remote -v)",
-              "description": "List local Git branches, tags, refs, and configured remotes."
-            },
-            {
-              "match": "git (?:rev-parse|rev-list|name-rev|describe)(?: (?:--[A-Za-z0-9][A-Za-z0-9=-]*|[A-Za-z0-9][A-Za-z0-9._/@:+,~^-]*)){1,16}",
-              "description": "Resolve and describe Git revisions without modifying refs."
-            },
-            {
-              "match": "git (?:(?:ls-files|ls-tree|blame)(?: (?:-[A-Za-z]+|--[A-Za-z0-9][A-Za-z0-9=-]*|[A-Za-z0-9][A-Za-z0-9._/@:+,~^-]*|--)){0,16}|cat-file (?:-t|-s|-p) [A-Za-z0-9][A-Za-z0-9._/@:+,~^-]*|grep(?: -[nilwIEF]+){0,4} (?:[A-Za-z0-9_./:@%+=,*?-]+|\"[A-Za-z0-9_./:@%+=,*? -]+\"|'[A-Za-z0-9_./:@%+=,*? -]+')(?: --)?(?: [A-Za-z0-9][A-Za-z0-9._/@:+,~^-]*)?)",
-              "description": "Inspect tracked files, trees, objects, blame, and repository text."
-            },
-            {
-              "match": "git (?:(?:stash (?:list|show(?: -p)?(?: stash@[{][0-9]+[}])?))|worktree list|submodule status)",
-              "description": "Inspect stashes, worktrees, and submodule status."
-            },
-            {
-              "match": "git merge-base(?: --(?:all|octopus|is-ancestor|fork-point))? [A-Za-z0-9][A-Za-z0-9._/@:+,~^-]* [A-Za-z0-9][A-Za-z0-9._/@:+,~^-]*(?: [A-Za-z0-9][A-Za-z0-9._/@:+,~^-]*){0,8}",
-              "description": "Inspect merge-base relationships between revisions."
-            }
-          ],
-          "description": "Commands eligible for auto-approval. Each entry is a regex matched against the full command string; unmatched commands require manual approval.",
-          "items": {
-            "type": "object",
-            "required": [
-              "match"
-            ],
-            "properties": {
-              "match": {
-                "type": "string",
-                "description": "Regex (full-string match) for the command."
-              },
-              "description": {
-                "type": "string",
-                "description": "Human-readable purpose."
-              }
-            }
-          }
+          "description": "Auto-approve all command tool calls in Act mode. Review mode always requires explicit approval. Off by default."
         }
       }
     }
@@ -410,12 +316,14 @@
   },
   "dependencies": {
     "@vscode/markdown-it-katex": "^1.1.2",
+    "htmlparser2": "^10.1.0",
     "katex": "^0.16.10",
     "markdown-it": "^14.1.0",
-    "shiki": "^4.1.0"
+    "shiki": "^4.1.0",
+    "undici": "^6.29.0"
   },
   "overrides": {
-    "undici": "^6.21.0"
+    "undici": "$undici"
   },
   "allowScripts": {
     "esbuild@0.28.1": true,

@@ -19,7 +19,7 @@ import {
 let ws: string;
 
 beforeEach(async () => {
-  ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-fs-"));
+  ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-fs-"));
 });
 
 afterEach(async () => {
@@ -610,7 +610,7 @@ async function writeFiles(count: number): Promise<void> {
 
 describe("insertText workspace boundary", () => {
   it("does not create an outside file through a dangling symlink", async () => {
-    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "llh-outside-"));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "locality-outside-"));
     const target = path.join(outside, "missing.txt");
     try {
       await fs.symlink(target, path.join(ws, "link.txt"));

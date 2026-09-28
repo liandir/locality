@@ -1,11 +1,13 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { validMemory, validSnapshot, type ChatMemory, type MemorySnapshot } from "./memory.js";
+import { validMemory, validMemoryCreation, validSnapshot, type ChatMemory, type MemoryCreation, type MemorySnapshot } from "./memory.js";
 import { MAX_MEMORY_COUNT } from "./memoryLimits.js";
 import { randomUUID } from "node:crypto";
 import { normalizeToolCallingProfile, type ToolCallingProfile } from "../llm/toolCallingProfile.js";
+import type { ChatToolResultDisplay } from "../ui/messaging.js";
 import type { FileChangeSummary } from "./fileChanges.js";
+import { attachmentFileType, isImageAttachment, MAX_TEXT_ATTACHMENT_BYTES } from "./attachments.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "./attachmentLimits.js";
 import { normalizeChatMode, type ChatMode } from "./mode.js";
 import {
@@ -14,7 +16,7 @@ import {
   type ReasoningEffort
 } from "./reasoningEffort.js";
 
-export const CHATS_DIR = ".local-llm-chats";
+export const CHATS_DIR = ".locality";
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 export const VISION_TOKEN_RESERVE = 4096;
 
@@ -24,9 +26,12 @@ export type StoredToolStatus = "executed" | "failed" | "rejected";
 export interface ChatAttachment {
   id: string;
   fileName: string;
-  mimeType: "image/jpeg" | "image/png" | "image/webp";
+  mimeType: "image/jpeg" | "image/png" | "image/webp" | "text/plain";
   byteLength: number;
-  extension: "jpg" | "png" | "webp";
+  /** Safe asset suffix; generic pasted text is stored as txt but has no fileType. */
+  extension: string;
+  /** Original text-file suffix, absent for generic pasted text or extensionless files. */
+  fileType?: string;
 }
 
 export interface ChatMessage {
@@ -45,10 +50,16 @@ export interface ChatMessage {
     status?: StoredToolStatus;
     /** Retains the Created/Edited distinction for write_file across reloads. */
     createsNewFile?: boolean;
-  };
+    /** Display command for process checks and stops, retained across reloads. */
+    processCommand?: string;
+    processOutput?: string;
+    processExitCode?: number;
+    /** Exact change made by this call, independent of later edits to the same file. */
+    fileChange?: FileChangeSummary;
+  } & ChatToolResultDisplay;
   /** File changes made during this assistant turn. */
   fileChanges?: FileChangeSummary[];
-  /** Chat-owned image assets supplied with this user message. */
+  /** Chat-owned image or text assets supplied by the user or a view_image tool result. */
   attachments?: ChatAttachment[];
   tokens?: number;
   ts: number;
@@ -68,13 +79,12 @@ export interface ChatRecord {
   reasoningEffort: ReasoningEffort;
   /** Complete saved transcript; compaction never rewrites these messages. */
   messages: ChatMessage[];
-  /** Model-only history after compaction. Absent in uncompacted/legacy records. */
+  /** Model-only history after compaction. Absent in uncompacted records. */
   contextMessages?: ChatMessage[];
   memory?: ChatMemory;
-  /** Undefined until the first request selects memories; an empty array is a completed selection. */
-  memorySelection?: MemorySnapshot[];
-  /** Sources actually included in the most recent request, for the disclosure. */
-  memoryUsage?: string[];
+  memoryCreations?: MemoryCreation[];
+  /** Memories explicitly recalled by tools, for the UI disclosure only. */
+  recalledMemories?: MemorySnapshot[];
   /** Token count of the model context, not the full transcript. */
   totalTokens: number;
   /** Model whose tokenizer produced the cached per-message token counts. */
@@ -84,8 +94,6 @@ export interface ChatRecord {
 const recordWrites = new Map<string, Promise<unknown>>();
 
 export class ChatStorage {
-  private migrated = false;
-
   constructor(
     private workspaceRoot: string,
     private storageRoot = path.join(os.homedir(), CHATS_DIR)
@@ -106,44 +114,54 @@ export class ChatStorage {
     return path.join(this.attachmentsRoot(), chatId, `${attachment.id}.${attachment.extension}`);
   }
 
-  async importAttachment(chatId: string, sourcePath: string): Promise<ChatAttachment> {
+  async importAttachment(chatId: string, sourcePath: string, options: { allowImages?: boolean; imageOnly?: boolean } = {}): Promise<ChatAttachment> {
     if (!isValidChatId(chatId)) throw new Error("Invalid chat id.");
-    const sourceExtension = path.extname(sourcePath).slice(1).toLowerCase();
-    if (!(["jpg", "jpeg", "png", "webp"] as string[]).includes(sourceExtension)) {
-      throw new Error("Choose a JPEG, PNG, or WebP image file.");
-    }
     const stat = await fs.stat(sourcePath);
-    if (!stat.isFile()) throw new Error("Choose an image file.");
-    if (stat.size === 0) throw new Error("The selected image is empty.");
-    if (stat.size > MAX_ATTACHMENT_BYTES) throw new Error("Images must be 10 MiB or smaller.");
+    if (!stat.isFile()) throw new Error("Choose an image or text file.");
+    if (stat.size > MAX_ATTACHMENT_BYTES) throw new Error("Attachments must be 10 MiB or smaller.");
     const bytes = await fs.readFile(sourcePath);
-    return this.importAttachmentBytes(chatId, path.basename(sourcePath), bytes);
+    return this.importAttachmentBytes(chatId, path.basename(sourcePath), bytes, options);
   }
 
-  async importAttachmentBytes(chatId: string, fileName: string, bytes: Uint8Array): Promise<ChatAttachment> {
+  async importAttachmentBytes(chatId: string, fileName: string, bytes: Uint8Array, options: { allowImages?: boolean; imageOnly?: boolean } = {}): Promise<ChatAttachment> {
     if (!isValidChatId(chatId)) throw new Error("Invalid chat id.");
-    if (!fileName || fileName !== path.basename(fileName)) throw new Error("Invalid image file name.");
-    if (bytes.byteLength === 0) throw new Error("The selected image is empty.");
-    if (bytes.byteLength > MAX_ATTACHMENT_BYTES) throw new Error("Images must be 10 MiB or smaller.");
-    const kind = detectImage(bytes);
-    if (!kind) throw new Error("Choose a valid JPEG, PNG, or WebP image.");
-    const suppliedExtension = path.extname(fileName).slice(1).toLowerCase();
+    if (!validAttachmentName(fileName)) throw new Error("Invalid attachment file name.");
+    if (bytes.byteLength > MAX_ATTACHMENT_BYTES) throw new Error("Attachments must be 10 MiB or smaller.");
+    const suppliedExtension = attachmentFileType(fileName);
     const canonicalExtension = suppliedExtension === "jpeg" ? "jpg" : suppliedExtension;
-    if (canonicalExtension !== kind.extension) throw new Error("The image contents do not match its file extension.");
-    const attachment: ChatAttachment = {
-      id: randomUUID(),
-      fileName,
-      mimeType: kind.mimeType,
-      byteLength: bytes.byteLength,
-      extension: kind.extension
-    };
+    const image = detectImage(bytes);
+    if (image && options.allowImages === false) throw new Error("Image input is unavailable: the server has not reported vision support. Load a vision model with its matching --mmproj.");
+    if (!image && options.imageOnly) throw new Error("Choose a valid JPEG, PNG, or WebP image.");
+    let kind: Pick<ChatAttachment, "mimeType" | "extension" | "fileType">;
+    if (image) {
+      if (canonicalExtension !== undefined && canonicalExtension !== image.extension) throw new Error("The image contents do not match its file extension.");
+      kind = image;
+    } else if (["jpg", "png", "webp"].includes(canonicalExtension ?? "")) {
+      throw new Error("Choose a valid JPEG, PNG, or WebP image.");
+    } else {
+      if (/^(gif|bmp|tiff?|ico|avif|heic|pdf|docx?|xlsx?|pptx?|zip|gz|7z|rar|exe|dll|so|woff2?|ttf|mp[34]|mov|wav)$/i.test(suppliedExtension ?? "")) {
+        throw new Error("Choose a text/code file or a JPEG, PNG, or WebP image.");
+      }
+      if (bytes.byteLength > MAX_TEXT_ATTACHMENT_BYTES) throw new Error("Text files must be 1 MiB or smaller.");
+      decodeAttachmentText(bytes);
+      kind = { mimeType: "text/plain", extension: suppliedExtension ?? "txt", fileType: suppliedExtension };
+    }
+    const attachment: ChatAttachment = { id: randomUUID(), fileName, byteLength: bytes.byteLength, ...kind };
     const dir = path.join(this.attachmentsRoot(), chatId);
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(this.attachmentPath(chatId, attachment), bytes, { flag: "wx" });
     return attachment;
   }
 
+  async attachmentText(chatId: string, attachment: ChatAttachment): Promise<string> {
+    if (attachment.mimeType !== "text/plain") throw new Error("This attachment is not text.");
+    const bytes = await fs.readFile(this.attachmentPath(chatId, attachment));
+    if (bytes.byteLength > MAX_TEXT_ATTACHMENT_BYTES) throw new Error("Text files must be 1 MiB or smaller.");
+    return decodeAttachmentText(bytes);
+  }
+
   async attachmentDataUrl(chatId: string, attachment: ChatAttachment): Promise<string> {
+    if (!isImageAttachment(attachment)) throw new Error("This attachment is not an image.");
     const bytes = await fs.readFile(this.attachmentPath(chatId, attachment));
     const kind = detectImage(bytes);
     if (bytes.byteLength > MAX_ATTACHMENT_BYTES || !kind
@@ -173,7 +191,6 @@ export class ChatStorage {
 
   async ensureDir(): Promise<void> {
     await fs.mkdir(this.dir(), { recursive: true });
-    await this.migrateWorkspaceChats();
   }
 
   async list(): Promise<{ id: string; title: string; updatedAt: number }[]> {
@@ -236,21 +253,32 @@ export class ChatStorage {
       const existing = await this.load(rec.id);
       // Memory maintenance is independent of the live session's transcript.
       // A session save must never overwrite a newer manual/background summary.
-      if (existing) rec.memory = existing.memory;
+      if (existing) {
+        rec.memory = existing.memory;
+        rec.memoryCreations = existing.memoryCreations?.filter(item =>
+          rec.messages.some(message => message.role === "assistant" && message.ts === item.messageTs));
+      }
       rec.workspaceRoot = this.workspaceRoot;
       rec.updatedAt = Date.now();
       await this.writeRecord(rec);
     });
   }
 
-  async updateMemory(id: string, update: (rec: ChatRecord) => ChatMemory | undefined): Promise<boolean> {
+  async updateMemory(id: string, update: (rec: ChatRecord) => ChatMemory | undefined, messageTs?: number): Promise<boolean> {
     if (!isValidChatId(id)) return false;
     return this.serialize(id, async () => {
       const rec = await this.load(id);
       if (!rec) return false;
       const memory = update(rec);
       if (!memory) return false;
+      const operation = rec.memory?.text.trim() ? "update" : "create";
       rec.memory = memory;
+      if (messageTs !== undefined && rec.messages.some(message => message.role === "assistant" && message.ts === messageTs)) {
+        const creation: MemoryCreation = memory.error
+          ? { messageTs, operation, status: "failed", error: memory.error }
+          : { messageTs, operation, status: "created", text: memory.text, generatedAt: memory.generatedAt };
+        rec.memoryCreations = [...(rec.memoryCreations ?? []).filter(item => item.messageTs !== messageTs), creation];
+      }
       await this.writeRecord(rec);
       return true;
     });
@@ -375,18 +403,6 @@ export class ChatStorage {
   }
 
   private withWorkspace(rec: ChatRecord, id: string): ChatRecord {
-    const legacy = rec as ChatRecord & {
-      modelFamily?: unknown;
-      toolCallingMode?: unknown;
-      thinkingMode?: unknown;
-      reasoningEffort?: unknown;
-      mode?: unknown;
-      planMode?: unknown;
-    };
-    const current = { ...legacy };
-    delete (current as { modelFamily?: unknown }).modelFamily;
-    delete (current as { thinkingMode?: unknown }).thinkingMode;
-    delete (current as { planMode?: unknown }).planMode;
     const normalizeMessages = (messages: ChatMessage[]): ChatMessage[] => messages.map(message => {
       const attachments = Array.isArray(message.attachments)
         ? message.attachments.filter(isValidAttachment).slice(0, MAX_ATTACHMENTS_PER_MESSAGE)
@@ -395,47 +411,18 @@ export class ChatStorage {
     });
     const messages = normalizeMessages(Array.isArray(rec.messages) ? rec.messages : []);
     return {
-      ...current,
+      ...rec,
       id,
       workspaceRoot: normalizeWorkspaceRoot(rec.workspaceRoot ?? ""),
-      toolCallingMode: normalizeToolCallingProfile(legacy.toolCallingMode, legacy.modelFamily),
-      mode: normalizeChatMode(legacy.mode, legacy.planMode),
-      reasoningEffort: normalizeReasoningEffort(legacy.reasoningEffort ?? legacy.thinkingMode),
+      toolCallingMode: normalizeToolCallingProfile(rec.toolCallingMode),
+      mode: normalizeChatMode(rec.mode),
+      reasoningEffort: normalizeReasoningEffort(rec.reasoningEffort),
       messages,
       memory: validMemory(rec.memory) ? rec.memory : undefined,
-      memoryUsage: Array.isArray(rec.memoryUsage) ? rec.memoryUsage.filter(isValidChatId).slice(0, MAX_MEMORY_COUNT) : undefined,
-      memorySelection: Array.isArray(rec.memorySelection) ? rec.memorySelection.filter(validSnapshot).slice(0, MAX_MEMORY_COUNT) : undefined,
+      memoryCreations: Array.isArray(rec.memoryCreations) ? rec.memoryCreations.filter(validMemoryCreation) : undefined,
+      recalledMemories: Array.isArray(rec.recalledMemories) ? rec.recalledMemories.filter(validSnapshot).slice(-MAX_MEMORY_COUNT) : undefined,
       contextMessages: Array.isArray(rec.contextMessages) ? normalizeMessages(rec.contextMessages) : undefined
     } as ChatRecord;
-  }
-
-  private async migrateWorkspaceChats(): Promise<void> {
-    if (this.migrated) return;
-    this.migrated = true;
-    const legacyDir = path.join(this.workspaceRoot, CHATS_DIR);
-    if (samePath(legacyDir, this.dir())) return;
-
-    let entries: string[];
-    try { entries = await fs.readdir(legacyDir); } catch { return; }
-    for (const e of entries) {
-      if (!e.endsWith(".json")) continue;
-      const id = e.slice(0, -5);
-      if (!isValidChatId(id)) continue;
-      const src = path.join(legacyDir, e);
-      const dest = path.join(this.dir(), e);
-      try {
-        const raw = await fs.readFile(src, "utf-8");
-        const rec = this.withWorkspace(JSON.parse(raw) as ChatRecord, id);
-        const migrated: ChatRecord = {
-          ...rec,
-          id,
-          workspaceRoot: this.workspaceRoot
-        };
-        await fs.writeFile(dest, JSON.stringify(migrated, null, 2), "utf-8");
-        await fs.unlink(src);
-      } catch { /* leave problematic legacy files untouched */ }
-    }
-    try { await fs.rmdir(legacyDir); } catch { /* ignore non-empty legacy dirs */ }
   }
 }
 
@@ -443,22 +430,41 @@ export function isValidChatId(id: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
 }
 
+function validAttachmentName(name: unknown): name is string {
+  return typeof name === "string" && name.length > 0 && name.length <= 255
+    && name !== "." && name !== ".." && !/[\\/]/.test(name) && !Array.from(name).some(char => char.charCodeAt(0) < 32) && name === path.basename(name);
+}
+
 export function isValidAttachment(value: unknown): value is ChatAttachment {
   if (!value || typeof value !== "object") return false;
   const item = value as Partial<ChatAttachment>;
-  return typeof item.id === "string"
-    && isValidChatId(item.id)
-    && typeof item.fileName === "string"
-    && item.fileName.length > 0
-    && item.fileName === path.basename(item.fileName)
-    && (item.mimeType === "image/jpeg" || item.mimeType === "image/png" || item.mimeType === "image/webp")
-    && (item.extension === "jpg" || item.extension === "png" || item.extension === "webp")
+  if (typeof item.id !== "string" || !isValidChatId(item.id) || !validAttachmentName(item.fileName)
+      || !Number.isInteger(item.byteLength) || (item.byteLength ?? -1) < 0) return false;
+  if (item.mimeType === "text/plain") {
+    return (item.byteLength ?? 0) <= MAX_TEXT_ATTACHMENT_BYTES
+      && item.extension === (attachmentFileType(item.fileName) ?? "txt")
+      && item.fileType === attachmentFileType(item.fileName);
+  }
+  return (item.byteLength ?? 0) > 0 && (item.byteLength ?? 0) <= MAX_ATTACHMENT_BYTES
     && ((item.mimeType === "image/jpeg" && item.extension === "jpg")
       || (item.mimeType === "image/png" && item.extension === "png")
-      || (item.mimeType === "image/webp" && item.extension === "webp"))
-    && Number.isInteger(item.byteLength)
-    && (item.byteLength ?? 0) > 0
-    && (item.byteLength ?? 0) <= MAX_ATTACHMENT_BYTES;
+      || (item.mimeType === "image/webp" && item.extension === "webp"));
+}
+
+/** Decode common Unicode text encodings and reject binary/control data. */
+function decodeAttachmentText(bytes: Uint8Array): string {
+  const encoding = bytes[0] === 0xff && bytes[1] === 0xfe ? "utf-16le"
+    : bytes[0] === 0xfe && bytes[1] === 0xff ? "utf-16be" : "utf-8";
+  try {
+    const text = new TextDecoder(encoding, { fatal: true }).decode(bytes);
+    for (const char of text) {
+      const code = char.charCodeAt(0);
+      if (code < 9 || code === 11 || (code > 13 && code < 32)) throw new Error("binary");
+    }
+    return text;
+  } catch {
+    throw new Error("Choose a UTF-8 or UTF-16 text/code file; binary files are not supported.");
+  }
 }
 
 function detectImage(bytes: Uint8Array): Pick<ChatAttachment, "mimeType" | "extension"> | undefined {
@@ -488,10 +494,6 @@ function normalizeWorkspaceRoot(root: string): string {
   if (!root.trim()) return "";
   const resolved = path.resolve(root);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-
-function samePath(a: string, b: string): boolean {
-  return normalizeWorkspaceRoot(a) === normalizeWorkspaceRoot(b);
 }
 
 /** The transcript and model context share an array until the first compaction. */

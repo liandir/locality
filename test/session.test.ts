@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ChatRecord } from "../src/chat/storage.js";
 import type { UiEvent } from "../src/chat/session.js";
+import type { WorkspaceMemory } from "../src/chat/workspaceMemory.js";
 
 const mocks = vi.hoisted(() => ({
   MalformedNativeToolCallError: class MalformedNativeToolCallError extends Error {},
@@ -24,13 +25,13 @@ const mocks = vi.hoisted(() => ({
     autoCompactThresholdPercent: 80,
     autoapproveReads: true,
     autoapproveWrites: false,
-    autoapproveCommands: false,
-    safeCommands: [] as { match: string; description?: string }[]
+    autoapproveCommands: false
   },
   streamChat: vi.fn(),
   tokenize: vi.fn(),
   complete: vi.fn(),
   fetchServerContextSize: vi.fn(),
+  supportsVision: true,
   runCommand: vi.fn(),
   runProcess: vi.fn(),
   startCommand: vi.fn(),
@@ -63,7 +64,11 @@ vi.mock("../src/llm/client.js", () => ({
   streamChat: mocks.streamChat,
   tokenize: mocks.tokenize,
   complete: mocks.complete,
-  fetchServerContextSize: mocks.fetchServerContextSize
+  fetchServerMetadata: async () => {
+    const contextSize = await mocks.fetchServerContextSize();
+    if (contextSize === undefined) throw new Error("Unavailable context size");
+    return { modelAlias: "test-model", contextSize, supportsVision: mocks.supportsVision };
+  }
 }));
 
 vi.mock("../src/tools/terminalTool.js", () => ({
@@ -78,6 +83,7 @@ beforeEach(() => {
   mocks.tokenize.mockReset();
   mocks.complete.mockReset();
   mocks.fetchServerContextSize.mockReset();
+  mocks.supportsVision = true;
   mocks.runCommand.mockReset();
   mocks.runProcess.mockReset();
   mocks.startCommand.mockReset();
@@ -92,21 +98,29 @@ beforeEach(() => {
   mocks.startProcess.mockImplementation((program, args, cwd, signal, onOutput) =>
     mockCommandHandle(mocks.runProcess(program, args, cwd, signal, onOutput))
   );
+  mocks.settings.autoapproveReads = true;
   mocks.settings.autoapproveWrites = false;
   mocks.settings.autoapproveCommands = false;
   mocks.settings.autoCompact = false;
   mocks.settings.memoryEnabled = false;
   mocks.settings.memoryMaxCount = 10;
   mocks.settings.autoCompactThresholdPercent = 80;
-  mocks.settings.safeCommands = [];
   mocks.settings.toolCallingMode = "compat-gemma4";
   mocks.settings.reasoningBudget = 16384;
   mocks.settings.reasoningEfforts = { Low: "low", Medium: "medium", High: "high" };
 });
 
+function contextActivityIds(events: UiEvent[]): string[] {
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index];
+    if (event.kind === "contextActivity") return event.activityIds;
+  }
+  return [];
+}
+
 function mockCommandHandle(result: Promise<{ exitCode: number; stdout: string; stderr: string; truncated: boolean }>) {
   let output = { stdout: "", stderr: "", truncated: false };
-  void result.then(value => { output = value; });
+  void result.then(value => { output = value; }, () => undefined);
   return {
     result,
     snapshot: () => output,
@@ -153,6 +167,96 @@ describe("session shutdown", () => {
 });
 
 describe("ChatSession", () => {
+  it.each([false, true])("accepts new messages while deferring model requests for memory creation (edit=%s)", async edit => {
+    let finish!: () => void;
+    const release = vi.fn();
+    const memory = {
+      beginChatTurn: vi.fn((_signal: AbortSignal, waiting: () => void) => {
+        waiting();
+        return new Promise<() => void>(resolve => { finish = () => resolve(release); });
+      })
+    } as unknown as WorkspaceMemory;
+    mocks.streamChat.mockImplementation(async function* () { yield { kind: "text", text: "Ready" }; });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.messages = [{ role: "user", content: "original", ts: 1 }, { role: "assistant", content: "answer", ts: 2 }];
+    const events: UiEvent[] = [];
+    const session = new ChatSession({ storage: { save: vi.fn() } as never, workspaceRoot: "/tmp/workspace", record, memory, emit: event => events.push(event) });
+    const turn = edit ? session.editUserMessage(1, "edited") : session.sendUserMessage("next");
+    expect(session.isTurnActive()).toBe(true);
+    expect(events[0]).toEqual({ kind: "turnPreparing", reason: "memory" });
+    if (!edit) {
+      await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ kind: "userMessage", text: "next" })));
+      expect(record.messages.at(-1)).toMatchObject({ role: "user", content: "next" });
+    }
+    expect(record.messages).toHaveLength(edit ? 2 : 3);
+    expect(record.messages[0].content).toBe("original");
+    expect(events.some(event => event.kind === "turnWorkStarted")).toBe(false);
+    expect(mocks.fetchServerContextSize).not.toHaveBeenCalled();
+    expect(mocks.streamChat).not.toHaveBeenCalled();
+    finish();
+    await turn;
+    expect(mocks.streamChat).toHaveBeenCalledOnce();
+    expect(events.some(event => event.kind === "turnEnd")).toBe(true);
+    expect(session.isTurnActive()).toBe(false);
+    expect(release).toHaveBeenCalledOnce();
+    if (!edit) expect(events.filter(event => event.kind === "userMessage")).toHaveLength(1);
+  });
+
+  it("stops a waiting memory handoff without sending the pending chat to the model", async () => {
+    const memory = {
+      beginChatTurn: vi.fn((signal: AbortSignal, waiting: () => void) => {
+        waiting();
+        return new Promise<() => void>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      })
+    } as unknown as WorkspaceMemory;
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const session = new ChatSession({ storage: { save: vi.fn() } as never, workspaceRoot: "/tmp/workspace", record: newRecord(), memory, emit: event => events.push(event) });
+    const turn = session.sendUserMessage("next");
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ kind: "userMessage", text: "next" })));
+    await session.shutdown();
+    await turn;
+    expect(events).toContainEqual({ kind: "abort", reason: "Stopped by user." });
+    expect(session.isTurnActive()).toBe(false);
+    expect(mocks.streamChat).not.toHaveBeenCalled();
+    expect(mocks.fetchServerContextSize).not.toHaveBeenCalled();
+    expect(session.getRecord().messages).toEqual([expect.objectContaining({ role: "user", content: "next" })]);
+  });
+
+  it("keeps ordinary prompt processing out of the context-loading status", async () => {
+    mocks.streamChat.mockImplementation(async function* (
+      _endpoint: string, request: { return_progress?: boolean; onResponseAccepted?: () => void }
+    ) {
+      expect(request.return_progress).toBe(true);
+      request.onResponseAccepted?.();
+      for (const processedTokens of [0, 1024, 2048, 4096, 4096]) {
+        yield { kind: "promptProgress", processedTokens, totalTokens: 4096 };
+      }
+      yield { kind: "thought", text: "Considering the answer." };
+      yield { kind: "text", text: "Ready" };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.title = "Existing title";
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace", record, emit: event => events.push(event)
+    });
+
+    for (const message of ["First request", "Next request"]) {
+      events.length = 0;
+      await session.sendUserMessage(message);
+      expect(events).not.toContainEqual({ kind: "turnPreparing", reason: "context" });
+      const thoughtIndex = events.findIndex(event => event.kind === "thought");
+      expect(thoughtIndex).toBeGreaterThan(-1);
+      expect(events.slice(thoughtIndex).some(event => event.kind === "turnPreparing")).toBe(false);
+    }
+  });
+
   it("labels only the first model request after loading chat history as context loading", async () => {
     mocks.streamChat.mockImplementation(async function* () {
       yield { kind: "text", text: "answer" };
@@ -179,6 +283,200 @@ describe("ChatSession", () => {
     await session.sendUserMessage("Continue again");
     expect(events.slice(secondTurnStart)).not.toContainEqual({ kind: "turnPreparing", reason: "context" });
     expect(events.slice(secondTurnStart)).toContainEqual({ kind: "turnPreparing", reason: "server" });
+  });
+
+  it.each(["progress", "partial-progress", "output"])("keeps successful reads active through result ingestion using %s", async completionSignal => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "file A\n", "utf8");
+    await fs.writeFile(path.join(ws, "b.txt"), "file B\n", "utf8");
+    mocks.settings.toolCallingMode = "native";
+    const events: UiEvent[] = [];
+    const ingested = () => events.filter(event => event.kind === "toolCallResolved"
+      && event.status === "executed" && !contextActivityIds(events).includes(event.toolId));
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* (
+      _endpoint: string, request: { messages: unknown[]; onResponseAccepted?: () => void }
+    ) {
+      request.onResponseAccepted?.();
+      if (pass++ === 0) {
+        yield { kind: "toolCall", name: "read_file", argsJson: '{"path":"a.txt"}', id: "read_a" };
+        yield { kind: "toolCall", name: "read_file", argsJson: '{"path":"b.txt"}', id: "read_b" };
+        expect(ingested()).toHaveLength(0);
+        return;
+      }
+      expect(JSON.stringify(request.messages)).toContain("file A");
+      expect(JSON.stringify(request.messages)).toContain("file B");
+      expect(record.messages.filter(message => message.role === "tool").map(message => message.toolCall?.status))
+        .toEqual(["executed", "executed"]);
+      expect(ingested()).toHaveLength(0);
+      const reads = events.filter(event => event.kind === "toolCallProposed");
+      expect(contextActivityIds(events)).toEqual(reads.map(event => event.toolId));
+      if (completionSignal !== "output") {
+        yield { kind: "promptProgress", processedTokens: 128, totalTokens: 2048 };
+        yield { kind: "promptProgress", processedTokens: 1024, totalTokens: 2048 };
+        expect(ingested()).toHaveLength(0);
+      }
+      expect(events).not.toContainEqual({ kind: "turnPreparing", reason: "context" });
+      if (completionSignal === "progress") {
+        yield { kind: "promptProgress", processedTokens: 2048, totalTokens: 2048 };
+        expect(ingested()).toHaveLength(2);
+      }
+      yield { kind: "thought", text: "I have read both files." };
+      expect(ingested()).toHaveLength(2);
+      yield { kind: "text", text: "Done" };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.title = "Read files";
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws, record, emit: event => events.push(event)
+    });
+    await session.sendUserMessage("Read both files");
+    expect(pass).toBe(2);
+    expect(ingested()).toHaveLength(2);
+    expect(events.some(event => event.kind === "abort")).toBe(false);
+  });
+
+  it.each([
+    ["list_dir", { path: "." }],
+    ["glob", { pattern: "*.txt" }],
+    ["write_file", { path: "a.txt", content: "changed\n" }],
+    ["create_file", { path: "new.txt", content: "created\n" }],
+    ["run_command", { command: "echo hello" }],
+    ["update_todos", { todos: [{ content: "Check the result", status: "in_progress" }] }]
+  ])("keeps %s results usable while attributing prompt ingestion to the tool", async (name, args) => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
+    const legacy = name === "write_file" || name === "run_command";
+    mocks.settings.toolCallingMode = legacy ? "compat-qwen3" : "native";
+    mocks.settings.autoapproveWrites = true;
+    mocks.settings.autoapproveCommands = true;
+    mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "hello\n", stderr: "", truncated: false });
+    const events: UiEvent[] = [];
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* (
+      _endpoint: string, request: { onResponseAccepted?: () => void; tools?: unknown[] }
+    ) {
+      if (legacy && request.tools) throw new mocks.NativeToolsUnsupportedError("tools unsupported");
+      request.onResponseAccepted?.();
+      if (pass++ === 0) {
+        if (legacy) yield { kind: "text", text: `<tool_call>${JSON.stringify({ name, arguments: args })}</tool_call>` };
+        else yield { kind: "toolCall", name, argsJson: JSON.stringify(args), id: "call_1" };
+        return;
+      }
+      const completed = events.find(event => event.kind === "toolCallResolved" && event.status === "executed");
+      expect(completed).toMatchObject({ resultPreview: expect.any(String) });
+      if (completed?.kind !== "toolCallResolved") throw new Error("Missing result");
+      expect(contextActivityIds(events)).toEqual([completed.toolId]);
+      yield { kind: "promptProgress", processedTokens: 128, totalTokens: 2048 };
+      expect(events).not.toContainEqual({ kind: "contextActivity", activityIds: [] });
+      if (name === "write_file" || name === "create_file") {
+        session.requestToolDiff(completed.toolId);
+        expect(events.at(-1)).toMatchObject({ kind: "toolCallResolved", diffPreview: expect.any(String) });
+        expect(contextActivityIds(events)).toEqual([completed.toolId]);
+      }
+      yield { kind: "promptProgress", processedTokens: 2048, totalTokens: 2048 };
+      expect(contextActivityIds(events)).toEqual([]);
+      yield { kind: "text", text: "Done" };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.title = "Tool results";
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws, record, emit: event => events.push(event)
+    });
+    await session.sendUserMessage("Use the tool");
+    expect(pass).toBe(2);
+    expect(events.filter(event => event.kind === "abort")).toEqual([]);
+    expect(events).not.toContainEqual({ kind: "turnPreparing", reason: "context" });
+  });
+
+  it("finishes only the reads included in the current prompt", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
+    mocks.settings.toolCallingMode = "native";
+    const events: UiEvent[] = [];
+    const ingested = () => events.filter(event => event.kind === "toolCallResolved"
+      && event.status === "executed" && !contextActivityIds(events).includes(event.toolId));
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (pass++ > 0) {
+        expect(ingested()).toHaveLength(pass - 2);
+        yield { kind: "promptProgress", processedTokens: 128, totalTokens: 2048 };
+        expect(ingested()).toHaveLength(pass - 2);
+        yield { kind: "promptProgress", processedTokens: 2048, totalTokens: 2048 };
+        expect(ingested()).toHaveLength(pass - 1);
+      }
+      if (pass < 3) yield { kind: "toolCall", name: "read_file", argsJson: '{"path":"a.txt"}', id: `read_${pass}` };
+      else yield { kind: "text", text: "Done" };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws, record: newRecord(), emit: event => events.push(event)
+    });
+    await session.sendUserMessage("Read it twice");
+    expect(pass).toBe(3);
+    expect(ingested()).toHaveLength(2);
+    expect(events.some(event => event.kind === "abort")).toBe(false);
+  });
+
+  it.each(["cancel", "error", "empty"])("settles pending reads when the next request ends with %s", async outcome => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
+    await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
+    mocks.settings.toolCallingMode = "native";
+    const events: UiEvent[] = [];
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (pass++ === 0) {
+        yield { kind: "toolCall", name: "read_file", argsJson: '{"path":"a.txt"}', id: "read_a" };
+        return;
+      }
+      yield { kind: "promptProgress", processedTokens: 128, totalTokens: 2048 };
+      expect(events).not.toContainEqual({ kind: "contextActivity", activityIds: [] });
+      if (outcome === "cancel") session.cancel();
+      if (outcome !== "empty") throw new Error(outcome === "cancel" ? "Cancelled" : "Server disconnected");
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws, record, emit: event => events.push(event)
+    });
+    await session.sendUserMessage("Read the file");
+    expect(pass).toBe(2);
+    expect(events.filter(event => event.kind === "toolCallResolved" && event.status === "executed")).toHaveLength(1);
+    expect(events.filter(event => event.kind === "contextActivity" && !event.activityIds.length)).toHaveLength(1);
+    if (outcome !== "empty") expect(events).toContainEqual({ kind: "abort", reason: outcome === "cancel" ? "Cancelled" : "Server disconnected" });
+    expect(record.messages.find(message => message.role === "tool")?.toolCall?.status).toBe("executed");
+  });
+
+  it("shows failed reads immediately and attributes ingestion of their errors to the tool", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
+    mocks.settings.toolCallingMode = "native";
+    const events: UiEvent[] = [];
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (pass++ === 0) {
+        yield { kind: "toolCall", name: "read_file", argsJson: '{"path":"missing.txt"}', id: "read_missing" };
+        expect(events).toContainEqual(expect.objectContaining({ kind: "toolCallResolved", status: "failed" }));
+        return;
+      }
+      yield { kind: "promptProgress", processedTokens: 128, totalTokens: 2048 };
+      yield { kind: "text", text: "The file does not exist." };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: ws, record: newRecord(), emit: event => events.push(event)
+    });
+    await session.sendUserMessage("Read missing.txt");
+    expect(pass).toBe(2);
+    expect(events).not.toContainEqual({ kind: "turnPreparing", reason: "context" });
+    expect(events.some(event => event.kind === "contextActivity" && event.activityIds.length)).toBe(true);
+    expect(events.some(event => event.kind === "abort")).toBe(false);
   });
 
   it("generates the first-request chat name in parallel after the real request is accepted", async () => {
@@ -250,8 +548,8 @@ describe("ChatSession", () => {
     expect(events).toContainEqual(expect.objectContaining({ kind: "turnStart" }));
   });
 
-  it("identifies title generation only until a blocked model continuation is accepted", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+  it.each([true, false])("keeps title waits visible after HTTP acceptance with tool ingestion pending (progress: %s)", async withProgress => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "native";
     let resolveTitle: (title: string) => void = () => undefined;
@@ -263,8 +561,18 @@ describe("ChatSession", () => {
     ) {
       request.onResponseAccepted?.();
       if (pass++ === 0) {
-        yield { kind: "toolCall", name: "read_file", argsJson: '{"path":"a.txt"}', id: "call_title_wait" };
+        yield { kind: "toolCall", name: "list_dir", argsJson: '{"path":"."}', id: "call_title_wait" };
       } else {
+        // Headers can precede the server assigning this continuation a slot.
+        expect(events.filter(event => event.kind === "turnPreparing").at(-1))
+          .toEqual({ kind: "turnPreparing", reason: "title" });
+        expect(contextActivityIds(events)).toHaveLength(1);
+        if (withProgress) {
+          yield { kind: "promptProgress", processedTokens: 0, totalTokens: 100 };
+          expect(events.filter(event => event.kind === "turnPreparing").at(-1))
+            .toEqual({ kind: "turnPreparing", reason: "server" });
+          expect(contextActivityIds(events)).toHaveLength(1);
+        }
         yield { kind: "text", text: "done" };
       }
     });
@@ -278,21 +586,25 @@ describe("ChatSession", () => {
       emit: event => events.push(event)
     });
 
-    await session.sendUserMessage("Read the file");
+    await session.sendUserMessage("List the directory");
 
-    const resolvedIndex = events.findIndex(event =>
-      event.kind === "toolCallResolved" && event.status === "executed"
+    expect(events).not.toContainEqual(expect.objectContaining({ kind: "abort" }));
+    expect(events).toContainEqual(expect.objectContaining({ kind: "text", delta: "done" }));
+
+    const proposedIndex = events.findIndex(event =>
+      event.kind === "toolCallProposed" && event.toolName === "list_dir"
     );
     const answerIndex = events.findIndex(event => event.kind === "text");
-    const continuationEvents = events.slice(resolvedIndex + 1, answerIndex);
-    const titleWaitIndex = continuationEvents.findIndex(event =>
-      event.kind === "turnPreparing" && event.reason === "title"
-    );
-    const chatAcceptedIndex = continuationEvents.findIndex((event, index) =>
-      index > titleWaitIndex && event.kind === "turnPreparing" && event.reason === "server"
-    );
-    expect(titleWaitIndex).toBeGreaterThanOrEqual(0);
-    expect(chatAcceptedIndex).toBeGreaterThan(titleWaitIndex);
+    const continuationEvents = events.slice(proposedIndex + 1, answerIndex);
+    const ingestionEnd = continuationEvents.findIndex(event => event.kind === "contextActivity" && !event.activityIds.length);
+    expect(ingestionEnd).toBeGreaterThan(-1);
+    const preparing = continuationEvents.slice(0, ingestionEnd).filter(event => event.kind === "turnPreparing");
+    expect(preparing.length).toBeGreaterThan(0);
+    for (let index = 0; index < ingestionEnd; index++) {
+      if (continuationEvents[index].kind === "turnPreparing") {
+        expect(contextActivityIds(continuationEvents.slice(0, index))).toHaveLength(1);
+      }
+    }
 
     resolveTitle("Read file");
     await vi.waitFor(() =>
@@ -301,7 +613,7 @@ describe("ChatSession", () => {
   });
 
   it("uses native tool schemas and replays calls/results with their protocol id", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "native";
     const requests: Array<Record<string, unknown>> = [];
@@ -359,7 +671,7 @@ describe("ChatSession", () => {
   });
 
   it("applies mode changes made during a turn only to the next user message", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "native";
     const requests: Array<{
@@ -412,7 +724,7 @@ describe("ChatSession", () => {
   });
 
   it("persists successful file-creation metadata for restored tool labels", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     mocks.settings.toolCallingMode = "native";
     mocks.settings.autoapproveWrites = true;
     let pass = 0;
@@ -595,8 +907,62 @@ describe("ChatSession", () => {
     expect(messages[0].content).toContain("[context summary]\nGOAL: finish the refactor");
   });
 
+  it.each(["native", "legacy"] as const)("uses the latest saved user time only in %s system context after compaction", async toolProtocol => {
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const firstTs = Date.parse("2026-09-01T12:00:00Z");
+    const latestTs = Date.parse("2026-09-11T13:45:00Z");
+    const answerTs = Date.parse("2026-09-11T13:46:00Z");
+    record.messages = [
+      { role: "user", content: "earlier request", ts: firstTs },
+      { role: "user", content: "current request", ts: latestTs },
+      { role: "assistant", content: "answer", ts: answerTs }
+    ];
+    record.contextMessages = [{ role: "system", content: "[context summary] current task", ts: answerTs }];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace", record, emit: () => undefined
+    });
+    const internal = session as unknown as {
+      toolProtocol: "native" | "legacy";
+      buildPromptMessages(): Promise<Array<{ role: string; content: string }>>;
+      systemPromptTokens(settings: unknown): Promise<number>;
+    };
+    internal.toolProtocol = toolProtocol;
+    const messages = await internal.buildPromptMessages();
+    expect(messages[0].role).toBe("system");
+    expect(messages[0].content).toContain(`Latest user prompt time: ${new Date(latestTs).toISOString()}`);
+    expect(messages[0].content).toContain("only to contextualize the current request relative to workspace memories");
+    expect(JSON.stringify(messages)).not.toContain(new Date(answerTs).toISOString());
+    expect(JSON.stringify(messages)).not.toContain(new Date(firstTs).toISOString());
+    expect(JSON.stringify(messages.slice(1))).not.toContain(new Date(latestTs).toISOString());
+    await internal.systemPromptTokens(mocks.settings);
+    expect(mocks.tokenize.mock.calls.some(call => String(call[1]).includes(new Date(latestTs).toISOString()))).toBe(true);
+
+    // Advancing the transcript to a new user request updates the reference time.
+    record.messages.push({ role: "user", content: "next request", ts: latestTs + 86400000 });
+    const next = await internal.buildPromptMessages();
+    expect(next[0].content).toContain(new Date(latestTs + 86400000).toISOString());
+    expect(next[0].content).not.toContain(new Date(latestTs).toISOString());
+  });
+
+  it("sends the saved answer timestamp to the UI at turn end", async () => {
+    mocks.streamChat.mockImplementation(async function* () { yield { kind: "text", text: "done" }; });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace", record, emit: event => events.push(event)
+    });
+    await session.sendUserMessage("hello");
+    const answer = record.messages.find(message => message.role === "assistant");
+    expect(answer).toBeDefined();
+    expect(events).toContainEqual(expect.objectContaining({ kind: "turnEnd", messageTs: answer!.ts }));
+  });
+
   it("falls back to legacy syntax only after an explicit native-tools rejection", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "compat-gemma4";
     const requests: Array<Record<string, unknown>> = [];
@@ -625,7 +991,7 @@ describe("ChatSession", () => {
   });
 
   it("keeps GPT-OSS on structured native calls when the server supports them", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "compat-gpt-oss";
     const requests: Array<Record<string, unknown>> = [];
@@ -658,7 +1024,7 @@ describe("ChatSession", () => {
   });
 
   it("recovers leaked GPT-OSS Harmony calls without leaving native transport", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "compat-gpt-oss";
     const requests: Array<Record<string, unknown>> = [];
@@ -695,7 +1061,7 @@ describe("ChatSession", () => {
   });
 
   it("uses the GPT-OSS Harmony fallback only after native tools are rejected", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "compat-gpt-oss";
     const requests: Array<Record<string, unknown>> = [];
@@ -732,7 +1098,7 @@ describe("ChatSession", () => {
   });
 
   it("recovers Muse reasoning and ATEM calls in Muse compatibility mode", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "compat-muse-glimmer";
     let pass = 0;
@@ -827,9 +1193,89 @@ describe("ChatSession", () => {
     expect(user?.content).toEqual([
       { type: "image_url", image_url: { url: "data:image/png;base64,iVBORw0KGgoBAgM=" } },
       { type: "image_url", image_url: { url: "data:image/jpeg;base64,/9j/AA==" } },
-      { type: "text", text: "Describe them" }
+      { type: "text", text: expect.stringContaining("Describe them\n\nAttached images") }
     ]);
     expect(JSON.stringify(record)).not.toContain("iVBORw0KGgo");
+  });
+
+  it.each(["native", "compat-qwen3"] as const)("synthesizes text attachments for %s and preserves the visible transcript on reload", async profile => {
+    mocks.settings.toolCallingMode = profile;
+    const requests: Array<{ messages: Array<{ role: string; content: unknown }>; tools?: unknown[] }> = [];
+    mocks.streamChat.mockImplementation(async function* (_endpoint, request) {
+      requests.push(request);
+      if (profile !== "native" && request.tools) throw new mocks.NativeToolsUnsupportedError("tools param requires --jinja flag");
+      yield { kind: "text", text: "Done." };
+    });
+    const { ChatStorage } = await import("../src/chat/storage.js");
+    const { ChatSession } = await import("../src/chat/session.js");
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "locality-text-attachments-"));
+    try {
+      const storage = new ChatStorage(dir, path.join(dir, "chats"));
+      const record = storage.newRecord(profile);
+      const code = await storage.importAttachmentBytes(record.id, "main.py", Buffer.from("print('CODE_SENTINEL')\n"));
+      const paste = await storage.importAttachmentBytes(record.id, "Pasted text", Buffer.from("PASTE_SENTINEL"));
+      let session = new ChatSession({ storage, workspaceRoot: dir, record, emit: () => undefined });
+      await session.sendUserMessage(`Explain these ${profile}`, [code, paste]);
+      const user = requests.at(-1)!.messages.find(m => m.role === "user")!;
+      expect(typeof user.content).toBe("string");
+      expect(user.content).toContain('"file_type": "py"');
+      const files = JSON.parse(String(user.content).slice(String(user.content).indexOf("[")));
+      expect(files).toEqual([
+        { name: "main.py", type: "text", file_type: "py", contents: "print('CODE_SENTINEL')\n" },
+        { name: "Pasted text", type: "text", contents: "PASTE_SENTINEL" }
+      ]);
+      expect(record.messages[0].content).toBe(`Explain these ${profile}`);
+      expect(record.messages[0].attachments).toHaveLength(2);
+      expect(record.contextMessages![0].attachments).toBeUndefined();
+      expect(record.contextMessages![0].tokens).toBe(1);
+      expect(mocks.tokenize.mock.calls.some(call => String(call[1]).includes("CODE_SENTINEL"))).toBe(true);
+      const loaded = (await storage.load(record.id))!;
+      session = new ChatSession({ storage, workspaceRoot: dir, record: loaded, emit: () => undefined });
+      await session.sendUserMessage("Continue");
+      expect(JSON.stringify(requests.at(-1)!.messages).match(/CODE_SENTINEL/g)).toHaveLength(1);
+      await session.editUserMessage(loaded.messages[0].ts, "No files", [code.id, paste.id]);
+      expect(JSON.stringify(requests.at(-1)!.messages)).not.toContain("CODE_SENTINEL");
+      expect(loaded.messages[0].attachments).toBeUndefined();
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("combines text and image files in native content without turning text into an image", async () => {
+    const { ChatStorage } = await import("../src/chat/storage.js");
+    const { ChatSession } = await import("../src/chat/session.js");
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "locality-mixed-attachments-"));
+    mocks.streamChat.mockImplementation(async function* () { yield { kind: "text", text: "Done." }; });
+    try {
+      const storage = new ChatStorage(dir, path.join(dir, "chats"));
+      const record = storage.newRecord("native");
+      const text = await storage.importAttachmentBytes(record.id, "Pasted text", Buffer.from("MIXED_SENTINEL"));
+      const image = await storage.importAttachmentBytes(record.id, "screen.png", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]));
+      const session = new ChatSession({ storage, workspaceRoot: dir, record, emit: () => undefined });
+      await session.sendUserMessage("Compare", [text, image]);
+      const user = mocks.streamChat.mock.calls[0][1].messages.find((m: { role: string }) => m.role === "user");
+      expect(user.content.filter((part: { type: string }) => part.type === "image_url")).toHaveLength(1);
+      expect(user.content.find((part: { type: string }) => part.type === "text").text).toContain("MIXED_SENTINEL");
+      expect(user.content.find((part: { type: string }) => part.type === "text").text).toContain('"file_type":"png"');
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("counts attachment contents before sending and preserves files when context is too small", async () => {
+    const { ChatStorage } = await import("../src/chat/storage.js");
+    const { ChatSession } = await import("../src/chat/session.js");
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "locality-attachment-budget-"));
+    mocks.fetchServerContextSize.mockResolvedValue(8192);
+    mocks.tokenize.mockImplementation(async (_endpoint, text) => text.includes("OVERFLOW_ATTACHMENT") ? 9000 : 1);
+    try {
+      const storage = new ChatStorage(dir, path.join(dir, "chats"));
+      const record = storage.newRecord("native");
+      const attachment = await storage.importAttachmentBytes(record.id, "large.txt", Buffer.from("OVERFLOW_ATTACHMENT"));
+      const events: UiEvent[] = [];
+      const session = new ChatSession({ storage, workspaceRoot: dir, record, emit: event => events.push(event) });
+      await session.sendUserMessage("Read this", [attachment]);
+      expect(mocks.streamChat).not.toHaveBeenCalled();
+      expect(events.some(event => event.kind === "abort")).toBe(true);
+      expect(record.messages[0].content).toBe("Read this");
+      await expect(storage.attachmentText(record.id, attachment)).resolves.toBe("OVERFLOW_ATTACHMENT");
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
   });
 
   it("shows Muse projector guidance when llama.cpp rejects image input", async () => {
@@ -1026,7 +1472,7 @@ describe("ChatSession", () => {
   });
 
   it("recovers Qwen3-Coder function XML leaked through native content", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.mkdir(path.join(ws, "src"));
     mocks.settings.toolCallingMode = "compat-qwen3";
     let pass = 0;
@@ -1066,8 +1512,11 @@ describe("ChatSession", () => {
     expect(record.messages.at(-1)?.content).toBe("done");
   });
 
-  it("recovers native function XML after an answered question in Qwen compatibility mode", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+  it.each([
+    { description: "suggested answer", answer: "Review all files" },
+    { description: "long custom answer", answer: `Review these files:\n${'Keep "all" details.  '.repeat(40)}\nFinal detail.` }
+  ])("preserves the $description and recovers native function XML after a question in Qwen mode", async ({ answer }) => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.mkdir(path.join(ws, "src"));
     mocks.settings.toolCallingMode = "compat-qwen3";
     let pass = 0;
@@ -1110,9 +1559,14 @@ describe("ChatSession", () => {
         event.kind === "toolCallProposed" && event.toolName === "ask_user_question"
     );
     expect(question).toBeDefined();
-    session.answerQuestion(question!.toolId, "Review all files");
+    session.answerQuestion(question!.toolId, answer);
     await turn;
 
+    const result = `the user has answered your question: "${answer}"`;
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: "toolCallResolved", toolId: question!.toolId, status: "executed", resultPreview: result
+    }));
+    expect(record.messages.find(message => message.toolCall?.name === "ask_user_question")?.content).toBe(result);
     expect(events).toContainEqual(expect.objectContaining({
       kind: "toolCallProposed",
       toolName: "list_dir"
@@ -1156,7 +1610,7 @@ describe("ChatSession", () => {
   });
 
   it("does not execute the same structured call id twice", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "native";
     mocks.streamChat.mockImplementation(async function* () {
@@ -1181,7 +1635,6 @@ describe("ChatSession", () => {
   it("executes native command arguments without using the legacy shell tool", async () => {
     mocks.settings.toolCallingMode = "native";
     mocks.settings.autoapproveCommands = true;
-    mocks.settings.safeCommands = [{ match: "npm test", description: "tests" }];
     let pass = 0;
     mocks.streamChat.mockImplementation(async function* () {
       if (pass++ === 0) {
@@ -1209,18 +1662,61 @@ describe("ChatSession", () => {
       expect.any(Function)
     );
     expect(mocks.runCommand).not.toHaveBeenCalled();
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: "toolCallProposed",
+      category: "command",
+      approvalRequired: false
+    }));
   });
 
-  it("yields a long-running process and lets the model wait for it", async () => {
-    mocks.settings.toolCallingMode = "native";
+  it.each([0, 1, 127, "runner-error"])("separates command outcome %s from tool status and persists display data", async outcome => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-command-history-"));
+    try {
+      mocks.settings.toolCallingMode = "native";
+      mocks.settings.autoapproveCommands = true;
+      if (outcome === "runner-error") mocks.runProcess.mockRejectedValue(new Error("runner unavailable"));
+      else mocks.runProcess.mockResolvedValue({ exitCode: outcome, stdout: "out\n", stderr: "err\n", output: "err\nout\n", truncated: false });
+      let pass = 0;
+      mocks.streamChat.mockImplementation(async function* () {
+        if (pass++ === 0) yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["test"]}', id: "command_outcome" };
+        else yield { kind: "text", text: "done" };
+      });
+      const { ChatStorage } = await import("../src/chat/storage.js");
+      const { ChatSession } = await import("../src/chat/session.js");
+      const storage = new ChatStorage(ws, path.join(ws, "chats"));
+      const record = storage.newRecord("native");
+      const events: UiEvent[] = [];
+      const session = new ChatSession({ storage, workspaceRoot: ws, record, emit: event => events.push(event) });
+      await session.sendUserMessage("Run the command");
+      await session.shutdown();
+      const reloaded = await storage.load(record.id);
+      const message = reloaded?.messages.find(item => item.toolCall?.id === "command_outcome");
+      const status = outcome === "runner-error" ? "failed" : "executed";
+      expect(message?.toolCall?.status).toBe(status);
+      expect(events).toContainEqual(expect.objectContaining({ kind: "toolCallResolved", status }));
+      if (outcome === "runner-error") {
+        expect(message?.content).toContain("runner unavailable");
+        expect(message?.toolCall?.processExitCode).toBeUndefined();
+      } else {
+        expect(message?.toolCall).toMatchObject({ processOutput: "err\nout\n", processExitCode: outcome });
+        expect(message?.content).toBe(`exit ${outcome}\n--- stdout ---\nout\n\n--- stderr ---\nerr\n`);
+      }
+    } finally {
+      await fs.rm(ws, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["run_command", "run_process"])("shows the command when checking a long-running %s", async toolName => {
+    const legacy = toolName === "run_command";
+    mocks.settings.toolCallingMode = legacy ? "compat-qwen3" : "native";
     mocks.settings.autoapproveCommands = true;
-    mocks.settings.safeCommands = [{ match: "npm test", description: "tests" }];
-    const finalResult = { exitCode: 0, stdout: "started\ndone\n", stderr: "", truncated: false };
-    let output = { stdout: "started\n", stderr: "", truncated: false };
+    const finalResult = { exitCode: 0, stdout: "started\ndone\n", stderr: "", output: "started\ndone\n", truncated: false };
+    let output = { stdout: "started\n", stderr: "", output: "started\n", truncated: false };
     let resolveResult = (_value: typeof finalResult): void => undefined;
     const result = new Promise<typeof finalResult>(resolve => { resolveResult = resolve; });
     let waits = 0;
-    mocks.startProcess.mockReturnValue({
+    const start = toolName === "run_command" ? mocks.startCommand : mocks.startProcess;
+    start.mockReturnValue({
       result,
       snapshot: () => output,
       wait: vi.fn(async () => {
@@ -1234,15 +1730,19 @@ describe("ChatSession", () => {
 
     const events: UiEvent[] = [];
     let pass = 0;
-    mocks.streamChat.mockImplementation(async function* () {
+    mocks.streamChat.mockImplementation(async function* (_endpoint, request) {
+      if (legacy && request.tools) throw new mocks.NativeToolsUnsupportedError("tools unsupported");
       if (pass++ === 0) {
-        yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["test"]}', id: "call_job_start" };
+        if (legacy) yield { kind: "text", text: '<tool_call>{"name":"run_command","arguments":{"command":"npm test"}}</tool_call>' };
+        else yield { kind: "toolCall", name: toolName, argsJson: '{"program":"npm","args":["test"]}', id: "call_job_start" };
       } else if (pass === 2) {
         const started = events.find(
           (event): event is Extract<UiEvent, { kind: "toolCallResolved" }> =>
             event.kind === "toolCallResolved" && event.processRunning === true
         );
-        yield { kind: "toolCall", name: "wait_process", argsJson: JSON.stringify({ job_id: started?.processJobId, wait_ms: 100 }), id: "call_job_wait" };
+        const args = { job_id: started?.processJobId, wait_ms: 100 };
+        if (legacy) yield { kind: "text", text: `<tool_call>${JSON.stringify({ name: "wait_process", arguments: args })}</tool_call>` };
+        else yield { kind: "toolCall", name: "wait_process", argsJson: JSON.stringify(args), id: "call_job_wait" };
       } else {
         yield { kind: "text", text: "done" };
       }
@@ -1264,13 +1764,50 @@ describe("ChatSession", () => {
       (event): event is Extract<UiEvent, { kind: "toolCallProposed" }> =>
         event.kind === "toolCallProposed" && event.toolName === "wait_process"
     );
-    expect(waitProposal).toMatchObject({ category: "process", approvalRequired: false });
+    expect(waitProposal).toMatchObject({
+      category: "process", approvalRequired: false,
+      processJobId: expect.stringMatching(/^job_/), processCommand: "npm test", processRunning: true
+    });
+    expect(record.messages.filter(message => message.role === "tool").map(message => message.toolCall?.processCommand))
+      .toEqual(["npm test", "npm test"]);
+    expect(record.messages.filter(message => message.role === "tool").map(message => ({
+      output: message.toolCall?.processOutput, exitCode: message.toolCall?.processExitCode
+    }))).toEqual([{ output: "started\ndone\n", exitCode: 0 }, { output: "done\n", exitCode: 0 }]);
   });
 
-  it("lets the user stop a yielded process and records the update for the model", async () => {
+  it("persists a runner failure after the initial command has yielded", async () => {
     mocks.settings.toolCallingMode = "native";
     mocks.settings.autoapproveCommands = true;
-    mocks.settings.safeCommands = [{ match: "npm test", description: "tests" }];
+    let fail!: (error: Error) => void;
+    const result = new Promise<never>((_resolve, reject) => { fail = reject; });
+    mocks.startProcess.mockReturnValue({
+      result,
+      snapshot: () => ({ stdout: "started\n", stderr: "", output: "started\n", truncated: false }),
+      wait: vi.fn(async () => ({ running: true as const })),
+      stop: vi.fn(async () => result)
+    });
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (pass++ === 0) yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["test"]}', id: "yield_then_fail" };
+      else {
+        fail(new Error("runner connection lost"));
+        await Promise.resolve();
+        yield { kind: "text", text: "done" };
+      }
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const session = new ChatSession({ storage: { save: vi.fn() } as never, workspaceRoot: "/tmp/workspace", record, emit: event => events.push(event) });
+    await session.sendUserMessage("Run the command");
+    expect(events).toContainEqual(expect.objectContaining({ kind: "processJobState", status: "failed", resultPreview: "error: runner connection lost" }));
+    expect(record.messages.find(message => message.toolCall?.id === "yield_then_fail")?.toolCall)
+      .toMatchObject({ status: "failed", processOutput: "error: runner connection lost" });
+  });
+
+  it("lets the user stop a process during an active check and records the update for the model", async () => {
+    mocks.settings.toolCallingMode = "native";
+    mocks.settings.autoapproveCommands = true;
     const stoppedResult = { exitCode: -1, stdout: "started\n", stderr: "", truncated: false };
     let resolveResult = (_value: typeof stoppedResult): void => undefined;
     const result = new Promise<typeof stoppedResult>(resolve => { resolveResult = resolve; });
@@ -1278,10 +1815,13 @@ describe("ChatSession", () => {
       resolveResult(stoppedResult);
       return stoppedResult;
     });
+    let waits = 0;
     mocks.startProcess.mockReturnValue({
       result,
       snapshot: () => ({ stdout: "started\n", stderr: "", truncated: false }),
-      wait: vi.fn(async () => ({ running: true as const, output: { stdout: "started\n", stderr: "", truncated: false } })),
+      wait: vi.fn(async () => waits++ === 0
+        ? { running: true as const, output: { stdout: "started\n", stderr: "", truncated: false } }
+        : { running: false as const, result: await result }),
       stop
     });
     let releaseFinal = (): void => undefined;
@@ -1290,6 +1830,12 @@ describe("ChatSession", () => {
     mocks.streamChat.mockImplementation(async function* () {
       if (pass++ === 0) {
         yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["test"]}', id: "call_user_stop" };
+      } else if (pass === 2) {
+        const started = events.find(
+          (event): event is Extract<UiEvent, { kind: "toolCallResolved" }> =>
+            event.kind === "toolCallResolved" && event.processRunning === true
+        );
+        yield { kind: "toolCall", name: "wait_process", argsJson: JSON.stringify({ job_id: started?.processJobId }), id: "call_stop_check" };
       } else {
         await finalGate;
         yield { kind: "text", text: "process started" };
@@ -1307,20 +1853,27 @@ describe("ChatSession", () => {
     });
     const turn = session.sendUserMessage("start it");
     await vi.waitFor(() => expect(events.some(
-      event => event.kind === "toolCallResolved" && event.processRunning === true
+      event => event.kind === "toolCallProposed" && event.toolName === "wait_process"
     )).toBe(true));
-    const jobId = events.find(
-      (event): event is Extract<UiEvent, { kind: "toolCallResolved" }> =>
-        event.kind === "toolCallResolved" && event.processRunning === true
-    )?.processJobId;
+    const check = events.find(
+      (event): event is Extract<UiEvent, { kind: "toolCallProposed" }> =>
+        event.kind === "toolCallProposed" && event.toolName === "wait_process"
+    )!;
+    expect(check).toMatchObject({ processCommand: "npm test", processRunning: true });
+    expect(events.some(event => event.kind === "toolCallResolved" && event.toolId === check.toolId)).toBe(false);
+    const jobId = check.processJobId!;
 
-    await session.stopProcessFromUser(jobId!);
+    await session.handleFeatureAction(jobId);
     releaseFinal();
     await turn;
 
     expect(stop).toHaveBeenCalledOnce();
     const userStopResult = [...record.messages].reverse().find(message => message.toolCall?.name === "stop_process");
     expect(userStopResult?.content).toContain("stopped by the user");
+    expect(userStopResult?.toolCall?.processCommand).toBe("npm test");
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: "toolCallResolved", toolId: check.toolId, status: "executed", processRunning: false, processCommand: "npm test"
+    }));
     expect(events).toContainEqual(expect.objectContaining({
       kind: "processJobState",
       jobId,
@@ -1331,7 +1884,6 @@ describe("ChatSession", () => {
   it("stops every yielded process after the model's final answer and before turn end", async () => {
     mocks.settings.toolCallingMode = "native";
     mocks.settings.autoapproveCommands = true;
-    mocks.settings.safeCommands = [{ match: "npm test", description: "tests" }];
     const stoppedResult = { exitCode: -1, stdout: "started\n", stderr: "", truncated: false };
     let resolveResult = (_value: typeof stoppedResult): void => undefined;
     const result = new Promise<typeof stoppedResult>(resolve => { resolveResult = resolve; });
@@ -1375,8 +1927,58 @@ describe("ChatSession", () => {
     expect(turnEndIndex).toBeGreaterThan(stoppedIndex);
   });
 
+  it("persists individual edit diffs through a real chat reload and later file changes", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
+    try {
+      await fs.writeFile(path.join(ws, "a.txt"), "original\n", "utf8");
+      mocks.settings.toolCallingMode = "native";
+      mocks.settings.autoapproveWrites = true;
+      let pass = 0;
+      mocks.streamChat.mockImplementation(async function* () {
+        if (pass < 2) {
+          const previous = pass === 0 ? "original" : "first";
+          const next = pass === 0 ? "first" : "second";
+          yield {
+            kind: "toolCall", name: "replace_range", id: `saved_edit_${pass++}`,
+            argsJson: JSON.stringify({ path: "a.txt", startLine: 1, endLine: 1, expectedContent: previous, content: next + "\n" })
+          };
+        } else yield { kind: "text", text: "Done" };
+      });
+      const { ChatStorage } = await import("../src/chat/storage.js");
+      const { ChatSession } = await import("../src/chat/session.js");
+      const { restoredToolFileChanges } = await import("../src/ui/chatView/webview/toolHistory.js");
+      const storage = new ChatStorage(ws, path.join(ws, "chats"));
+      const record = storage.newRecord("native");
+      record.title = "Saved edits";
+      const events: UiEvent[] = [];
+      const session = new ChatSession({ storage, workspaceRoot: ws, record, emit: event => events.push(event) });
+      await session.sendUserMessage("Edit the first line twice");
+      expect(events.some(event => event.kind === "abort")).toBe(false);
+      await expect(fs.readFile(path.join(ws, "a.txt"), "utf8")).resolves.toBe("second\n");
+      await session.shutdown();
+      await fs.unlink(path.join(ws, "a.txt"));
+      const reloaded = await storage.load(record.id);
+      expect(reloaded).toBeDefined();
+      const changes = [...restoredToolFileChanges(reloaded!).values()];
+      expect(changes).toEqual([
+        { path: "a.txt", added: 1, removed: 1, diffPreview: "-\t1\t\toriginal\n+\t\t1\tfirst" },
+        { path: "a.txt", added: 1, removed: 1, diffPreview: "-\t1\t\tfirst\n+\t\t1\tsecond" }
+      ]);
+      for (const change of changes) {
+        expect(events).toContainEqual(expect.objectContaining({
+          kind: "toolCallResolved", status: "executed", diffPreview: change.diffPreview,
+          added: change.added, removed: change.removed
+        }));
+      }
+      const forked = await storage.fork(reloaded!);
+      expect([...restoredToolFileChanges(forked).values()]).toEqual(changes);
+    } finally {
+      await fs.rm(ws, { recursive: true, force: true });
+    }
+  });
+
   it("uses the read revision for a native atomic edit", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\n", "utf8");
     mocks.settings.toolCallingMode = "native";
     mocks.settings.autoapproveWrites = true;
@@ -1423,7 +2025,7 @@ describe("ChatSession", () => {
   });
 
   it("executes native replace_range and insert_text edits with approval diffs", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\n", "utf8");
     mocks.settings.toolCallingMode = "native";
     mocks.settings.autoapproveWrites = true;
@@ -1556,7 +2158,7 @@ describe("ChatSession", () => {
   });
 
   it("keeps consecutive edits to the same file as separate items with per-call stats", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
     mocks.settings.autoapproveWrites = true;
 
@@ -1598,7 +2200,7 @@ describe("ChatSession", () => {
   });
 
   it("keeps a re-edit's streaming progress on its own item", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
     mocks.settings.autoapproveWrites = true;
 
@@ -1627,7 +2229,7 @@ describe("ChatSession", () => {
   });
 
   it("keeps same-file edits separate when another tool runs between them", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\n", "utf8");
     mocks.settings.autoapproveWrites = true;
 
@@ -1659,8 +2261,7 @@ describe("ChatSession", () => {
     expect(edits[0].toolId).not.toBe(edits[1].toolId);
   });
 
-  it("auto-approves a safe-listed command when autoapproveCommands is on", async () => {
-    mocks.settings.safeCommands = [{ match: "npm test", description: "Run tests" }];
+  it("auto-approves a command when autoapproveCommands is on", async () => {
     mocks.settings.autoapproveCommands = true;
     mocks.runCommand.mockImplementation(async (
       _command: string,
@@ -1690,12 +2291,12 @@ describe("ChatSession", () => {
 
     await session.sendUserMessage("run tests");
 
-    // The command was offered as safeCmd and ran without an approval round-trip.
+    // The command ran without an approval round-trip.
     expect(mocks.runCommand).toHaveBeenCalledOnce();
     const proposed = events.find(
       (e): e is Extract<UiEvent, { kind: "toolCallProposed" }> => e.kind === "toolCallProposed"
     );
-    expect(proposed?.category).toBe("safeCmd");
+    expect(proposed?.category).toBe("command");
     expect(proposed?.approvalRequired).toBe(false);
     expect(events.some(e => e.kind === "toolCallResolved" && e.status === "approved")).toBe(false);
     expect(events.some(e => e.kind === "toolCallResolved" && e.status === "executed")).toBe(true);
@@ -1715,14 +2316,42 @@ describe("ChatSession", () => {
       .toContain("streamed\nok");
   });
 
-  it("requires explicit approval for every review-mode command", async () => {
-    mocks.settings.safeCommands = [{ match: "npm test", description: "Run tests" }];
+  it("does not launch when command auto-approval is disabled before execution", async () => {
+    mocks.settings.autoapproveCommands = true;
+    mockLegacyFallback([gemmaCall("run_command", "command:<|\"|>npm test<|\"|>"), "done"]);
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace", record,
+      emit: event => {
+        if (event.kind === "toolCallProposed") mocks.settings.autoapproveCommands = false;
+      }
+    });
+    await session.sendUserMessage("run tests");
+    expect(mocks.startCommand).not.toHaveBeenCalled();
+    expect(record.messages.find(message => message.role === "tool")?.content).toContain("Approval settings changed");
+  });
+
+  it.each(["native", "compat-gemma4"] as const)("requires explicit approval for review-mode commands with %s", async profile => {
+    mocks.settings.toolCallingMode = profile;
     mocks.settings.autoapproveCommands = true;
     mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "ok", stderr: "", truncated: false });
-    mockLegacyFallback([
-      gemmaCall("run_command", "command:<|\"|>npm test<|\"|>"),
-      "review complete"
-    ]);
+    if (profile === "native") {
+      let pass = 0;
+      mocks.streamChat.mockImplementation(async function* () {
+        if (pass++ === 0) {
+          yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["test"]}', id: "call_review_process" };
+        } else {
+          yield { kind: "text", text: "review complete" };
+        }
+      });
+    } else {
+      mockLegacyFallback([
+        gemmaCall("run_command", "command:<|\"|>npm test<|\"|>"),
+        "review complete"
+      ]);
+    }
 
     const { ChatSession } = await import("../src/chat/session.js");
     const record = newRecord();
@@ -1747,16 +2376,17 @@ describe("ChatSession", () => {
     );
     expect(proposed).toMatchObject({ category: "command", approvalRequired: true });
     expect(mocks.runCommand).not.toHaveBeenCalled();
+    expect(mocks.runProcess).not.toHaveBeenCalled();
 
     session.approve(toolId, true);
     await turn;
-    expect(mocks.runCommand).toHaveBeenCalledOnce();
+    expect(profile === "native" ? mocks.runProcess : mocks.runCommand).toHaveBeenCalledOnce();
     expect(events.some(event => event.kind === "planFinal")).toBe(false);
     expect(events.some(event => event.kind === "summary")).toBe(true);
   });
 
   it("rejects write calls in review mode even when write auto-approval is enabled", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-review-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-review-"));
     mocks.settings.toolCallingMode = "native";
     mocks.settings.autoapproveWrites = true;
     mocks.streamChat.mockImplementation(async function* () {
@@ -1790,8 +2420,7 @@ describe("ChatSession", () => {
     await expect(fs.stat(path.join(ws, "blocked.txt"))).rejects.toThrow();
   });
 
-  it("still requires approval for a safe-listed command when autoapproveCommands is off", async () => {
-    mocks.settings.safeCommands = [{ match: "npm test", description: "Run tests" }];
+  it("still requires approval for a command when autoapproveCommands is off", async () => {
     mocks.settings.autoapproveCommands = false;
     mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "ok", stderr: "", truncated: false });
 
@@ -1821,7 +2450,7 @@ describe("ChatSession", () => {
     const proposed = events.find(
       (e): e is Extract<UiEvent, { kind: "toolCallProposed" }> => e.kind === "toolCallProposed"
     );
-    expect(proposed?.category).toBe("safeCmd");
+    expect(proposed?.category).toBe("command");
     expect(proposed?.approvalRequired).toBe(true);
     expect(mocks.runCommand).not.toHaveBeenCalled();
 
@@ -1831,8 +2460,7 @@ describe("ChatSession", () => {
     expect(mocks.runCommand).toHaveBeenCalledOnce();
   });
 
-  it("requires explicit approval for an unlisted command even when command auto-approval is on", async () => {
-    mocks.settings.safeCommands = [{ match: "npm test", description: "Run tests" }];
+  it("auto-approves arbitrary commands when command auto-approval is on", async () => {
     mocks.settings.autoapproveCommands = true;
     mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "published", stderr: "", truncated: false });
 
@@ -1844,29 +2472,21 @@ describe("ChatSession", () => {
 
     const { ChatSession } = await import("../src/chat/session.js");
     const events: UiEvent[] = [];
-    let resolveProposed: (id: string) => void = () => undefined;
-    const proposedId = new Promise<string>(resolve => { resolveProposed = resolve; });
     const session = new ChatSession({
       storage: { save: vi.fn(async () => undefined) } as never,
       workspaceRoot: "/tmp/workspace",
       record: newRecord(),
       emit: event => {
         events.push(event);
-        if (event.kind === "toolCallProposed") resolveProposed(event.toolId);
       }
     });
 
-    const turn = session.sendUserMessage("publish it");
-    const toolId = await proposedId;
+    await session.sendUserMessage("publish it");
     const proposed = events.find(
       (event): event is Extract<UiEvent, { kind: "toolCallProposed" }> => event.kind === "toolCallProposed"
     );
     expect(proposed?.category).toBe("command");
-    expect(proposed?.approvalRequired).toBe(true);
-    expect(mocks.runCommand).not.toHaveBeenCalled();
-
-    session.approve(toolId, true);
-    await turn;
+    expect(proposed?.approvalRequired).toBe(false);
     expect(mocks.runCommand).toHaveBeenCalledWith(
       "npm publish",
       "/tmp/workspace",
@@ -1875,11 +2495,10 @@ describe("ChatSession", () => {
     );
   });
 
-  it("does not execute an unlisted command when the user rejects it", async () => {
-    mocks.settings.safeCommands = [];
-    mocks.settings.autoapproveCommands = true;
+  it("does not execute a command when the user rejects it", async () => {
+    mocks.settings.autoapproveCommands = false;
     mocks.streamChat.mockImplementation(async function* () {
-      yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["publish"]}', id: "call_unlisted" };
+      yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["publish"]}', id: "call_rejected" };
     });
 
     const { ChatSession } = await import("../src/chat/session.js");
@@ -1951,7 +2570,7 @@ describe("ChatSession", () => {
   });
 
   it("labels an orphaned malformed Qwen edit with its actual streamed tool name", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "old\n", "utf8");
     mocks.settings.toolCallingMode = "compat-qwen3";
     mocks.settings.autoapproveWrites = true;
@@ -1988,7 +2607,7 @@ describe("ChatSession", () => {
   });
 
   it("rejects an edit that omits its required old-content precondition", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\n", "utf8");
     mocks.settings.autoapproveWrites = true;
     const responses = [
@@ -2045,7 +2664,7 @@ describe("ChatSession", () => {
   });
 
   it("executes an unclosed tool call whose body is complete JSON (qwen3)", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "compat-qwen3";
     // Only the closing </tool_call> tag was cut off; the call itself is whole.
@@ -2197,7 +2816,7 @@ describe("ChatSession", () => {
   });
 
   it("warns about shifted line numbers when an edit changes the line count", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
     mocks.settings.autoapproveWrites = true;
 
@@ -2234,7 +2853,7 @@ describe("ChatSession", () => {
   });
 
   it("rejects a same-reply line edit after an earlier edit shifted the file's line count", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
     mocks.settings.autoapproveWrites = true;
 
@@ -2266,7 +2885,7 @@ describe("ChatSession", () => {
   });
 
   it("defers a same-reply follow-up line edit even when the first kept the same line count", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
     mocks.settings.autoapproveWrites = true;
 
@@ -2296,7 +2915,7 @@ describe("ChatSession", () => {
   });
 
   it("refuses edit content that pastes read_file's line-number prefixes back", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
     mocks.settings.autoapproveWrites = true;
 
@@ -2328,7 +2947,7 @@ describe("ChatSession", () => {
   });
 
   it("returns real line numbers and a range header for ranged read_file calls", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\nfour\n", "utf8");
     mocks.settings.toolCallingMode = "compat-qwen3";
     // snake_case range keys, as local models commonly emit them.
@@ -2424,18 +3043,36 @@ describe("ChatSession", () => {
     expect(tokenEvents.some(e => e.total >= 100)).toBe(true);
   });
 
-  it("settles a completed tool before its result triggers automatic compaction", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+  it.each([true, false])("keeps auto compaction active until its new prompt is processed (%s)", async reportProgress => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "large.txt"), "TRIGGER_COMPACTION\n", "utf8");
     mocks.settings.autoCompact = true;
     mocks.settings.autoCompactThresholdPercent = 50;
     mocks.tokenize.mockImplementation(async (_endpoint: string, text: string) =>
       text.includes("TRIGGER_COMPACTION") ? 20_000 : 1
     );
-    mockLegacyFallback([
-      gemmaCall("read_file", "path:<|\"|>large.txt<|\"|>"),
-      "done"
-    ]);
+    let call = 0;
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: { onResponseAccepted?: () => void }) {
+      if (call++ === 0) throw new mocks.NativeToolsUnsupportedError("tools param requires --jinja flag");
+      request.onResponseAccepted?.();
+      if (call === 2) {
+        yield { kind: "text", text: gemmaCall("read_file", "path:<|\"|>large.txt<|\"|>") };
+      } else {
+        if (reportProgress) yield { kind: "promptProgress", processedTokens: 128, totalTokens: 2048 };
+        const compacted = events.find(event => event.kind === "compactEnd");
+        expect(compacted).toMatchObject({ status: "executed" });
+        if (compacted?.kind !== "compactEnd") throw new Error("Missing compaction");
+        const ingested = () => !contextActivityIds(events).includes(compacted.compactId);
+        expect(ingested()).toBe(false);
+        expect(contextActivityIds(events)).toEqual([compacted.compactId]);
+        if (reportProgress) {
+          yield { kind: "promptProgress", processedTokens: 2048, totalTokens: 2048 };
+          expect(ingested()).toBe(true);
+        }
+        yield { kind: "text", text: "done" };
+        expect(ingested()).toBe(true);
+      }
+    });
 
     const { ChatSession } = await import("../src/chat/session.js");
     const record = newRecord();
@@ -2462,6 +3099,17 @@ describe("ChatSession", () => {
     expect(compactIndex).toBeGreaterThan(-1);
     expect(resolvedIndex).toBeGreaterThan(-1);
     expect(resolvedIndex).toBeLessThan(compactIndex);
+    const readIngestionEnd = events.findIndex(event => event.kind === "contextActivity" && !event.activityIds.length);
+    expect(readIngestionEnd).toBeGreaterThan(resolvedIndex);
+    expect(readIngestionEnd).toBeLessThan(compactIndex);
+    const compactEndIndex = events.findIndex(event => event.kind === "compactEnd");
+    expect(compactEndIndex).toBeGreaterThan(compactIndex);
+    const continuation = events.slice(compactEndIndex + 1);
+    expect(continuation.some(event => event.kind === "turnPreparing" && event.reason === "context"))
+      .toBe(false);
+    expect(continuation).toContainEqual({ kind: "turnPreparing", reason: "server" });
+    expect(continuation).toContainEqual(expect.objectContaining({ kind: "text", delta: "done" }));
+    expect(events.some(event => event.kind === "abort")).toBe(false);
   });
 
   it("runs update_todos without approval and feeds the checklist back to the model", async () => {
@@ -2568,6 +3216,60 @@ function newRecord(): ChatRecord {
 }
 
 describe("separate transcript and model context", () => {
+  it.each(["complete", "cancel", "error"])("attributes an idle manual compaction to the next prompt, including %s", async outcome => {
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.toolCallingMode = "native";
+    record.title = "Existing chat";
+    record.messages = Array.from({ length: 8 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" as const : "assistant" as const,
+      content: `history ${index}`, ts: index + 1
+    }));
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace", record, emit: event => events.push(event)
+    });
+    await session.compactNow();
+    expect(mocks.streamChat).not.toHaveBeenCalled();
+    const compacted = events.find(event => event.kind === "compactEnd");
+    expect(compacted).toMatchObject({ status: "executed" });
+    expect(contextActivityIds(events)).toEqual([]);
+    if (compacted?.kind !== "compactEnd") throw new Error("Missing compaction");
+    events.length = 0;
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: { onResponseAccepted?: () => void }) {
+      request.onResponseAccepted?.();
+      pass++;
+      const needsIngestion = pass === 1 || outcome !== "complete";
+      if (needsIngestion) {
+        expect(contextActivityIds(events)).toEqual([compacted.compactId]);
+        expect(events).toContainEqual(compacted);
+      }
+      yield { kind: "promptProgress", processedTokens: 128, totalTokens: 2048 };
+      expect(events).not.toContainEqual({ kind: "contextActivity", activityIds: [] });
+      if (pass === 1 && outcome !== "complete") {
+        if (outcome === "cancel") session.cancel();
+        throw new Error(outcome === "cancel" ? "Cancelled" : "Server disconnected");
+      }
+      yield { kind: "promptProgress", processedTokens: 2048, totalTokens: 2048 };
+      if (needsIngestion) expect(events).toContainEqual({ kind: "contextActivity", activityIds: [] });
+      yield { kind: "text", text: "Answer" };
+    });
+    await session.sendUserMessage("Continue");
+    expect(events).toContainEqual({ kind: "contextActivity", activityIds: [] });
+    expect(events).not.toContainEqual({ kind: "turnPreparing", reason: "context" });
+    if (outcome !== "complete") expect(events).toContainEqual({ kind: "abort", reason: outcome === "cancel" ? "Cancelled" : "Server disconnected" });
+    else expect(events.some(event => event.kind === "abort")).toBe(false);
+
+    events.length = 0;
+    await session.sendUserMessage("Continue again");
+    expect(pass).toBe(2);
+    expect(events.some(event => event.kind === "abort")).toBe(false);
+    expect(events).not.toContainEqual({ kind: "turnPreparing", reason: "context" });
+    expect(events.some(event => event.kind === "contextActivity" && event.activityIds.includes(compacted.compactId))).toBe(outcome !== "complete");
+  });
+
   it("saves original messages through compaction and reopens using only compacted context", async () => {
     mocks.settings.toolCallingMode = "native";
     const { ChatSession } = await import("../src/chat/session.js");
@@ -2618,173 +3320,242 @@ describe("separate transcript and model context", () => {
   });
 });
 
-describe("workspace memories in model context", () => {
-  it("preserves more than five memories on reopen and applies changed count limits without retrieving new sources", async () => {
-    mocks.settings.memoryEnabled = true;
-    mocks.settings.toolCallingMode = "native";
-    mocks.streamChat.mockImplementation(async function* () { yield { kind: "text", text: "Done." }; });
-    const { ChatStorage } = await import("../src/chat/storage.js");
-    const { transcriptRevision } = await import("../src/chat/memory.js");
-    const { ChatSession } = await import("../src/chat/session.js");
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "llh-memory-count-"));
-    try {
-      const storage = new ChatStorage(dir, path.join(dir, "chats"));
-      for (let i = 0; i < 12; i++) {
-        const source = storage.newRecord("native");
-        source.title = "Parser";
-        source.messages = [{ role: "user", content: "Parser architecture", ts: 1 }];
-        source.memory = { text: `Parser MEMORY_COUNT_${i}`, sourceRevision: transcriptRevision(source), generatedAt: i + 1, manual: false, enabled: true };
-        await storage.save(source);
-      }
-      let session = new ChatSession({ storage, workspaceRoot: dir, record: storage.newRecord("native"), emit: () => undefined });
-      const sendAndCheck = async (count: number) => {
-        await session.sendUserMessage("Explain parser architecture");
-        const system = JSON.stringify(mocks.streamChat.mock.calls.at(-1)![1].messages[0]);
-        expect(system.match(/MEMORY_COUNT_/g)).toHaveLength(count);
-        expect(session.getRecord().memoryUsage).toHaveLength(count);
-      };
-      await sendAndCheck(10);
-      const saved = (await storage.load(session.getRecord().id))!;
-      expect(saved.memorySelection).toHaveLength(10);
-      expect(saved.memoryUsage).toHaveLength(10);
-      session = new ChatSession({ storage, workspaceRoot: dir, record: saved, emit: () => undefined });
-      await sendAndCheck(10);
-      mocks.settings.memoryMaxCount = 3;
-      await sendAndCheck(3);
-      expect(session.getRecord().memorySelection).toHaveLength(10);
-      mocks.settings.memoryMaxCount = 12;
-      await sendAndCheck(10);
-      session = new ChatSession({ storage, workspaceRoot: dir, record: storage.newRecord("native"), emit: () => undefined });
-      await sendAndCheck(12);
-      expect((await storage.load(session.getRecord().id))!.memorySelection).toHaveLength(12);
-    } finally { await fs.rm(dir, { recursive: true, force: true }); }
-  });
 
-  it.each(["native", "compat-qwen3"] as const)("injects only the current workspace's memories in %s prompts, including saved snapshots", async profile => {
+describe("workspace memory tools", () => {
+  it.each([
+    ["native", "act"], ["native", "plan"], ["native", "review"],
+    ["compat-qwen3", "act"], ["compat-qwen3", "plan"], ["compat-qwen3", "review"]
+  ] as const)("searches then recalls within the active workspace in %s/%s", async (profile, mode) => {
     mocks.settings.memoryEnabled = true;
     mocks.settings.toolCallingMode = profile;
-    mocks.streamChat.mockImplementation(async function* () { yield { kind: "text", text: "Done." }; });
     const { ChatStorage } = await import("../src/chat/storage.js");
-    const { transcriptRevision } = await import("../src/chat/memory.js");
+    const { transcriptRevision, searchMemories } = await import("../src/chat/memory.js");
     const { ChatSession } = await import("../src/chat/session.js");
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "llh-memory-isolation-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "locality-memory-tools-"));
     try {
-      const roots = [path.join(dir, "project"), path.join(dir, "project-other"), path.join(dir, "project", "nested")];
-      const stores = roots.map(root => new ChatStorage(root, path.join(dir, "shared-chats")));
-      const snapshots: NonNullable<ChatRecord["memorySelection"]> = [];
-      for (const [index, storage] of stores.entries()) {
-        const source = storage.newRecord(profile);
-        source.title = "Parser architecture";
-        source.messages = [{ role: "user", content: "Parser architecture", ts: 1 }];
-        source.memory = {
-          text: `Parser architecture: WORKSPACE_${index}_MEMORY_SENTINEL`,
-          sourceRevision: transcriptRevision(source), generatedAt: index + 1, enabled: true, manual: false
-        };
-        await storage.save(source);
-        snapshots.push({ sourceId: source.id, title: source.title, ...source.memory });
-      }
-      for (const [index, storage] of stores.entries()) {
-        const events: UiEvent[] = [];
-        const current = storage.newRecord(profile);
-        let session = new ChatSession({ storage, workspaceRoot: roots[index], record: current, emit: e => events.push(e) });
-        const assertPromptIsolation = () => {
-          const messages = mocks.streamChat.mock.calls.at(-1)![1].messages as { role: string; content: unknown }[];
-          const system = JSON.stringify(messages.filter(message => message.role === "system"));
-          expect(system).toContain(`WORKSPACE_${index}_MEMORY_SENTINEL`);
-          for (const other of stores.keys()) {
-            if (other !== index) expect(JSON.stringify(messages)).not.toContain(`WORKSPACE_${other}_MEMORY_SENTINEL`);
-          }
-          expect(events.filter(event => event.kind === "memoriesUsed").at(-1)).toMatchObject({
-            memories: [{ sourceId: snapshots[index].sourceId }]
-          });
-        };
-        await session.sendUserMessage("Explain parser architecture");
-        expect(current.memorySelection?.map(memory => memory.sourceId)).toEqual([snapshots[index].sourceId]);
-        assertPromptIsolation();
-
-        // Even a saved selection containing valid foreign source IDs must be
-        // filtered again before it reaches a reopened chat's system prompt.
-        current.memorySelection = snapshots;
-        await storage.save(current);
-        session = new ChatSession({ storage, workspaceRoot: roots[index], record: (await storage.load(current.id))!, emit: e => events.push(e) });
-        await session.sendUserMessage("Continue parser discussion");
-        assertPromptIsolation();
-      }
-    } finally { await fs.rm(dir, { recursive: true, force: true }); }
-  });
-
-  it("selects once, persists on reopen, survives compaction separately, and filters excluded or disabled memories", async () => {
-    mocks.settings.memoryEnabled = true;
-    mocks.settings.toolCallingMode = "native";
-    mocks.streamChat.mockImplementation(async function* () { yield { kind: "text", text: "Done." }; });
-    const { ChatStorage } = await import("../src/chat/storage.js");
-    const { transcriptRevision } = await import("../src/chat/memory.js");
-    const { ChatSession } = await import("../src/chat/session.js");
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "llh-memory-session-"));
-    try {
-      const storage = new ChatStorage(dir, path.join(dir, "chats"));
-      const source = storage.newRecord("native"); source.title = "Parser";
-      source.messages = [{ role: "user", content: "Parser architecture", ts: 1 }];
-      source.memory = { text: "Parser: MEMORY_SENTINEL", sourceRevision: transcriptRevision(source), generatedAt: 1, manual: false, enabled: true };
+      const storage = new ChatStorage(path.join(dir, "workspace"), path.join(dir, "chats"));
+      const neighbor = new ChatStorage(path.join(dir, "workspace-other"), path.join(dir, "chats"));
+      const source = storage.newRecord(profile);
+      source.title = "Parser decisions";
+      source.messages = [{ role: "user", content: "Parser design", ts: 1 }];
+      source.memory = { text: "Parser LOCAL_CONTENT_SENTINEL", sourceRevision: transcriptRevision(source), generatedAt: Date.UTC(2026, 8, 11, 12, 30), manual: false, enabled: true };
       await storage.save(source);
-      const current = storage.newRecord("native"); await storage.save(current);
+      const outside = neighbor.newRecord(profile);
+      outside.title = "Parser outside";
+      outside.messages = [{ role: "user", content: "Parser", ts: 1 }];
+      outside.memory = { ...source.memory, text: "Parser OTHER_WORKSPACE_SENTINEL", sourceRevision: transcriptRevision(outside) };
+      await neighbor.save(outside);
+      const record = storage.newRecord(profile);
+      record.mode = mode;
       const events: UiEvent[] = [];
-      let session = new ChatSession({ storage, workspaceRoot: dir, record: current, emit: e => events.push(e) });
-      await session.sendUserMessage("Explain parser architecture");
-      expect(current.memorySelection).toHaveLength(1);
-      expect(JSON.stringify(mocks.streamChat.mock.calls[0][1].messages)).toContain("MEMORY_SENTINEL");
-      expect(JSON.stringify(current.messages)).not.toContain("MEMORY_SENTINEL");
-      expect(current.totalTokens).toBeLessThan(100);
-      session = new ChatSession({ storage, workspaceRoot: dir, record: (await storage.load(current.id))!, emit: e => events.push(e) });
-      const secondSource = storage.newRecord("native"); secondSource.title = "New parser";
-      secondSource.messages = [{ role: "user", content: "Parser", ts: 1 }];
-      secondSource.memory = { text: "Parser: NEW_MEMORY_SENTINEL", sourceRevision: transcriptRevision(secondSource), generatedAt: 2, manual: false, enabled: true };
-      await storage.save(secondSource);
-      await session.sendUserMessage("Continue parser work");
-      expect(JSON.stringify(mocks.streamChat.mock.calls.at(-1)![1].messages)).not.toContain("NEW_MEMORY_SENTINEL");
-      await session.sendUserMessage("Check parser work");
-      mocks.complete.mockClear();
-      await session.compactNow();
-      expect(JSON.stringify(mocks.complete.mock.calls)).not.toContain("MEMORY_SENTINEL");
-      expect(session.getRecord().memorySelection).toHaveLength(1);
-      await session.sendUserMessage("Parser follow-up");
-      expect(JSON.stringify(mocks.streamChat.mock.calls.at(-1)![1].messages)).toContain("MEMORY_SENTINEL");
-      await storage.updateMemory(source.id, rec => ({ ...rec.memory!, enabled: false }));
-      await session.sendUserMessage("Parser again");
-      expect(JSON.stringify(mocks.streamChat.mock.calls.at(-1)![1].messages)).not.toContain("MEMORY_SENTINEL");
-      await storage.updateMemory(source.id, rec => ({ ...rec.memory!, enabled: true }));
-      mocks.settings.memoryEnabled = false;
-      await session.sendUserMessage("Parser with memory disabled");
-      expect(JSON.stringify(mocks.streamChat.mock.calls.at(-1)![1].messages)).not.toContain("MEMORY_SENTINEL");
-      expect(events).toContainEqual({ kind: "memoriesUsed", memories: [] });
-      mocks.settings.memoryEnabled = true;
-      const firstUser = session.getRecord().messages.find(message => message.role === "user")!;
-      await session.editUserMessage(firstUser.ts, "Explain the new parser");
-      expect(JSON.stringify(mocks.streamChat.mock.calls.at(-1)![1].messages)).toContain("NEW_MEMORY_SENTINEL");
+      let step = 0;
+      let selected: { name: string; id: string };
+      const requests: { messages: { role: string; content: unknown }[]; tools?: { function: { name: string } }[] }[] = [];
+      mocks.streamChat.mockImplementation(async function* (_endpoint, request) {
+        requests.push(request);
+        if (profile !== "native" && request.tools) throw new mocks.NativeToolsUnsupportedError("tools param requires --jinja flag");
+        const call = (name: string, args: object) => profile === "native"
+          ? { kind: "toolCall", name, argsJson: JSON.stringify(args), id: `memory_call_${step}` }
+          : { kind: "text", text: `<tool_call>${JSON.stringify({ name, arguments: args })}</tool_call>` };
+        if (step++ === 0) {
+          expect(JSON.stringify(request.messages)).not.toContain("LOCAL_CONTENT_SENTINEL");
+          yield call("search_memories", { query: "parser" });
+        } else if (step === 2) {
+          const result = JSON.parse(record.messages.filter(m => m.role === "tool").at(-1)!.content);
+          expect(events.filter(e => e.kind === "memoriesUsed").every(e => e.memories.length === 0)).toBe(true);
+          expect(result.memories).toHaveLength(1);
+          expect(result.memories[0]).toMatchObject({ name: source.title, date: "2026-09-11T12:30Z" });
+          expect(JSON.stringify(result)).not.toContain("LOCAL_CONTENT_SENTINEL");
+          selected = result.memories[0];
+          yield call("recall_memory", { name: selected.name, id: selected.id });
+        } else {
+          yield { kind: "text", text: "Done." };
+        }
+      });
+      const session = new ChatSession({ storage, workspaceRoot: record.workspaceRoot, record, emit: e => events.push(e) });
+      await session.refreshMemoryVisibility();
+      expect(events.at(-1)).toEqual({ kind: "memoriesUsed", memories: [] });
+      await session.sendUserMessage("Explain the parser");
+      const result = JSON.parse(record.messages.filter(m => m.role === "tool").at(-1)!.content);
+      expect(result).toMatchObject({ name: source.title, contents: source.memory.text, date: "2026-09-11T12:30Z" });
+      for (const request of requests) {
+        expect(JSON.stringify(request.messages.filter(m => m.role === "system"))).not.toContain("LOCAL_CONTENT_SENTINEL");
+        expect(JSON.stringify(request)).not.toContain("OTHER_WORKSPACE_SENTINEL");
+      }
+      const outsideMatch = searchMemories("parser", [outside], record.id).memories[0];
+      expect(result.id).not.toBe(outsideMatch.id);
+      expect(events.filter(e => e.kind === "toolCallProposed")).toHaveLength(2);
+      expect(events.filter(e => e.kind === "toolCallProposed").every(e => e.approvalRequired === false)).toBe(true);
+      expect(events).toContainEqual(expect.objectContaining({ kind: "memoriesUsed", memories: [expect.objectContaining({ text: source.memory.text })] }));
+      const saved = (await storage.load(record.id))!;
+      expect(saved.recalledMemories).toHaveLength(1);
+      const reopened = new ChatSession({ storage, workspaceRoot: saved.workspaceRoot, record: saved, emit: e => events.push(e) });
+      await reopened.refreshMemoryVisibility();
+      expect(events.at(-1)).toMatchObject({ kind: "memoriesUsed", memories: [{ sourceId: source.id }] });
     } finally { await fs.rm(dir, { recursive: true, force: true }); }
   });
 
-  it("drops memories when they would consume the current request's headroom", async () => {
-    mocks.settings.memoryEnabled = true;
-    mocks.settings.toolCallingMode = "native";
-    mocks.fetchServerContextSize.mockResolvedValue(8192);
-    mocks.tokenize.mockImplementation(async (_endpoint: string, text: string) => text.includes("MEMORY_SENTINEL") ? 500 : 1);
-    mocks.streamChat.mockImplementation(async function* () { yield { kind: "text", text: "Done." }; });
-    const { ChatStorage } = await import("../src/chat/storage.js");
-    const { transcriptRevision } = await import("../src/chat/memory.js");
+  it.each(["search_memories", "recall_memory"])("does not expose or execute %s while disabled", async name => {
     const { ChatSession } = await import("../src/chat/session.js");
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "llh-memory-budget-"));
+    const records = vi.fn();
+    let step = 0;
+    mocks.streamChat.mockImplementation(async function* (_endpoint, request) {
+      expect(request.tools.map((tool: { function: { name: string } }) => tool.function.name)).not.toContain(name);
+      expect(request.messages[0].content).not.toContain("search_memories");
+      expect(request.messages[0].content).not.toContain("recall_memory");
+      if (step++ === 0) yield { kind: "toolCall", name, argsJson: name === "search_memories" ? '{"query":"parser"}' : '{"name":"Parser","id":"123"}', id: "disabled_call" };
+      else yield { kind: "text", text: "Done." };
+    });
+    const record = newRecord();
+    const session = new ChatSession({ storage: { save: vi.fn(), records } as never, workspaceRoot: "/tmp/workspace", record, emit: () => undefined });
+    await session.sendUserMessage("check");
+    expect(records).not.toHaveBeenCalled();
+    expect(record.messages.find(m => m.role === "tool")?.toolCall?.status).toBe("rejected");
+  });
+
+  it("rechecks the switch after awaiting read approval", async () => {
+    mocks.settings.memoryEnabled = true;
+    mocks.settings.autoapproveReads = false;
+    const { ChatSession } = await import("../src/chat/session.js");
+    const records = vi.fn();
+    let step = 0;
+    let propose: (id: string) => void = () => undefined;
+    const proposed = new Promise<string>(resolve => { propose = resolve; });
+    mocks.streamChat.mockImplementation(async function* () {
+      if (step++ === 0) yield { kind: "toolCall", name: "search_memories", argsJson: '{"query":"parser"}', id: "pending_search" };
+      else yield { kind: "text", text: "Done." };
+    });
+    const record = newRecord();
+    const session = new ChatSession({ storage: { save: vi.fn(), records } as never, workspaceRoot: "/tmp/workspace", record,
+      emit: e => { if (e.kind === "toolCallProposed") propose(e.toolId); } });
+    const turn = session.sendUserMessage("check");
+    const toolId = await proposed;
+    mocks.settings.memoryEnabled = false;
+    session.approve(toolId, true);
+    await turn;
+    expect(records).not.toHaveBeenCalled();
+    expect(record.messages.find(m => m.role === "tool")?.content).toContain("Workspace memories are disabled");
+  });
+});
+
+describe("workspace image viewing", () => {
+  it.each([
+    ["image.png", "image/png", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1])],
+    ["photo.jpg", "image/jpeg", Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1])]
+  ])("lists and views %s, retaining pixels after the original file is removed and the chat reloads", async (name, mime, bytes) => {
+    const { ChatSession } = await import("../src/chat/session.js");
+    const { ChatStorage, VISION_TOKEN_RESERVE } = await import("../src/chat/storage.js");
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "locality-view-image-"));
     try {
-      const storage = new ChatStorage(dir, path.join(dir, "chats"));
-      const source = storage.newRecord("native"); source.title = "Parser";
-      source.messages = [{ role: "user", content: "Parser", ts: 1 }];
-      source.memory = { text: "Parser MEMORY_SENTINEL budget probe", sourceRevision: transcriptRevision(source), generatedAt: 1, manual: true, enabled: true };
-      await storage.save(source);
+      const storage = new ChatStorage(root, path.join(root, "chats"));
       const record = storage.newRecord("native");
-      const session = new ChatSession({ storage, workspaceRoot: dir, record, emit: () => undefined });
-      await session.sendUserMessage("Parser");
-      expect(record.memorySelection).toEqual([]); // 5% of 8192 < 500
-      expect(JSON.stringify(mocks.streamChat.mock.calls[0][1].messages)).not.toContain("MEMORY_SENTINEL");
-    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+      await fs.writeFile(path.join(root, name), bytes);
+      let pass = 0;
+      mocks.streamChat.mockImplementation(async function* () {
+        if (pass++ === 0) yield { kind: "toolCall", name: "list_dir", argsJson: '{"path":"."}', id: "list" };
+        else if (pass === 2) yield { kind: "toolCall", name: "view_image", argsJson: JSON.stringify({ path: name }), id: "view" };
+        else yield { kind: "text", text: "Image inspected." };
+      });
+      const events: UiEvent[] = [];
+      const session = new ChatSession({ storage, workspaceRoot: root, record, emit: event => events.push(event) });
+      await session.sendUserMessage("Inspect the image in this directory");
+      expect(mocks.streamChat).toHaveBeenCalledTimes(3);
+      const request = mocks.streamChat.mock.calls[2][1];
+      expect(request.tools.some((tool: { function: { name: string } }) => tool.function.name === "view_image")).toBe(true);
+      const imageMessage = request.messages.find((message: { content: unknown }) => Array.isArray(message.content));
+      expect(imageMessage.content).toContainEqual({ type: "image_url", image_url: { url: `data:${mime};base64,${bytes.toString("base64")}` } });
+      expect(request.messages.find((message: { role: string; name?: string }) => message.role === "tool" && message.name === "view_image").content).toContain(`Image loaded: ${name}`);
+      const stored = record.messages.find(message => message.toolCall?.name === "view_image")!;
+      expect(stored.toolCall?.status).toBe("executed");
+      expect(stored.tokens).toBeGreaterThanOrEqual(VISION_TOKEN_RESERVE);
+      expect(stored.attachments).toHaveLength(1);
+      expect(events.find(event => event.kind === "toolCallProposed" && event.toolName === "view_image")).toMatchObject({ category: "read", approvalRequired: false });
+      await fs.unlink(path.join(root, name));
+      const restored = (await storage.load(record.id))!;
+      mocks.streamChat.mockClear();
+      const reloaded = new ChatSession({ storage, workspaceRoot: root, record: restored, emit: vi.fn() });
+      await reloaded.sendUserMessage("Look at the same image again");
+      expect(mocks.streamChat.mock.calls[0][1].messages).toContainEqual(imageMessage);
+    } finally { await fs.rm(root, { recursive: true, force: true }); }
+  });
+
+  it("omits and refuses view_image when vision support is absent", async () => {
+    mocks.supportsVision = false;
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (pass++ === 0) yield { kind: "toolCall", name: "view_image", argsJson: '{"path":"image.png"}', id: "view" };
+      else yield { kind: "text", text: "Unavailable." };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const storage = { save: vi.fn(), importAttachment: vi.fn() };
+    const record = newRecord();
+    const session = new ChatSession({ storage: storage as never, workspaceRoot: "/tmp/workspace", record, emit: vi.fn() });
+    await session.sendUserMessage("Inspect an image");
+    expect(mocks.streamChat.mock.calls[0][1].tools.some((tool: { function: { name: string } }) => tool.function.name === "view_image")).toBe(false);
+    expect(storage.importAttachment).not.toHaveBeenCalled();
+    expect(record.messages.find(message => message.toolCall?.name === "view_image")?.toolCall?.status).not.toBe("executed");
+  });
+
+  it("blocks existing image attachments before inference when the connected model loses vision", async () => {
+    mocks.supportsVision = false;
+    const { ChatSession } = await import("../src/chat/session.js");
+    const events: UiEvent[] = [];
+    const storage = { save: vi.fn(), attachmentDataUrl: vi.fn() };
+    const session = new ChatSession({ storage: storage as never, workspaceRoot: "/tmp/workspace", record: newRecord(), emit: event => events.push(event) });
+    await session.sendUserMessage("Inspect", [{ id: "image", fileName: "image.png", mimeType: "image/png", extension: "png", byteLength: 10 }]);
+    expect(mocks.streamChat).not.toHaveBeenCalled();
+    expect(storage.attachmentDataUrl).not.toHaveBeenCalled();
+    expect(events).toContainEqual(expect.objectContaining({ kind: "abort", reason: expect.stringContaining("vision support") }));
+  });
+
+  it.each(["../outside.png", "escape.png"])("refuses a workspace escape via %s", async imagePath => {
+    const { ChatSession } = await import("../src/chat/session.js");
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "locality-image-guard-"));
+    try {
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(workspace);
+      await fs.writeFile(path.join(root, "outside.png"), "outside");
+      await fs.symlink(path.join(root, "outside.png"), path.join(workspace, "escape.png"));
+      let pass = 0;
+      mocks.streamChat.mockImplementation(async function* () {
+        if (pass++ === 0) yield { kind: "toolCall", name: "view_image", argsJson: JSON.stringify({ path: imagePath }), id: "view" };
+        else yield { kind: "text", text: "Read refused." };
+      });
+      const storage = { save: vi.fn(), importAttachment: vi.fn() };
+      const record = newRecord();
+      const session = new ChatSession({ storage: storage as never, workspaceRoot: workspace, record, emit: vi.fn() });
+      await session.sendUserMessage("Inspect");
+      expect(storage.importAttachment).not.toHaveBeenCalled();
+      expect(record.messages.find(message => message.toolCall?.name === "view_image")).toMatchObject({ toolCall: { status: "failed" }, content: expect.stringContaining("outside the workspace") });
+    } finally { await fs.rm(root, { recursive: true, force: true }); }
+  });
+});
+
+
+describe("tool presentation data", () => {
+  it("persists a separate display result without sending it to the model", async () => {
+    mocks.settings.toolCallingMode = "native";
+    let turn = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (turn++ === 0) yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"echo","args":["ok"]}', id: "display_test" };
+      else yield { kind: "text", text: "done" };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const session = new ChatSession({ storage: { save: vi.fn(async () => undefined) } as never, workspaceRoot: "/tmp/workspace", record, emit: event => events.push(event) });
+    const result = "Complete result for the model";
+    const displayResult = "Separate UI-only payload";
+    (session as unknown as { features: import("../src/build/contracts.js").FeatureRuntime[] }).features = [{
+      tools: ["run_process"], category: () => "command", needsApproval: () => false,
+      prepare: async () => ({}), execute: async () => ({ result, displayResult })
+    }];
+    await session.sendUserMessage("show result");
+    expect(record.messages.find(message => message.role === "tool")).toMatchObject({ content: result, toolCall: { displayResult } });
+    expect(events).toContainEqual(expect.objectContaining({ kind: "toolCallResolved", status: "executed", resultPreview: displayResult }));
+    expect(mocks.streamChat).toHaveBeenCalledTimes(2);
+    const prompt = JSON.stringify(mocks.streamChat.mock.calls[1][1].messages);
+    expect(prompt).toContain(result);
+    expect(prompt).not.toContain(displayResult);
   });
 });

@@ -2,14 +2,14 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ChatStorage, CHATS_DIR, isValidAttachment, isValidChatId } from "../src/chat/storage.js";
+import { ChatStorage, isValidAttachment, isValidChatId } from "../src/chat/storage.js";
 
 let ws: string;
 let chatsRoot: string;
 
 beforeEach(async () => {
-  ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-storage-"));
-  chatsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llh-chats-"));
+  ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-storage-"));
+  chatsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "locality-chats-"));
 });
 
 afterEach(async () => {
@@ -106,6 +106,46 @@ describe("ChatStorage", () => {
     await expect(fs.readFile(storage.attachmentPath(forked.id, attachment))).resolves.toBeDefined();
   });
 
+  it("keeps typed text files and generic pasted text as independent, persistent assets", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const rec = storage.newRecord("native");
+    const source = path.join(ws, "example.TS");
+    await fs.writeFile(source, "const café = 1;\n");
+    const code = await storage.importAttachment(rec.id, source);
+    const paste = await storage.importAttachmentBytes(rec.id, "Pasted text", Buffer.from("plain notes\n"));
+    expect(code).toMatchObject({ fileName: "example.TS", mimeType: "text/plain", extension: "ts", fileType: "ts" });
+    expect(paste.fileType).toBeUndefined();
+    expect(paste.fileName).toBe("Pasted text");
+    expect(isValidAttachment(code)).toBe(true);
+    expect(isValidAttachment(paste)).toBe(true);
+    expect(isValidAttachment({ ...code, extension: "../../escape" })).toBe(false);
+    expect(isValidAttachment({ ...code, fileType: "py" })).toBe(false);
+    await fs.writeFile(source, "changed source");
+    await expect(storage.attachmentText(rec.id, code)).resolves.toBe("const café = 1;\n");
+    rec.messages.push({ role: "user", content: "Explain", attachments: [code, paste], ts: 1 });
+    await storage.save(rec);
+    const loaded = (await storage.load(rec.id))!;
+    expect(loaded.messages[0].attachments).toEqual([code, paste]);
+    const fork = await storage.fork(loaded);
+    await storage.delete(rec.id);
+    await expect(storage.attachmentText(fork.id, code)).resolves.toBe("const café = 1;\n");
+    await expect(storage.attachmentText(fork.id, paste)).resolves.toBe("plain notes\n");
+  });
+
+  it("accepts empty and BOM-encoded text while rejecting binary or oversized text", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const rec = storage.newRecord("native");
+    const empty = await storage.importAttachmentBytes(rec.id, "empty.txt", Buffer.alloc(0));
+    expect(isValidAttachment(empty)).toBe(true);
+    await expect(storage.attachmentText(rec.id, empty)).resolves.toBe("");
+    const utf16 = await storage.importAttachmentBytes(rec.id, "wide.txt", Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("Hello Ω", "utf16le")]));
+    await expect(storage.attachmentText(rec.id, utf16)).resolves.toBe("Hello Ω");
+    await expect(storage.importAttachmentBytes(rec.id, "binary.txt", Buffer.from([0, 1, 2]))).rejects.toThrow("binary files");
+    await expect(storage.importAttachmentBytes(rec.id, "invalid.txt", Buffer.from([0xc3, 0x28]))).rejects.toThrow("binary files");
+    await expect(storage.importAttachmentBytes(rec.id, "big.txt", Buffer.alloc(1024 * 1024 + 1, 65))).rejects.toThrow("1 MiB");
+    await expect(storage.importAttachmentBytes(rec.id, "../file.txt", Buffer.from("text"))).rejects.toThrow("file name");
+  });
+
   it("rejects chat ids that could escape the chat directory", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
     await fs.writeFile(path.join(chatsRoot, "outside.json"), "{\"id\":\"outside\"}");
@@ -151,7 +191,7 @@ describe("ChatStorage", () => {
     await storage.save(first);
     await storage.save(second);
 
-    const otherWorkspace = path.join(os.tmpdir(), "llh-other-workspace");
+    const otherWorkspace = path.join(os.tmpdir(), "locality-other-workspace");
     const otherStorage = new ChatStorage(otherWorkspace, chatsRoot);
     const other = otherStorage.newRecord("compat-gemma4");
     await otherStorage.save(other);
@@ -197,7 +237,7 @@ describe("ChatStorage", () => {
     });
   });
 
-  it("uses Default reasoning effort for new and legacy chats without a saved mode", async () => {
+  it("uses default values for new chats and missing saved preferences", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
     expect(storage.newRecord("compat-gemma4").reasoningEffort).toBe("default");
     expect(storage.newRecord("compat-gemma4").mode).toBe("act");
@@ -206,70 +246,25 @@ describe("ChatStorage", () => {
     await fs.writeFile(path.join(chatsRoot, `${id}.json`), JSON.stringify({
       id,
       workspaceRoot: ws,
-      title: "Legacy chat",
-      toolCallingMode: "compat-gemma4",
-      planMode: false,
+      title: "Chat without preferences",
       messages: [],
       totalTokens: 0
     }));
 
-    await expect(storage.load(id)).resolves.toMatchObject({ reasoningEffort: "default", mode: "act" });
+    await expect(storage.load(id)).resolves.toMatchObject({
+      reasoningEffort: "default", mode: "act", toolCallingMode: "compat-gemma4"
+    });
   });
 
-  it("migrates legacy plan-mode records and preserves review mode", async () => {
+  it.each(["act", "plan", "review"] as const)("preserves %s mode and current model preferences", async mode => {
     const storage = new ChatStorage(ws, chatsRoot);
-    const planId = "123e4567-e89b-42d3-a456-426614174006";
-    const reviewId = "123e4567-e89b-42d3-a456-426614174007";
-    const base = {
-      workspaceRoot: ws,
-      title: "Mode chat",
-      toolCallingMode: "native",
-      messages: [],
-      totalTokens: 0
-    };
-    await fs.writeFile(path.join(chatsRoot, `${planId}.json`), JSON.stringify({ ...base, id: planId, planMode: true }));
-    await fs.writeFile(path.join(chatsRoot, `${reviewId}.json`), JSON.stringify({ ...base, id: reviewId, mode: "review" }));
+    const record = storage.newRecord("compat-qwen3", "effort:high");
+    record.mode = mode;
+    await storage.save(record);
 
-    await expect(storage.load(planId)).resolves.toMatchObject({ mode: "plan" });
-    await expect(storage.load(reviewId)).resolves.toMatchObject({ mode: "review" });
-  });
-
-  it("migrates the previous thinking-mode names", async () => {
-    const storage = new ChatStorage(ws, chatsRoot);
-    const id = "123e4567-e89b-42d3-a456-426614174004";
-    await fs.writeFile(path.join(chatsRoot, `${id}.json`), JSON.stringify({
-      id,
-      workspaceRoot: ws,
-      title: "Development chat",
-      toolCallingMode: "compat-gemma4",
-      planMode: false,
-      thinkingMode: "expert",
-      messages: [],
-      totalTokens: 0
-    }));
-
-    await expect(storage.load(id)).resolves.toMatchObject({ reasoningEffort: "effort:high" });
-  });
-
-  it("normalizes legacy family records into unified compatibility profiles", async () => {
-    const storage = new ChatStorage(ws, chatsRoot);
-    const id = "123e4567-e89b-42d3-a456-426614174005";
-    await fs.writeFile(path.join(chatsRoot, `${id}.json`), JSON.stringify({
-      id,
-      workspaceRoot: ws,
-      title: "Legacy Qwen chat",
-      modelFamily: "qwen3",
-      planMode: false,
-      messages: [],
-      totalTokens: 0
-    }));
-
-    const loaded = await storage.load(id);
-    expect(loaded?.toolCallingMode).toBe("compat-qwen3");
-    expect(loaded).not.toHaveProperty("modelFamily");
-    if (loaded) await storage.save(loaded);
-    await expect(fs.readFile(path.join(chatsRoot, `${id}.json`), "utf8"))
-      .resolves.not.toContain("modelFamily");
+    await expect(storage.load(record.id)).resolves.toMatchObject({
+      mode, toolCallingMode: "compat-qwen3", reasoningEffort: "effort:high"
+    });
   });
 
   it("forks a chat through the selected assistant response", async () => {
@@ -294,23 +289,6 @@ describe("ChatStorage", () => {
     await expect(storage.load(forked.id)).resolves.toMatchObject({
       messages: [{ content: "first" }, { content: "first answer" }]
     });
-  });
-
-  it("migrates legacy workspace chats into the shared chats directory", async () => {
-    const storage = new ChatStorage(ws, chatsRoot);
-    const legacyDir = path.join(ws, CHATS_DIR);
-    const id = "123e4567-e89b-42d3-a456-426614174002";
-    await fs.mkdir(legacyDir, { recursive: true });
-    await fs.writeFile(path.join(legacyDir, `${id}.json`), JSON.stringify({
-      id,
-      title: "Legacy chat",
-      updatedAt: 30,
-      messages: []
-    }));
-
-    await expect(storage.list()).resolves.toEqual([{ id, title: "Legacy chat", updatedAt: 30 }]);
-    await expect(fs.readFile(path.join(chatsRoot, `${id}.json`), "utf-8")).resolves.toContain("workspaceRoot");
-    await expect(fs.stat(path.join(legacyDir, `${id}.json`))).rejects.toThrow();
   });
 });
 
@@ -352,5 +330,24 @@ describe("saved transcript and context", () => {
     expect(forked.messages).toEqual(rec.messages.slice(0, 2));
     expect(forked.contextMessages).toBeUndefined();
     expect(JSON.stringify(await storage.load(forked.id))).not.toContain("future request");
+  });
+});
+
+describe("image input restrictions", () => {
+  it("rejects selected and pasted images before storing them when vision is unavailable, including extensionless images", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const record = storage.newRecord("native");
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]);
+    await fs.writeFile(path.join(ws, "image.png"), bytes);
+    await expect(storage.importAttachment(record.id, path.join(ws, "image.png"), { allowImages: false })).rejects.toThrow("vision support");
+    await expect(storage.importAttachmentBytes(record.id, "clipboard", bytes, { allowImages: false })).rejects.toThrow("vision support");
+    await expect(fs.readdir(path.join(storage.attachmentsRoot(), record.id))).rejects.toThrow();
+    await expect(storage.importAttachmentBytes(record.id, "notes.txt", Buffer.from("notes"), { allowImages: false })).resolves.toMatchObject({ mimeType: "text/plain" });
+  });
+
+  it("rejects text passed to an image-only read", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const record = storage.newRecord("native");
+    await expect(storage.importAttachmentBytes(record.id, "notes.txt", Buffer.from("notes"), { imageOnly: true })).rejects.toThrow("valid JPEG, PNG, or WebP");
   });
 });

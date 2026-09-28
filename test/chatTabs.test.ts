@@ -4,13 +4,14 @@ import type { ChatRecord, ChatStorage } from "../src/chat/storage.js";
 import type { UiEvent } from "../src/chat/session.js";
 import type { ChatToExt, ExtToChat } from "../src/ui/messaging.js";
 
-const mocks = vi.hoisted(() => ({ sessions: new Map<string, FakeSession>(), input: vi.fn(), picker: vi.fn() }));
+const mocks = vi.hoisted(() => ({ sessions: new Map<string, FakeSession>(), input: vi.fn(), picker: vi.fn(), metadata: vi.fn(), settings: { reasoningEfforts: {}, endpoint: "http://127.0.0.1:8080", model: "model-a" } }));
 vi.mock("vscode", () => ({
   commands: { executeCommand: vi.fn() },
   window: { showInputBox: mocks.input, showOpenDialog: mocks.picker },
   Uri: { file: (path: string) => path }
 }));
-vi.mock("../src/config/settings.js", () => ({ readSettings: () => ({ reasoningEfforts: {} }) }));
+vi.mock("../src/config/settings.js", () => ({ readSettings: () => mocks.settings }));
+vi.mock("../src/llm/client.js", () => ({ fetchServerMetadata: mocks.metadata }));
 interface FakeSession {
   emit(event: UiEvent): void;
   cancel: ReturnType<typeof vi.fn>;
@@ -51,7 +52,7 @@ import { ChatViewProvider } from "../src/ui/chatView/provider.js";
 
 const record = (id: string) => ({ id, title: id, messages: [], reasoningEffort: "default", mode: "act" } as unknown as ChatRecord);
 function setup() {
-  const storage = { list: vi.fn().mockResolvedValue([]), load: vi.fn(), save: vi.fn(), delete: vi.fn(), deleteAll: vi.fn(), deleteAttachment: vi.fn(), importAttachment: vi.fn(), attachmentPath: (id: string) => `/workspace/${id}/image.png` };
+  const storage = { list: vi.fn().mockResolvedValue([]), load: vi.fn(), save: vi.fn(), delete: vi.fn(), deleteAll: vi.fn(), deleteAttachment: vi.fn(), importAttachment: vi.fn(), importAttachmentBytes: vi.fn(), attachmentPath: (id: string) => `/workspace/${id}/image.png` };
   const provider = new ChatViewProvider(
     { workspaceState: { get: vi.fn() } } as unknown as vscode.ExtensionContext,
     () => storage as unknown as ChatStorage, () => "/workspace", vi.fn(), vi.fn(), vi.fn(), vi.fn()
@@ -62,7 +63,12 @@ function setup() {
   const snapshot = () => [...posted].reverse().find(message => "type" in message && message.type === "chatSnapshot") as Extract<ExtToChat, { type: "chatSnapshot" }>;
   return { provider, storage, posted, send, snapshot };
 }
-beforeEach(() => { mocks.sessions.clear(); vi.clearAllMocks(); });
+beforeEach(() => {
+  mocks.sessions.clear();
+  vi.clearAllMocks();
+  mocks.settings.model = "model-a";
+  mocks.metadata.mockReset().mockResolvedValue({ modelAlias: "model-a", contextSize: 32768, supportsVision: false });
+});
 
 describe("independent chat tabs", () => {
   it("reuses the current live session without reloading or cancelling it", async () => {
@@ -75,7 +81,7 @@ describe("independent chat tabs", () => {
     provider.openChat(record("a"));
     expect(mocks.sessions.size).toBe(1);
     expect(a.cancel).not.toHaveBeenCalled();
-    expect(posted.filter(message => !("type" in message && message.type === "recentChats"))).toEqual([]);
+    expect(posted.filter(message => !("type" in message && message.type === "recentChats") && !("kind" in message && message.kind === "visionCapability"))).toEqual([]);
   });
 
   it("restores streamed text, approvals and accounting without leaking background events", async () => {
@@ -96,6 +102,37 @@ describe("independent chat tabs", () => {
     expect(snapshot().events).toContainEqual(expect.objectContaining({ kind: "toolCallProposed", toolId: "approval-a" }));
     expect(snapshot().events).toContainEqual({ kind: "tokens", total: 123, limit: 4096 });
     expect(a.cancel).not.toHaveBeenCalled();
+  });
+
+  it("restores a read that is still waiting for its result to enter the model prompt", async () => {
+    const { provider, snapshot } = setup();
+    const chat = record("a");
+    provider.openChat(chat);
+    const a = mocks.sessions.get("a")!;
+    a.emit({ kind: "turnPreparing", reason: "server" });
+    a.emit({ kind: "turnWorkStarted", messageId: "response", startedAt: 1 });
+    a.emit({ kind: "toolCallProposed", toolId: "read-a", messageId: "response", toolName: "read_file", argsJson: '{"path":"a.txt"}', category: "read", approvalRequired: false });
+    chat.messages.push({ role: "tool", content: "File contents", ts: 2, toolCall: {
+      id: "read-a", name: "read_file", argsJson: '{"path":"a.txt"}', status: "executed"
+    } });
+    a.emit({ kind: "toolCallResolved", toolId: "read-a", status: "executed", resultPreview: "File contents" });
+    provider.openChat(record("b"));
+    a.emit({ kind: "contextActivity", activityIds: ["read-a"] });
+    a.emit({ kind: "turnPreparing", reason: "server" });
+    await provider.openChatById("a");
+    expect(snapshot().busy).toBe(true);
+    expect(snapshot().events).toContainEqual(expect.objectContaining({ kind: "toolCallProposed", toolId: "read-a" }));
+    expect(snapshot().events).toContainEqual({ kind: "contextActivity", activityIds: ["read-a"] });
+    expect(snapshot().events).toContainEqual(expect.objectContaining({ kind: "toolCallResolved", toolId: "read-a" }));
+    expect(snapshot().events).not.toContainEqual({ kind: "contextActivity", activityIds: [] });
+    const baseline = snapshot().events.find(event => "kind" in event && event.kind === "chatLoaded");
+    expect(baseline).toEqual(expect.objectContaining({ record: expect.objectContaining({ messages: [] }) }));
+
+    provider.openChat(record("b"));
+    a.emit({ kind: "contextActivity", activityIds: [] });
+    a.emit({ kind: "turnPreparing", reason: "server" });
+    await provider.openChatById("a");
+    expect(snapshot().events).toContainEqual({ kind: "contextActivity", activityIds: [] });
   });
 
   it("runs and drains each queue independently and cancels only the visible chat", async () => {
@@ -151,10 +188,10 @@ describe("independent chat tabs", () => {
 
   it("sanitizes transcript snapshots just like initial loads", async () => {
     const { provider, snapshot } = setup();
-    provider.openChat({ ...record("a"), contextMessages: [{ role: "system", content: "private model context", ts: 1 }], memorySelection: [] });
+    provider.openChat({ ...record("a"), contextMessages: [{ role: "system", content: "private model context", ts: 1 }], recalledMemories: [] });
     const event = snapshot().events.find(event => "kind" in event && event.kind === "chatLoaded") as Extract<UiEvent, { kind: "chatLoaded" }>;
     expect(event.record.contextMessages).toBeUndefined();
-    expect(event.record.memorySelection).toBeUndefined();
+    expect(event.record.recalledMemories).toBeUndefined();
     expect(event.contextMessageCount).toBe(1);
   });
 
@@ -199,6 +236,35 @@ describe("independent chat tabs", () => {
     expect(provider.getTabs()).toEqual([]);
   });
 
+  it("imports pasted text without a suffix and completes a pasted file batch", async () => {
+    const { provider, storage, send, posted } = setup();
+    provider.openChat(record("a"));
+    storage.importAttachmentBytes.mockImplementation(async (_chatId, fileName, bytes) => ({
+      id: fileName, fileName, byteLength: bytes.length, mimeType: "text/plain", extension: "txt"
+    }));
+    await send({ type: "pasteText", chatId: "a", text: "a".repeat(10000) });
+    expect(storage.importAttachmentBytes).toHaveBeenCalledWith("a", "Pasted text", Buffer.from("a".repeat(10000)), { allowImages: false });
+    posted.length = 0;
+    await send({ type: "pasteAttachments", chatId: "a", files: [
+      { fileName: "main.ts", dataUrl: "data:video/mp2t;base64,Y29kZQ==" },
+      { fileName: "notes.md", dataUrl: "data:text/markdown;base64,bm90ZXM=" }
+    ] });
+    expect(storage.importAttachmentBytes).toHaveBeenCalledWith("a", "main.ts", Buffer.from("code"), { allowImages: false });
+    expect(storage.importAttachmentBytes).toHaveBeenCalledWith("a", "notes.md", Buffer.from("notes"), { allowImages: false });
+    expect(posted.filter(m => "type" in m && m.type === "attachmentSelected")).toHaveLength(2);
+    expect(posted.at(-1)).toEqual({ type: "attachmentImportState", pending: false });
+  });
+
+  it("rejects oversized text and malformed pasted data before importing files", async () => {
+    const { provider, storage, send, posted } = setup();
+    provider.openChat(record("a"));
+    await send({ type: "pasteText", text: "a".repeat(1024 * 1024 + 1) });
+    expect(posted).toContainEqual(expect.objectContaining({ type: "attachmentPasteFailed", error: expect.stringContaining("1 MiB") }));
+    await send({ type: "pasteAttachments", files: [{ fileName: "file.txt", dataUrl: "data:text/plain;base64,%%%=" }] });
+    expect(storage.importAttachmentBytes).not.toHaveBeenCalled();
+    expect(posted.at(-1)).toEqual({ type: "attachmentImportState", pending: false });
+  });
+
   it("keeps an attachment picker tied to its source chat after switching tabs", async () => {
     const { provider, storage, send, posted } = setup();
     provider.openChat(record("a"));
@@ -209,7 +275,7 @@ describe("independent chat tabs", () => {
     provider.openChat(record("b"));
     posted.length = 0;
     pick([{ fsPath: "/tmp/image.png" }]); await attaching;
-    expect(storage.importAttachment).toHaveBeenCalledWith("a", "/tmp/image.png");
+    expect(storage.importAttachment).toHaveBeenCalledWith("a", "/tmp/image.png", { allowImages: false });
     expect(posted.some(message => "type" in message && message.type === "attachmentSelected")).toBe(false);
     await provider.openChatById("a");
     expect(posted).toContainEqual(expect.objectContaining({ type: "attachmentSelected", attachment: expect.objectContaining({ id: "image", previewUri: "/workspace/a/image.png" }) }));
@@ -261,5 +327,43 @@ describe("independent chat tabs", () => {
     provider.openChat(record("b"));
     load(record("a")); await slow;
     expect(provider.getCurrentRecord()?.id).toBe("b");
+  });
+});
+
+describe("image attachment capabilities", () => {
+  it.each([true, false])("gates pasted images with the connected model's vision flag (%s)", async supported => {
+    const { provider, storage, send } = setup();
+    mocks.metadata.mockResolvedValue({ modelAlias: "model-a", contextSize: 32768, supportsVision: supported });
+    provider.openChat(record("a"));
+    storage.importAttachmentBytes.mockResolvedValue({ id: "image", fileName: "image.png", mimeType: "image/png", extension: "png", byteLength: 8 });
+    await send({ type: "pasteAttachments", chatId: "a", files: [{ fileName: "image.png", dataUrl: "data:image/png;base64,iVBORw0KGgo=" }] });
+    expect(storage.importAttachmentBytes).toHaveBeenCalledWith("a", "image.png", expect.any(Buffer), { allowImages: supported });
+    expect(mocks.metadata).toHaveBeenCalledWith(mocks.settings.endpoint, { model: "model-a" });
+  });
+
+  it("ignores late capability responses from a previously selected model", async () => {
+    const { provider, posted } = setup();
+    let resolveOld!: (value: { supportsVision: boolean }) => void;
+    mocks.metadata.mockReturnValueOnce(new Promise(resolve => { resolveOld = resolve; }));
+    provider.pushSettings();
+    mocks.settings.model = "model-b";
+    provider.pushSettings();
+    await vi.waitFor(() => expect(posted.at(-1)).toMatchObject({ kind: "visionCapability", supported: false }));
+    resolveOld({ supportsVision: true });
+    await Promise.resolve();
+    expect(posted.filter(message => "kind" in message && message.kind === "visionCapability")).not.toContainEqual(expect.objectContaining({ supported: true }));
+  });
+
+  it("does not restore a previous model's capability from a chat snapshot", async () => {
+    const { provider, posted, snapshot } = setup();
+    provider.openChat(record("a"));
+    await Promise.resolve();
+    mocks.settings.model = "model-b";
+    posted.length = 0;
+    mocks.sessions.get("a")!.emit({ kind: "visionCapability", supported: true, endpoint: mocks.settings.endpoint, model: "model-a" });
+    expect(posted).toEqual([]);
+    provider.openChat(record("b"));
+    await provider.openChatById("a");
+    expect(snapshot().events.some(event => "kind" in event && event.kind === "visionCapability")).toBe(false);
   });
 });

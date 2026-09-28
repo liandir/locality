@@ -1,4 +1,4 @@
-import type { MemoryListItem } from "../chat/memory.js";
+import type { MemoryCreation, MemoryListItem } from "../chat/memory.js";
 /**
  * Message types exchanged between the extension host and each webview.
  * Kept in one file so both sides import the same definitions.
@@ -11,6 +11,46 @@ import type { ChatMode } from "../chat/mode.js";
 /** Model-context size sent with chatLoaded, independently of the visible transcript. */
 export interface ChatContextState {
   contextMessageCount?: number;
+}
+
+export interface ChatTurnPreparation {
+  kind: "turnPreparing";
+  /** Memory preparation is silent; its creation card remains visible above the new message. */
+  reason: "server" | "title" | "context" | "memory";
+}
+
+export interface ChatMemoryCreations {
+  kind: "memoryCreations";
+  /** Includes the create/update operation for both live cards and saved history. */
+  creations: MemoryCreation[];
+}
+
+/** Optional presentation payload, never sent to the model as tool content. */
+export interface ChatToolResultDisplay {
+  displayResult?: string;
+}
+
+/** Host-owned process identity, display command, and current Stop availability. */
+export interface ChatToolProcess {
+  processJobId?: string;
+  processCommand?: string;
+  processRunning?: boolean;
+  /** Display-only output, kept separate from the model's stream-labeled result. */
+  processOutput?: string;
+  processExitCode?: number;
+}
+
+/** Authoritative list of activities whose results the model is still consuming. */
+export interface ChatContextActivity {
+  kind: "contextActivity";
+  activityIds: string[];
+}
+
+/** Saved final-answer time, for display only; absent for turns without an answer. */
+export interface ChatTurnEnd {
+  kind: "turnEnd";
+  messageId: string;
+  messageTs?: number;
 }
 
 // --- Side view (welcome / chats / settings) ---
@@ -31,9 +71,10 @@ export type SideToExt =
   | { type: "openGithub" }
   | { type: "saveSetting"; key: string; value: unknown }
   | { type: "validateEndpoint"; url: string }
+  | { type: "validateWebSearch"; endpoint: string; apiKey: string }
   | { type: "editUserSettingsJson" }
+  | { type: "editWorkspacePrompts" }
   | { type: "restoreDefaultGeneratedPrompts" }
-  | { type: "restoreDefaultSafeCommands" }
   | { type: "resetAllDefaults" }
   | { type: "listMemories" }
   | { type: "editMemory"; id: string; text: string }
@@ -47,10 +88,12 @@ export type ExtToSide =
   | { type: "memories"; memories: MemoryListItem[] }
   | { type: "memoryError"; error: string }
   | { type: "settings"; settings: Record<string, unknown> }
+  | { type: "webSearchSettings"; endpoint: string; apiKey: string; verified: boolean; error?: string; reset?: boolean }
+  | { type: "webSearchValidation"; ok: boolean; error?: string; endpoint?: string }
   | { type: "appInfo"; version: string }
   | { type: "chats"; chats: { id: string; title: string; updatedAt: number }[] }
   | { type: "focusTab"; tab: SideTab }
-  | { type: "endpointValidation"; ok: boolean; error?: string; resolved?: string[]; metadata?: { modelAlias: string; contextSize: number }; models?: { id: string }[]; selectedModel?: string }
+  | { type: "endpointValidation"; ok: boolean; error?: string; resolved?: string[]; metadata?: { modelAlias: string; contextSize: number; supportsVision: boolean }; models?: { id: string }[]; selectedModel?: string }
   | { type: "settingSaved"; key: string; ok: boolean; error?: string }
   | { type: "openTabs"; tabs: ChatTab[] };
 
@@ -66,14 +109,18 @@ export type ChatToExt = (
   | { type: "removeQueuedMessage"; id: string }
   | { type: "editMessage"; messageTs: number; text: string; removeAttachmentIds?: string[] }
   | { type: "selectAttachment" }
-  | { type: "pasteAttachment"; fileName: string; mimeType: string; dataUrl: string }
+  | { type: "pasteAttachments"; files: { fileName: string; dataUrl: string }[] }
+  | { type: "pasteText"; text: string }
+  | { type: "pasteFileUris"; uris: string[] }
+  | { type: "openAttachment"; attachmentId: string }
+  | { type: "requestAttachmentText"; attachmentId: string; requestId: number }
   | { type: "discardAttachment"; attachmentId: string }
   | { type: "forkChat"; throughUserMessageTs: number }
   | { type: "openChat"; id: string }
   | { type: "cancel" }
   | { type: "approveTool"; toolId: string; approved: boolean }
   | { type: "answerQuestion"; toolId: string; answer: string }
-  | { type: "stopProcess"; jobId: string }
+  | { type: "featureAction"; id: string }
   | { type: "setChatMode"; mode: ChatMode }
   | { type: "setReasoningEffort"; effort: ReasoningEffort }
   | { type: "compactNow" }
@@ -98,6 +145,8 @@ export type ExtToChat = UiEvent
   | { type: "chatSnapshot"; id: string; events: ExtToChat[]; busy: boolean; draft: string }
   | { type: "settings"; mode: ChatMode; reasoningEffort: ReasoningEffort; reasoningEfforts: ReasoningEfforts; showThinking: boolean; autoCompact: boolean; autoCompactThresholdPercent: number; workspaceRoot?: string }
   | { type: "attachmentSelected"; attachment: UiAttachment }
+  | { type: "attachmentText"; attachmentId: string; requestId: number; text?: string; error?: string }
+  | { type: "attachmentImportState"; pending: boolean }
   | { type: "attachmentPasteFailed"; error: string }
   | { type: "attachmentCleared" }
   | { type: "workspacePathTypes"; requestId: number; entries: { path: string; pathType: WorkspacePathType }[] }

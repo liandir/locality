@@ -29,36 +29,31 @@ beforeEach(() => {
   mocks.values.set("toolCallingMode", "compat-gemma4");
 });
 
-describe("settings profile migration", () => {
-  it("uses an old explicit family when the profile has only its new default", async () => {
-    mocks.values.set("modelFamily", "qwen3");
-    mocks.explicit.set("modelFamily", "qwen3");
+describe("tool calling settings", () => {
+  it("uses the default profile when unset", async () => {
     const { readSettings } = await import("../src/config/settings.js");
-    expect(readSettings().toolCallingMode).toBe("compat-qwen3");
+    expect(readSettings().toolCallingMode).toBe("compat-gemma4");
   });
 
-  it("prefers an explicitly selected current profile over stale legacy settings", async () => {
+  it("uses the selected profile", async () => {
     mocks.values.set("toolCallingMode", "compat-muse-glimmer");
-    mocks.explicit.set("toolCallingMode", "compat-muse-glimmer");
-    mocks.values.set("modelFamily", "qwen3");
-    mocks.explicit.set("modelFamily", "qwen3");
     const { readSettings } = await import("../src/config/settings.js");
     expect(readSettings().toolCallingMode).toBe("compat-muse-glimmer");
   });
 });
 
 describe("reasoning and model settings", () => {
-  it("shows thinking by default and accepts an explicit hidden setting", async () => {
+  it("hides thinking by default and accepts an explicit visible setting", async () => {
     const { readSettings } = await import("../src/config/settings.js");
-    expect(readSettings().showThinking).toBe(true);
-    mocks.values.set("showThinking", false);
     expect(readSettings().showThinking).toBe(false);
+    mocks.values.set("showThinking", true);
+    expect(readSettings().showThinking).toBe(true);
   });
 
-  it("migrates an explicit legacy capped-token value to the reasoning budget", async () => {
-    mocks.values.set("cappedThinkingTokens", 4096);
-    mocks.explicit.set("cappedThinkingTokens", 4096);
+  it("defaults to an unlimited reasoning budget and accepts a token limit", async () => {
     const { readSettings } = await import("../src/config/settings.js");
+    expect(readSettings().reasoningBudget).toBe(-1);
+    mocks.values.set("reasoningBudget", 4096);
     expect(readSettings().reasoningBudget).toBe(4096);
   });
 
@@ -71,7 +66,7 @@ describe("reasoning and model settings", () => {
     }
   });
 
-  it("defaults to the backwards-compatible local model id", async () => {
+  it("defaults to the local model id", async () => {
     const { readSettings } = await import("../src/config/settings.js");
     expect(readSettings().model).toBe("local");
   });

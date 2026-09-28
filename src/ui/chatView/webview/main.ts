@@ -1,10 +1,16 @@
 import { installTooltips } from "../../tooltips.js";
 import { captureHistoryView, restoreHistoryView, type HistoryViewState } from "../historyViewState.js";
-import type { MemorySnapshot } from "../../../chat/memory.js";
+import type { MemoryCreation, MemorySnapshot } from "../../../chat/memory.js";
 import { installChatContextMenu } from "../../chatContextMenu.js";
-import type { ChatTab } from "../../messaging.js";
+import type { ChatTab, ChatToolProcess, ChatTurnPreparation } from "../../messaging.js";
+import { chatFeature } from "../../../build/chat.js";
 import { cloudIcon } from "../../icons.js";
-import { renderMemoryDate } from "../../memoryDate.js";
+import { renderMessageDate } from "../../memoryDate.js";
+import { renderMemoryContents, renderMemoryCreation, renderMemoryResult } from "./memoryResults.js";
+import { CARD_SEPARATOR_HTML, renderToolOutputSurface } from "./toolOutputSurface.js";
+import { parseQuestionPayload, renderQuestionResult } from "./questionResult.js";
+import { copyableAssistantText } from "./messageCopy.js";
+import { ScrollFollow } from "./scrollFollow.js";
 import MarkdownIt from "markdown-it";
 import type { RenderRule } from "markdown-it/lib/renderer.mjs";
 import { createHighlighterCore } from "shiki/core";
@@ -19,6 +25,7 @@ import go from "@shikijs/langs/go";
 import html from "@shikijs/langs/html";
 import java from "@shikijs/langs/java";
 import javascript from "@shikijs/langs/javascript";
+import jsx from "@shikijs/langs/jsx";
 import json from "@shikijs/langs/json";
 import markdown from "@shikijs/langs/markdown";
 import php from "@shikijs/langs/php";
@@ -27,6 +34,7 @@ import ruby from "@shikijs/langs/ruby";
 import rust from "@shikijs/langs/rust";
 import sql from "@shikijs/langs/sql";
 import typescript from "@shikijs/langs/typescript";
+import tsx from "@shikijs/langs/tsx";
 import xml from "@shikijs/langs/xml";
 import yaml from "@shikijs/langs/yaml";
 import darkPlus from "@shikijs/themes/dark-plus";
@@ -45,38 +53,36 @@ import {
 } from "../../../chat/reasoningEffort.js";
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
 import { normalizeToolArgsForDisplay } from "./toolArgs.js";
-import { restoredCreatesNewFile, restoredToolStatus } from "./toolHistory.js";
+import { restoredCreatesNewFile, restoredToolFileChanges, restoredToolStatus } from "./toolHistory.js";
 import { modeMenusAfterPointerDown } from "./composerModes.js";
 import { formatElapsedDuration } from "./duration.js";
 import { thoughtTokenLabel } from "./thoughtTokens.js";
 import { SHIMMER_BAND_WIDTH_PX, shimmerTiming } from "./shimmerTiming.js";
-import { approvalHintForCategory } from "./approvalHints.js";
 import { reorderItemsById } from "../queuedMessages.js";
-import { resolveWorkspaceFileLink, workspaceFileLabel, workspaceFileName } from "./workspaceLinks.js";
+import { enableWorkspaceFileLinks, resolveWorkspaceFileLink, workspaceFileLabel, workspaceFileName } from "./workspaceLinks.js";
 import { workspaceFileIconGlyph } from "./fileTypeIcons.js";
+import { createAttachmentGallery, moveAttachmentGallery, type AttachmentGallery } from "./attachmentGallery.js";
 import {
   rendersSingleWorkItemDirectly,
   thinkingPresentation,
-  workPresentationForTurn
+  workPresentationForTurn,
+  workSectionPresentation
 } from "./workPresentation.js";
 import {
-  pendingNoticeReplacesCurrentActivity,
+  serverPendingLabel,
   serverPendingVisibility
 } from "./serverPendingDelay.js";
-import { sanitizeTerminalText } from "../../../util/terminalText.js";
+import { isImageAttachment, isLargePaste, clipboardFileUris } from "../../../chat/attachments.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "../../../chat/attachmentLimits.js";
 import {
   activeToolLabel,
-  commandToolLabel,
   editOperationLabel,
   erroredToolLabel,
   finishedWorkSummary,
   liveWorkSummary,
-  liveWorkSummaryIncludesCurrent,
   settledToolLabel,
   toolActivityIsActive,
-  toolOwnsRunningProcess,
-  workActivityIconType,
+  workSummaryIcons,
   type WorkActivity
 } from "./workLabels.js";
 
@@ -88,6 +94,7 @@ declare function acquireVsCodeApi(): {
 
 const vscode = acquireVsCodeApi();
 const md = new MarkdownIt({ html: false, linkify: false, breaks: false }).use(mdKatex);
+enableWorkspaceFileLinks(md, () => state.workspaceRoot);
 md.renderer.rules.fence = renderFenceCode;
 md.renderer.rules.code_block = renderIndentedCode;
 md.renderer.rules.code_inline = renderInlineCode;
@@ -151,7 +158,7 @@ function replaceMarkdownLinkLabel(tokens: Parameters<RenderRule>[0], openIndex: 
   }
 }
 
-interface ToolCard {
+interface ToolCard extends ChatToolProcess {
   toolId: string;
   toolName: string;
   argsJson: string;
@@ -162,13 +169,12 @@ interface ToolCard {
   resultPreview?: string;
   diffPreview?: string;
   diffRequested?: boolean;
+  diffUnavailable?: boolean;
   added?: number;
   removed?: number;
   // write_file that created a non-existent file → labelled "Created file"; any
   // other settled write/edit (including a failed one) → "Edited file".
   createsNewFile?: boolean;
-  processJobId?: string;
-  processRunning?: boolean;
   processStopping?: boolean;
   // replace_range only: the number of lines the edit replaces, for the live
   // "Replacing Y with X lines" note and the -Y in the heading.
@@ -240,7 +246,8 @@ interface State {
   reasoningEffort: ReasoningEffort;
   reasoningEfforts: ReasoningEfforts;
   reasoningEffortMenuOpen: boolean;
-  serverPending?: "server" | "title" | "context";
+  serverPending?: ChatTurnPreparation["reason"];
+  contextActivityIds: Set<string>;
   showThinking: boolean;
   autoCompact: boolean;
   autoCompactThresholdPercent: number;
@@ -249,11 +256,13 @@ interface State {
   draft: string;
   draftAttachments: UiAttachment[];
   attachmentPastePending: boolean;
+  supportsVision: boolean;
   // The free-text "other" answer typed into a pending ask_user_question box,
   // kept here so it survives composer re-renders like the main draft does.
   questionDraft: string;
   chatTitle: string;
   memories: MemorySnapshot[];
+  memoryCreations: MemoryCreation[];
   hasChat: boolean;
   autoScroll: boolean;
   savedScrollTop: number;
@@ -285,6 +294,7 @@ interface ChatViewState {
   history: HistoryViewState;
   memoriesExpanded: boolean;
   expandedMemorySources: Set<string>;
+  expandedMemoryCreations: Set<string>;
 }
 const viewDrafts = new Map<string, ChatViewState>();
 
@@ -294,7 +304,8 @@ function saveChatView(): void {
   viewDrafts.set(activeChatId, {
     question: state.questionDraft, scrollTop: chatBody()?.scrollTop ?? 0, autoScroll: state.autoScroll,
     history: captureHistoryView(state.messages), memoriesExpanded: memories?.open ?? false,
-    expandedMemorySources: new Set(Array.from(memories?.querySelectorAll<HTMLElement>("[data-memory-entry][open]") ?? [], entry => entry.dataset.memoryEntry!))
+    expandedMemorySources: new Set(Array.from(memories?.querySelectorAll<HTMLElement>("[data-memory-entry][open]") ?? [], entry => entry.dataset.memoryEntry!)),
+    expandedMemoryCreations: new Set(Array.from(root.querySelectorAll<HTMLElement>("[data-memory-creation][open]"), entry => entry.dataset.memoryCreation!))
   });
 }
 
@@ -310,16 +321,19 @@ const state: State = {
   reasoningEfforts: { ...DEFAULT_REASONING_EFFORTS },
   reasoningEffortMenuOpen: false,
   serverPending: undefined,
-  showThinking: true,
+  contextActivityIds: new Set(),
+  showThinking: false,
   autoCompact: true,
   autoCompactThresholdPercent: 80,
   busy: false,
   draft: "",
   draftAttachments: [],
   attachmentPastePending: false,
+  supportsVision: false,
   questionDraft: "",
   chatTitle: "Chat",
   memories: [],
+  memoryCreations: [],
   hasChat: false,
   autoScroll: true,
   savedScrollTop: 0,
@@ -349,6 +363,7 @@ const SHIKI_LANGUAGES = [
   html,
   java,
   javascript,
+  jsx,
   json,
   markdown,
   php,
@@ -357,13 +372,16 @@ const SHIKI_LANGUAGES = [
   rust,
   sql,
   typescript,
+  tsx,
   xml,
   yaml
 ];
 
 const root = document.getElementById("app")!;
+const scrollFollow = new ScrollFollow(state);
 let mounted = false;
 let renderQueued = false;
+let followScrollFrame: number | undefined;
 let partSeq = 0;
 let renderedBusy: boolean | undefined;
 let renderedScrollDown: boolean | undefined;
@@ -374,6 +392,7 @@ let compactNudgeTimer: ReturnType<typeof setTimeout> | undefined;
 let serverPendingSince: number | undefined;
 let serverPendingTimer: ReturnType<typeof setTimeout> | undefined;
 let serverPendingTimingReason: typeof state.serverPending;
+let visibleServerPendingLabel: string | undefined;
 const workspacePathTypes = new Map<string, WorkspacePathType | "pending">();
 const queuedWorkspacePathChecks = new Set<string>();
 let workspacePathCheckScheduled = false;
@@ -418,6 +437,7 @@ function startShiki(): void {
     engine: createJavaScriptRegexEngine()
   }).then(highlighter => {
     shikiHighlighter = highlighter;
+    renderTextAttachmentPreview();
     render();
   }).catch(() => {
     shikiHighlighter = undefined;
@@ -428,6 +448,7 @@ function watchThemeChanges(): void {
   new MutationObserver(() => {
     if (document.body.className === lastThemeClass) return;
     lastThemeClass = document.body.className;
+    renderTextAttachmentPreview();
     render();
   }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
 }
@@ -541,15 +562,16 @@ function renderCopyableCodeBlock(
   code: string,
   language: string | undefined,
   displayPrefix = "",
-  extraAction = ""
+  extraAction = "",
+  decoration = ""
 ): string {
   const languageClass = language ? ` language-${escapeHtml(language)}` : "";
   const renderedCode = highlightCode(code, language);
   const codeContent = displayPrefix
-    ? `<span class="code-display-prefix" aria-hidden="true">${escapeHtml(displayPrefix)}</span><span class="copy-code-source">${renderedCode}</span>`
+    ? `${decoration}<span class="code-display-prefix" aria-hidden="true">${escapeHtml(displayPrefix)}</span><span class="copy-code-source">${renderedCode}</span>`
     : renderedCode;
   const codeClass = `${displayPrefix ? "command-code-display" : "copy-code-source"}${languageClass}`;
-  return `<div class="copy-code-block${extraAction ? " has-extra-actions" : ""}">
+  return `<div class="copy-code-block${displayPrefix ? " tool-output-header" : ""}${extraAction ? " has-extra-actions" : ""}">
     <span class="code-block-actions">${extraAction}<button class="copy-btn code-copy-btn block-code-copy-btn" type="button" data-copy-code aria-label="Copy code">${copyIcon()}</button></span>
     <pre><code class="${codeClass}">${codeContent}</code></pre>
   </div>`;
@@ -565,13 +587,13 @@ function normalizeHighlightLanguage(language: string): string | undefined {
     htm: "html",
     html: "html",
     js: "javascript",
-    jsx: "javascript",
+    jsx: "jsx",
     mjs: "javascript",
     py: "python",
     shell: "bash",
     sh: "bash",
     ts: "typescript",
-    tsx: "typescript",
+    tsx: "tsx",
     zsh: "bash"
   };
   return aliases[raw] ?? raw;
@@ -607,17 +629,16 @@ function updateMemoryDisclosure(): void {
   if (!details) return;
   details.hidden = !state.memories.length;
   const entries = state.memories.map(memory =>
-    `<details class="tool-card memory-source" data-memory-entry="${escapeHtml(memory.sourceId)}">
-      <summary class="tool-head disclosure-trigger"><span class="tool-icon memory-source-icon">${cloudIcon()}</span><span class="tool-name">Memory</span><span class="tool-label"><button type="button" class="tool-path-link tool-label-text memory-source-link" data-open-memory="${escapeHtml(memory.sourceId)}">${escapeHtml(memory.title)}</button></span>${chevronIcon()}</summary>
-      <div class="memory-details"><div class="memory-date">${renderMemoryDate(memory.generatedAt)}</div>
-        <div class="assistant-markdown">${md.render(memory.text)}</div></div>
+    `<details class="tool-card memory-source output-surface-tool" data-memory-entry="${escapeHtml(memory.sourceId)}">
+      <summary class="tool-head disclosure-trigger"><span class="tool-icon">${cloudIcon()}</span><span class="tool-name">Memory</span><span class="tool-label"><button type="button" class="tool-path-link tool-label-text memory-source-link" data-open-memory="${escapeHtml(memory.sourceId)}">${escapeHtml(memory.title)}</button></span>${chevronIcon()}</summary>
+      <div class="tool-expanded">${renderToolOutputSurface(renderMemoryContents(memory.text, memory.generatedAt, md), false)}</div>
     </details>`
   ).join("");
   const signature = entries;
   if (details.dataset.signature === signature) return;
   const expanded = new Set(Array.from(details.querySelectorAll<HTMLDetailsElement>("[data-memory-entry][open]"), entry => entry.dataset.memoryEntry));
   details.dataset.signature = signature;
-  details.innerHTML = `<summary class="work-head disclosure-trigger"><span class="work-title">Memories</span>${chevronIcon()}</summary>` + entries;
+  details.innerHTML = `<summary class="work-head disclosure-trigger"><span class="work-title">Recalled memories</span>${chevronIcon()}</summary>` + entries;
   details.querySelectorAll<HTMLDetailsElement>("[data-memory-entry]").forEach(entry => { entry.open = expanded.has(entry.dataset.memoryEntry); });
 }
 
@@ -630,22 +651,55 @@ function render(immediate = true): void {
   renderQueued = false;
   mountShell();
   const body = chatBody();
-  const savedTop = body ? body.scrollTop : state.savedScrollTop;
-  const shouldStickToBottom = state.autoScroll;
+  // Catch native movement even when its scroll event has not arrived yet.
+  if (body) scrollFollow.onScroll(body);
   reconcileNotices();
   reconcileEmptyState();
+  // Resolve the delay once so summaries and standalone status rows agree.
+  visibleServerPendingLabel = serverPendingNoticeReady() ? serverPendingLabel(state.serverPending) : undefined;
   reconcileMessages();
   updateServerStatus();
   updateComposer();
   updateContextPill();
   updateHeaderTitle();
   updateMemoryDisclosure();
+  syncToolHeaderScrollbars();
   syncShimmerAnimations();
   if (body) {
-    if (shouldStickToBottom) body.scrollTop = body.scrollHeight;
-    else body.scrollTop = savedTop;
-    state.savedScrollTop = body.scrollTop;
-    updateScrollState(body, false);
+    if (state.autoScroll) scheduleFollowScroll(body);
+    // Leave paused scrolling to the browser: assigning scrollTop on every
+    // streamed token interrupts wheel/touch scrolling and native anchoring.
+    scrollFollow.recordLayout(body);
+    updateScrollState(body);
+  }
+}
+
+/** Let the browser deliver pending input before committing an automatic jump. */
+function scheduleFollowScroll(body: HTMLElement): void {
+  if (followScrollFrame !== undefined) return;
+  followScrollFrame = requestAnimationFrame(() => {
+    followScrollFrame = undefined;
+    scrollFollow.onScroll(body);
+    if (state.autoScroll) {
+      body.scrollTop = body.scrollHeight;
+      scrollFollow.recordLayout(body);
+    }
+    updateScrollState(body);
+  });
+}
+
+/** Keep horizontal scrollbars below the header's normal text/action row. */
+function syncToolHeaderScrollbars(): void {
+  // Read all widths before applying spacing so streaming updates need one layout.
+  const headers = Array.from(root.querySelectorAll<HTMLElement>(".tool-output-header"), header => {
+    const scroller = header.querySelector<HTMLElement>("pre");
+    return {
+      header,
+      overflowing: !!scroller && scroller.clientWidth > 0 && scroller.scrollWidth > scroller.clientWidth
+    };
+  });
+  for (const { header, overflowing } of headers) {
+    header.classList.toggle("has-horizontal-scrollbar", overflowing);
   }
 }
 
@@ -716,7 +770,7 @@ function mountShell(): void {
       <div class="composer-row">
         <div id="approvalSlot"></div>
         <textarea id="input" rows="3"></textarea>
-        <button id="attachImage" class="composer-attach" type="button" aria-label="Attach images" data-tip="Attach images">${paperclipIcon()}</button>
+        <button id="attachFiles" class="composer-attach" type="button" aria-label="Attach files" data-tip="Attach files">${paperclipIcon()}</button>
         <div id="composerAttachment" class="composer-attachment" hidden></div>
         <span id="sendSlot"></span>
       </div>
@@ -751,9 +805,13 @@ function mountShell(): void {
       </div>
     </footer>
     <div id="imagePreview" class="image-preview" role="dialog" aria-modal="true" aria-labelledby="imagePreviewCaption" hidden>
-      <button class="image-preview-close" type="button" data-close-image-preview aria-label="Close image preview">${closeIcon()}</button>
+      <button class="attachment-preview-open" type="button" data-open-preview-in-editor hidden>Open in editor</button>
+      <button class="image-preview-close" type="button" data-close-image-preview aria-label="Close attachment preview">${closeIcon()}</button>
+      <button class="attachment-preview-nav attachment-preview-previous" type="button" data-attachment-preview-step="-1" aria-label="Previous attachment" hidden>${chevronIcon()}</button>
+      <button class="attachment-preview-nav attachment-preview-next" type="button" data-attachment-preview-step="1" aria-label="Next attachment" hidden>${chevronIcon()}</button>
       <figure class="image-preview-content">
         <img id="imagePreviewImage" alt="" />
+        <pre id="attachmentPreviewText" class="attachment-preview-text" tabindex="0" hidden><code></code></pre>
         <figcaption id="imagePreviewCaption"></figcaption>
       </figure>
     </div>
@@ -813,16 +871,8 @@ function reconcileEmptyState(): void {
 function updateServerStatus(): void {
   const fallback = root.querySelector("#serverStatusFallback") as HTMLElement | null;
   if (!fallback) return;
-  // A pending status may temporarily replace the latest activity in a
-  // collapsed live sub-session. Always restore that real activity before
-  // placing (or removing) the transient status on this render.
-  for (const part of Array.from(root.querySelectorAll<HTMLElement>("[data-pending-status-suppressed]"))) {
-    part.hidden = false;
-    delete part.dataset.pendingStatusSuppressed;
-  }
   let status = root.querySelector("#serverStatus") as HTMLElement | null;
-  const pendingNoticeReady = serverPendingNoticeReady();
-  if (!state.serverPending || !pendingNoticeReady) {
+  if (!visibleServerPendingLabel) {
     if (status) {
       status.hidden = true;
       fallback.appendChild(status);
@@ -838,19 +888,9 @@ function updateServerStatus(): void {
     status.setAttribute("role", "status");
     status.setAttribute("aria-live", "polite");
   }
-  const label = state.serverPending === "title"
-    ? "Generating title"
-    : state.serverPending === "context"
-      ? "Loading chat context"
-      : "Server pending";
   const content = '<div class="tool-card pending"><div class="tool-head active-tool-head">'
-    + '<strong class="tool-name">' + label + '</strong></div></div>';
+    + '<strong class="tool-name">' + escapeHtml(visibleServerPendingLabel) + '</strong></div></div>';
   setHtml(status, content);
-  const statusHead = status.querySelector(":scope > .tool-card > .tool-head") as HTMLElement | null;
-  if (statusHead) {
-    delete statusHead.dataset.workToggle;
-    setDisclosureAffordance(statusHead, false);
-  }
   status.hidden = false;
 
   const liveMessage = [...state.messages].reverse().find(message =>
@@ -863,67 +903,12 @@ function updateServerStatus(): void {
     return;
   }
 
-  const collapsedTurnSummary = messageEl.querySelector(
-    ".work-section.conglomerate.live:not(.open)"
+  // Once tools exist, the collapsed summary owns the status text. Its
+  // standalone row is visible only when the user opens the chronology.
+  const collapsedSummary = messageEl.querySelector(
+    ".work-section.live:not(.open) > .work-head:not([hidden])"
   );
-  if (collapsedTurnSummary) {
-    status.hidden = true;
-    fallback.appendChild(status);
-    fallback.hidden = true;
-    return;
-  }
-
-  const latestPart = liveMessage?.parts.filter(part => !isBlankTextPart(part)).at(-1);
-  const expandedLiveSubSession = messageEl.querySelector(".work-section.session.live.open");
-  if (liveMessage && latestPart && isWorkPart(latestPart) && !expandedLiveSubSession) {
-    const latestWorkGroup = findWorkUnitContainingPart(resolveRenderUnits(liveMessage), latestPart.id);
-    if (pendingNoticeReplacesCurrentActivity(state.serverPending)) {
-      const currentOnlyBody = messageEl.querySelector(
-        ".work-section.session.live:not(.open) > .work-body.current-only"
-      ) as HTMLElement | null;
-      if (currentOnlyBody) {
-        // Pending work is not part of the model's tool chronology. While it
-        // blocks the continuation, show it in the active preview slot instead.
-        for (const part of Array.from(currentOnlyBody.children) as HTMLElement[]) {
-          if (!part.dataset.partId) continue;
-          part.hidden = true;
-          part.dataset.pendingStatusSuppressed = "true";
-        }
-        // Put the toggle target on the visible replacement itself as well as
-        // its containing body. Reconciliation can briefly rebuild or clear the
-        // body's marker; the pending row must never become a dead end that
-        // prevents the user from opening the tool history it replaced.
-        const groupId = currentOnlyBody.dataset.workToggle ?? latestWorkGroup?.groupId;
-        if (statusHead && groupId) {
-          statusHead.dataset.workToggle = groupId;
-          setDisclosureAffordance(statusHead, true);
-        }
-        // Keep the transient replacement in the same first-row slot as the
-        // suppressed activity. That slot uses the compact 3px top padding;
-        // appending after the hidden parts would fall back to 5px and visibly
-        // nudge "Server pending" downward during the transition.
-        currentOnlyBody.insertBefore(status, currentOnlyBody.firstElementChild);
-        syncCurrentOnlyDisclosure(currentOnlyBody);
-        fallback.hidden = true;
-        return;
-      }
-      const directActivity = partEls.get(latestPart.id);
-      if (directActivity?.parentElement === messageEl && liveMessage) {
-        // A one-item live sub-session normally renders directly, without a
-        // work-body. Its transient replacement can materialize that container
-        // on demand so the displaced activity remains accessible.
-        directActivity.hidden = true;
-        directActivity.dataset.pendingStatusSuppressed = "true";
-        if (statusHead && latestWorkGroup?.groupId) {
-          statusHead.dataset.workToggle = latestWorkGroup.groupId;
-          setDisclosureAffordance(statusHead, true);
-        }
-        messageEl.insertBefore(status, directActivity.nextSibling);
-        fallback.hidden = true;
-        return;
-      }
-    }
-    // Other pending states leave the collapsed activity preview unchanged.
+  if (collapsedSummary) {
     status.hidden = true;
     fallback.appendChild(status);
     fallback.hidden = true;
@@ -931,8 +916,7 @@ function updateServerStatus(): void {
   }
 
   fallback.hidden = true;
-  const liveBodies = Array.from(messageEl.querySelectorAll(".work-section.live .work-body")) as HTMLElement[];
-  const target = liveBodies.at(-1) ?? messageEl;
+  const target = messageEl.querySelector(".work-section.session.live.open > .work-body") ?? messageEl;
   if (target === messageEl) {
     const structuralSibling = Array.from(messageEl.children).find(child => {
       const element = child as HTMLElement;
@@ -945,13 +929,17 @@ function updateServerStatus(): void {
 }
 
 function serverPendingNoticeReady(): boolean {
-  if (serverPendingTimingReason !== state.serverPending) {
-    serverPendingTimingReason = state.serverPending;
+  // Ingestion keeps a completed tool active, but must not hide the auxiliary
+  // title request that can prevent ingestion from starting in the first place.
+  const reason = state.contextActivityIds.size && state.serverPending !== "title" ? undefined : state.serverPending;
+  if (serverPendingTimingReason !== reason) {
+    serverPendingTimingReason = reason;
     serverPendingSince = undefined;
     if (serverPendingTimer) clearTimeout(serverPendingTimer);
     serverPendingTimer = undefined;
   }
-  const visibility = serverPendingVisibility(state.serverPending, serverPendingSince, Date.now());
+  if (!reason) return false;
+  const visibility = serverPendingVisibility(reason, serverPendingSince, Date.now());
   serverPendingSince = visibility.since;
   if (visibility.visible) {
     if (serverPendingTimer) clearTimeout(serverPendingTimer);
@@ -1077,30 +1065,38 @@ function renderAttachmentsHtml(attachments: UiAttachment[], removable = false, r
   ).join("")}</div>`;
 }
 
+function renderAttachmentPreview(attachment: UiAttachment, className: string, imageClass = ""): string {
+  const image = isImageAttachment(attachment);
+  const action = `data-open-attachment="${escapeHtml(attachment.id)}"`;
+  const preview = image
+    ? `<img class="${imageClass}" src="${escapeHtml(attachment.previewUri)}" alt="${escapeHtml(attachment.fileName)}" />`
+    : `<span class="workspace-file-link-icon" aria-hidden="true">${workspaceFileIconGlyph(attachment.fileName)}</span>`;
+  return `<button class="${className}${image ? "" : " text-attachment-preview"}" type="button" ${action} data-tip="${escapeHtml(attachment.fileName)}" aria-label="Enlarge ${escapeHtml(attachment.fileName)}">${preview}</button>`;
+}
+
 function renderQueuedAttachmentThumbnails(attachments: UiAttachment[]): string {
   if (!attachments.length) return "";
-  const visible = attachments.slice(0, 3)
-    .map(attachment => `<button class="queued-message-image-button" type="button" data-open-image-preview aria-label="Enlarge ${escapeHtml(attachment.fileName)}"><img class="queued-message-image" src="${escapeHtml(attachment.previewUri)}" alt="${escapeHtml(attachment.fileName)}" /></button>`)
-    .join("");
+  const visible = attachments.slice(0, 3).map(attachment => renderAttachmentPreview(attachment, "queued-message-image-button", "queued-message-image")).join("");
   const remaining = attachments.length - 3;
   return `<span class="queued-message-images">${visible}${remaining > 0 ? `<small>+${remaining}</small>` : ""}</span>`;
 }
 
 function renderComposerAttachmentsHtml(attachments: UiAttachment[]): string {
   return attachments.map(attachment => `<span class="composer-attachment-item">
-    <button class="composer-attachment-preview" type="button" data-open-image-preview aria-label="Enlarge ${escapeHtml(attachment.fileName)}"><img src="${escapeHtml(attachment.previewUri)}" alt="${escapeHtml(attachment.fileName)}" /></button>
+    ${renderAttachmentPreview(attachment, "composer-attachment-preview")}
     <span class="composer-attachment-name" data-tip="${escapeHtml(attachment.fileName)}">${escapeHtml(attachment.fileName)}</span>
     <button type="button" class="composer-attachment-remove" data-remove-draft-attachment="${escapeHtml(attachment.id)}" aria-label="Remove ${escapeHtml(attachment.fileName)}">&times;</button>
   </span>`).join("");
 }
 
 function renderAttachmentHtml(attachment: UiAttachment, removable = false, removeAttribute = ""): string {
-  const size = attachment.byteLength < 1024 * 1024
-    ? `${Math.max(1, Math.round(attachment.byteLength / 1024))} KB`
-    : `${(attachment.byteLength / (1024 * 1024)).toFixed(1)} MB`;
+  const size = attachment.byteLength < 1024
+    ? `${attachment.byteLength} B`
+    : attachment.byteLength < 1024 * 1024 ? `${Math.round(attachment.byteLength / 1024)} KB` : `${(attachment.byteLength / (1024 * 1024)).toFixed(1)} MB`;
+  const detail = isImageAttachment(attachment) ? size : `${attachment.fileType?.toUpperCase() ?? "Plain text"} · ${size}`;
   return `<div class="image-attachment">
-    <button class="image-attachment-preview" type="button" data-open-image-preview aria-label="Enlarge ${escapeHtml(attachment.fileName)}"><img src="${escapeHtml(attachment.previewUri)}" alt="${escapeHtml(attachment.fileName)}" /></button>
-    <span class="image-attachment-meta"><span>${escapeHtml(attachment.fileName)}</span><small>${size}</small></span>
+    ${renderAttachmentPreview(attachment, "image-attachment-preview")}
+    <span class="image-attachment-meta"><span>${escapeHtml(attachment.fileName)}</span><small>${escapeHtml(detail)}</small></span>
     ${removable ? `<button type="button" class="image-attachment-remove" ${removeAttribute} aria-label="Remove attachment">&times;</button>` : ""}
   </div>`;
 }
@@ -1146,9 +1142,11 @@ function renderMessageActionsInnerHtml(m: Message): string {
   if (m.role === "assistant" && m.responseToTs !== undefined && !state.busy) {
     actions.push(`<button class="copy-btn" type="button" data-fork-chat="${m.responseToTs}" data-tip="Fork chat" aria-label="Fork chat">${forkIcon()}</button>`);
   }
-  if (actions.length === 0) return "";
+  const date = (m.role === "user" || m.role === "assistant") && m.recordTs !== undefined
+    ? renderMessageDate(m.recordTs) : "";
+  if (actions.length === 0 && !date) return "";
   const hintClass = `message-action-hint${persistentHint ? " active" : ""}`;
-  return `${actions.join("")}<span class="${hintClass}" aria-hidden="true">${persistentHint}</span>`;
+  return `${actions.join("")}${date ? `<span class="message-date">${date}</span>` : ""}<span class="${hintClass}" aria-hidden="true">${persistentHint}</span>`;
 }
 
 function renderFileChangeSummary(parent: HTMLElement, m: Message): void {
@@ -1177,7 +1175,7 @@ function renderFileChangeSummary(parent: HTMLElement, m: Message): void {
       </button>
       <button class="review-btn change-review-btn" type="button" data-review-workspace-changes>Review</button>
     </div>
-    ${expanded ? `<div class="change-file-list">${changes.map((change, index) => renderFileChangeRow(m, change, index)).join("")}</div>` : ""}`);
+    ${expanded ? `${CARD_SEPARATOR_HTML}<div class="change-file-list">${changes.map((change, index) => renderFileChangeRow(m, change, index)).join(CARD_SEPARATOR_HTML)}</div>` : ""}`);
 }
 
 function renderFileChangeRow(m: Message, change: FileChangeSummary, index: number): string {
@@ -1189,7 +1187,7 @@ function renderFileChangeRow(m: Message, change: FileChangeSummary, index: numbe
       <span class="change-file-path">${escapeHtml(change.path)}</span>
       <span class="diff-stat-group"><span class="diff-stat add">+${change.added}</span><span class="diff-stat del">-${change.removed}</span></span>
     </button>
-    ${expanded ? `<pre class="tool-diff edit-preview change-diff">${renderDiffLines(change.diffPreview, change.path)}</pre>` : ""}
+    ${expanded ? `${CARD_SEPARATOR_HTML}<pre class="tool-diff edit-preview change-diff">${renderDiffLines(change.diffPreview, change.path)}</pre>` : ""}
   </div>`;
 }
 
@@ -1210,6 +1208,7 @@ interface ResolvedUnit {
   parts: MessagePart[];
   expanded: boolean;
   live?: boolean;
+  liveStatus?: string;
   collapsible?: boolean;
   conglomerate?: boolean;
   children?: ResolvedUnit[];
@@ -1221,9 +1220,9 @@ interface ResolvedUnit {
  * Split an assistant message's parts into chronological render units. Every
  * run of work before a model text output gets its own disclosure group. During
  * a live turn the top-level Worked-for summary is absent: completed sessions
- * stay collapsed, while the active session shows its current tool until that
- * row is expanded. Once the turn settles, every session moves under one
- * collapsed Worked-for summary.
+ * stay collapsed, while the active session shows its current activity until
+ * another tool or a following status switches it to the live summary. Once
+ * the turn settles, every session moves under one collapsed Worked-for summary.
  */
 function resolveRenderUnits(m: Message): ResolvedUnit[] {
   const parts = m.parts.filter(part => !isBlankTextPart(part)
@@ -1250,12 +1249,18 @@ function resolveRenderUnits(m: Message): ResolvedUnit[] {
     const groupId = live ? `${stableId}:live` : stableId;
     const firstPartStart = partStartedAt(workParts[0]);
     const startedAt = sessionIndex === 1 ? (m.workStartedAt ?? firstPartStart) : firstPartStart;
+    const currentPart = workParts.at(-1);
+    const liveStatus = live
+      ? visibleServerPendingLabel
+        ?? (!state.serverPending && currentPart?.kind === "thought" && currentPart.live ? "Thinking" : undefined)
+      : undefined;
     units.push({
       kind: "work",
       groupId,
       parts: workParts,
       expanded: workPresentation.expandSessions ? true : (m.workGroupExpanded?.get(groupId) ?? false),
       live,
+      liveStatus,
       collapsible: workPresentation.sessionsCollapsible,
       startedAt,
       endedAt
@@ -1337,7 +1342,7 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
     } else if (partId && !wantedPartIds.has(partId)) {
       child.remove();
       partEls.delete(partId);
-    } else if (!partId && !workId && !actionId && !changeSummaryId) {
+    } else if (!partId && !workId && !actionId && !changeSummaryId && !child.dataset.memoryCreation) {
       child.remove();
     }
   }
@@ -1365,6 +1370,21 @@ function reconcileAssistantParts(el: HTMLElement, m: Message): void {
   }
   renderFileChangeSummary(el, m);
   renderMessageActions(el, m);
+  reconcileMemoryCreation(el, m);
+}
+
+function reconcileMemoryCreation(el: HTMLElement, message: Message): void {
+  let card = el.querySelector<HTMLDetailsElement>(":scope > [data-memory-creation]");
+  const creation = state.memoryCreations.find(item => item.messageTs === message.recordTs);
+  if (!creation) { card?.remove(); return; }
+  if (!card) {
+    card = document.createElement("details");
+    card.dataset.memoryCreation = String(creation.messageTs);
+  }
+  card.className = `tool-card memory-source output-surface-tool ${creation.status === "created" ? "executed" : creation.status === "failed" ? "failed" : "pending"}`;
+  setHtml(card, renderMemoryCreation(creation, md, chevronIcon()));
+  // Keep this independent of the collapsed work that preceded the answer.
+  if (card !== el.lastElementChild) el.appendChild(card);
 }
 
 function removeWorkElement(el: HTMLElement): void {
@@ -1415,7 +1435,7 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
   if (!expandable) delete head.dataset.workToggle;
   else head.dataset.workToggle = group.groupId;
   if (!group.conglomerate) {
-    renderSettledSubSessionHead(head, group);
+    renderSubSessionHead(head, group);
   } else {
     const durationMs = groupDurationMs(group);
     const html = [
@@ -1427,43 +1447,28 @@ function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
   setDisclosureAffordance(head, expandable);
 }
 
-function renderSettledSubSessionHead(head: HTMLElement, group: ResolvedUnit): void {
-  const historyParts = group.parts.filter(part => part.kind !== "thought"
-    || thinkingPresentation(state.showThinking, part.live).includeInHistory);
-  const allActivities = workActivities(historyParts);
-  const currentPart = group.parts.at(-1);
-  const currentIncludedInHistory = currentPart?.kind !== "thought"
-    || thinkingPresentation(state.showThinking, currentPart.live).includeInHistory;
-  const summarizeAsLive = !!group.live && currentIncludedInHistory;
-  const includeCurrent = summarizeAsLive && liveWorkSummaryIncludesCurrent(allActivities);
-  const summarizedParts = summarizeAsLive && !includeCurrent ? historyParts.slice(0, -1) : historyParts;
-  const activities = summarizeAsLive ? allActivities : workActivities(summarizedParts);
-  const seen = new Set<string>();
-  const icons: string[] = [];
-  for (let index = 0; index < summarizedParts.length; index++) {
-    const part = summarizedParts[index];
-    const activity = activities[index];
-    if (!activity) continue;
-    const type = workActivityIconType(activity);
-    if (!type) continue;
-    if (seen.has(type)) continue;
-    seen.add(type);
-    const icon = part.kind === "thought" ? brainIcon() : part.kind === "tool" ? toolIcon(part.card) : "";
-    if (icon) icons.push(`<span class="work-type-icon" aria-hidden="true">${icon}</span>`);
-  }
-  const summary = summarizeAsLive ? liveWorkSummary(activities) : finishedWorkSummary(activities);
-  if (!summary) {
-    setHtml(head, `<span class="work-icon" aria-hidden="true">${clockIcon()}</span>`
-      + '<span class="work-title">Working</span>');
-    return;
-  }
-  setHtml(head, `<span class="work-type-icons">${icons.join("")}</span>`
-    + `<span class="work-title">${escapeHtml(summary)}</span>`);
+function renderSubSessionHead(head: HTMLElement, group: ResolvedUnit): void {
+  const parts = group.parts.filter(part => part.kind !== "thought" || state.showThinking);
+  const activities = workActivities(parts);
+  const summaryIcons = workSummaryIcons(activities, !!group.live);
+  const active = !!group.liveStatus || summaryIcons.some(icon => icon.active);
+  const icons = summaryIcons.map(({ activityIndex, active }) => {
+    const part = parts[activityIndex];
+    const icon = part.kind === "tool" ? toolIcon(part.card) : part.kind === "thought" ? brainIcon() : "";
+    return icon ? `<span class="work-type-icon${active ? " active" : ""}" aria-hidden="true">${icon}</span>` : "";
+  });
+  const summary = group.live ? liveWorkSummary(activities, group.liveStatus) : finishedWorkSummary(activities);
+  // When only unsuccessful tools remain, use their actual outcome so the
+  // history stays discoverable without inventing a live activity label.
+  const lastTool = group.parts.filter(part => part.kind === "tool").at(-1);
+  const label = summary ?? (lastTool ? toolCardHeadName(lastTool.card) : "Worked");
+  setHtml(head, (icons.length ? `<span class="work-type-icons">${icons.join("")}</span>` : "")
+    + `<span class="work-title${active ? " shimmer" : ""}">${escapeHtml(label)}</span>`);
 }
 
 function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit): void {
   const { parts, expanded } = group;
-  const currentOnly = !!group.live && !group.conglomerate && !expanded;
+  const { showSummary, showBody, currentOnly } = workSectionPresentation({ ...group, showThinking: state.showThinking });
   const currentTool = group.live && parts[parts.length - 1]?.kind === "tool"
     ? (parts[parts.length - 1] as Extract<MessagePart, { kind: "tool" }>).card
     : undefined;
@@ -1480,11 +1485,10 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
   if (el.className !== cls) el.className = cls;
   renderWorkHead(el, group);
   const head = directChild(el, "work-head");
-  if (head) head.hidden = currentOnly;
+  if (head) head.hidden = !showSummary;
   let body = el.querySelector(".work-body") as HTMLElement | null;
-  // A collapsed top-level turn hides its entire chronology even while live.
-  // Live sub-sessions retain their compact latest-activity preview.
-  if (!expanded && (!group.live || group.conglomerate)) {
+  // A lone tool keeps its preview until further work needs a summary.
+  if (!showBody) {
     for (const part of parts) partEls.delete(part.id);
     body?.remove();
     return;
@@ -1505,7 +1509,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
   }
   const allRenderParts = parts;
   if (currentOnly && allRenderParts.length > 1) body.dataset.collapsedHistory = "true";
-  const renderParts = group.live && !expanded ? allRenderParts.slice(-1) : allRenderParts;
+  const renderParts = currentOnly ? allRenderParts.slice(-1) : allRenderParts;
   const wanted = new Set(renderParts.map(p => p.id));
   for (const child of Array.from(body.children) as HTMLElement[]) {
     if (child.id === "serverStatus") continue;
@@ -1535,8 +1539,7 @@ function renderWorkSection(el: HTMLElement, msgId: string, group: ResolvedUnit):
  * A collapsed live sub-session delegates expansion to its body rather than to
  * the activity shown in its preview slot. Real thought/tool rows have an
  * activity symbol and disclose the parent history even when their own body is
- * not expandable. Symbol-less transient rows do the same only when the parent
- * contains earlier activity that opening it can reveal.
+ * not expandable. Hidden-thinking rows disclose only earlier activity.
  */
 function syncCurrentOnlyDisclosure(body: HTMLElement): void {
   if (!body.classList.contains("current-only") || !body.dataset.workToggle) return;
@@ -1548,13 +1551,9 @@ function syncCurrentOnlyDisclosure(body: HTMLElement): void {
   const hasActivitySymbol = !!head.querySelector(
     ":scope > .thinking-icon:not(:empty), :scope > .tool-icon:not(:empty)"
   );
-  const statusRevealsHistory = !!visiblePart?.classList.contains("server-status-part")
-    && Array.from(body.children).some(child =>
-      child !== visiblePart && (child as HTMLElement).hasAttribute("data-pending-status-suppressed")
-    );
   const hiddenThinkingRevealsHistory = body.dataset.collapsedHistory === "true"
     && !!visiblePart?.querySelector(":scope > .thinking.history-hidden");
-  const disclosesParent = hasActivitySymbol || statusRevealsHistory || hiddenThinkingRevealsHistory;
+  const disclosesParent = hasActivitySymbol || hiddenThinkingRevealsHistory;
   setDisclosureAffordance(head, disclosesParent);
   if (!disclosesParent) delete body.dataset.workToggle;
 }
@@ -1600,7 +1599,8 @@ function rendersAsDirectWorkItem(unit: ResolvedUnit): boolean {
   return unit.kind === "work" && rendersSingleWorkItemDirectly(
     !!unit.conglomerate,
     unit.parts.length,
-    unit.expanded
+    unit.expanded,
+    unit.parts[0]?.kind === "tool" && !!unit.liveStatus
   );
 }
 
@@ -1609,15 +1609,6 @@ function findWorkUnit(units: ResolvedUnit[], groupId: string): ResolvedUnit | un
     if (unit.kind === "work" && unit.groupId === groupId) return unit;
     const nested = unit.children ? findWorkUnit(unit.children, groupId) : undefined;
     if (nested) return nested;
-  }
-  return undefined;
-}
-
-function findWorkUnitContainingPart(units: ResolvedUnit[], partId: string): ResolvedUnit | undefined {
-  for (const unit of units) {
-    const nested = unit.children ? findWorkUnitContainingPart(unit.children, partId) : undefined;
-    if (nested) return nested;
-    if (unit.kind === "work" && unit.parts.some(part => part.id === partId)) return unit;
   }
   return undefined;
 }
@@ -1647,7 +1638,7 @@ function formatWorkedLabel(durationMs: number | undefined): string {
 
 function workActivities(parts: MessagePart[]): WorkActivity[] {
   return parts.flatMap((part): WorkActivity[] => {
-    if (part.kind === "thought") return [{ kind: "thought" }];
+    if (part.kind === "thought") return [{ kind: "thought", active: part.live }];
     if (part.kind === "tool") {
       const resource = toolPath(part.card) || undefined;
       return [{
@@ -1793,16 +1784,8 @@ function thoughtLabelParts(part: Extract<MessagePart, { kind: "thought" }>): { l
 
 function copyableMessageText(m: Message): string {
   if (m.role === "user") return m.text;
-  const visible = m.parts
-    .map(part => {
-      if (part.kind === "text") return part.text;
-      if (part.kind === "summary") return part.text;
-      if (part.kind === "abort") return part.reason;
-      return "";
-    })
-    .filter(text => text.trim());
-  if (visible.length > 0) return visible.join("\n\n");
-  return m.text;
+  if (m.parts.length === 0) return m.text;
+  return copyableAssistantText(resolveRenderUnits(m));
 }
 
 async function handleCopyMessage(messageId: string): Promise<void> {
@@ -1962,14 +1945,13 @@ function renderToolHead(card: HTMLElement, tc: ToolCard): void {
  * text so changing counts remain visually stable.
  */
 function renderToolHeadLabel(label: HTMLElement, tc: ToolCard): void {
-  if (!isWriteToolCard(tc)) {
+  if (!isWriteToolCard(tc) || toolBodyOpen(tc)) {
     setHtml(label, renderToolCardLabel(tc));
     return;
   }
-  if (toolBodyOpen(tc) && writeHasVisibleDiff(tc)) {
-    label.textContent = "";
-    return;
-  }
+  // This branch patches children directly. Invalidate the empty template
+  // cached while expanded so the next expansion clears the rebuilt label.
+  lastSetHtml.delete(label);
   let main = directChild(label, "tool-label-main");
   if (!main) {
     label.textContent = "";
@@ -2109,14 +2091,21 @@ function updateComposer(): void {
   root.querySelector(".composer-row")?.classList.toggle("busy", state.busy);
   const submitButton = root.querySelector("#send, #queueMessage") as HTMLButtonElement | null;
   if (submitButton) submitButton.disabled = state.attachmentPastePending;
-  const attach = root.querySelector("#attachImage") as HTMLButtonElement | null;
+  const attach = root.querySelector("#attachFiles") as HTMLButtonElement | null;
   if (attach) {
+    const label = state.supportsVision ? "Attach images or text files" : "Attach text files (vision unavailable)";
+    attach.setAttribute("aria-label", label);
+    attach.dataset.tip = label;
     attach.style.display = pendingDecision ? "none" : "";
     attach.disabled = state.draftAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE || state.attachmentPastePending;
   }
   if (sendSlot) sendSlot.style.display = pendingDecision ? "none" : "";
   updateChatModeControl();
   updateReasoningEffortControl();
+  updateScrollDownButton();
+}
+
+function updateScrollDownButton(): void {
   const scrollSlot = root.querySelector("#scrollDownSlot") as HTMLElement | null;
   const shouldShowScrollDown = !state.autoScroll;
   if (scrollSlot && renderedScrollDown !== shouldShowScrollDown) {
@@ -2188,24 +2177,6 @@ function renderApprovalComposer(decision: ComposerDecision): string {
   return renderToolApprovalComposer(decision.tool);
 }
 
-interface QuestionPayload {
-  question: string;
-  suggestions: string[];
-}
-
-function parseQuestionPayload(tc: ToolCard): QuestionPayload {
-  try {
-    const parsed = JSON.parse(tc.argsJson) as { question?: unknown; suggestions?: unknown };
-    const question = typeof parsed.question === "string" ? parsed.question : "";
-    const suggestions = Array.isArray(parsed.suggestions)
-      ? parsed.suggestions.filter((s): s is string => typeof s === "string")
-      : [];
-    return { question, suggestions };
-  } catch {
-    return { question: "", suggestions: [] };
-  }
-}
-
 function renderQuestionComposer(tc: ToolCard): string {
   const { question, suggestions } = parseQuestionPayload(tc);
   // Use the chat's Markdown pipeline verbatim so fenced/indented code gets the
@@ -2243,14 +2214,12 @@ function renderToolApprovalComposer(tc: ToolCard): string {
   const approveText = isWrite ? "Accept changes" : "Approve";
   const rejectText = isWrite ? "Reject changes and suggest changes" : "Reject";
   const label = renderToolApprovalLabel(tc);
-  const approvalHint = approvalHintForCategory(tc.category);
   return `<div class="approval-composer">
     <div class="approval-summary">
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
       <strong>${escapeHtml(toolApprovalName(tc))}</strong>
       <span>${label}</span>
     </div>
-    ${approvalHint ? `<div class="command-approval-hint">${escapeHtml(approvalHint)}</div>` : ""}
     <div class="approval-actions">
       <button class="approve" data-approve="${tc.toolId}">${approveText}</button>
       <button class="reject" data-reject="${tc.toolId}">${rejectText}</button>
@@ -2386,9 +2355,9 @@ function applyCompactStatus(currentMessages: number, minMessages: number, availa
 }
 
 function isExpandableTool(tc: ToolCard): boolean {
-  // Successful reads stay compact, but a failed/rejected read must expose its
-  // diagnostic just like every other erroneous tool call.
-  return (tc.toolName !== "read_file" || isErrorToolCard(tc)) &&
+  // Successful reads and image views stay compact; failed/rejected calls
+  // still expose their diagnostic like every other erroneous tool call.
+  return (!["read_file", "view_image"].includes(tc.toolName) || isErrorToolCard(tc)) &&
     !(tc.toolName === "compact_context" && tc.status === "pending");
 }
 
@@ -2404,18 +2373,19 @@ function toolCardClass(tc: ToolCard): string {
       ? " update-todos"
       : "";
   const outputClass = usesOutputSurface(tc) ? " output-surface-tool" : "";
-  const processClass = ownsRunningProcess(tc) ? " process-running" : "";
+  const processClass = chatFeature.activityClass?.(tc) ?? "";
   return "tool-card " + tc.category + " " + tc.status + toolClass + outputClass + processClass + (toolBodyOpen(tc) ? " open" : "");
 }
 
 function usesOutputSurface(tc: ToolCard): boolean {
   return tc.toolName === "list_dir" || tc.toolName === "glob" || tc.toolName === "update_todos" ||
-    isWriteToolCard(tc) || isCommandTool(tc) || !!tc.resultPreview;
+    tc.toolName === "ask_user_question" || isWriteToolCard(tc) || isFeatureTool(tc) || !!tc.resultPreview;
 }
 
 function toolHeadClass(tc: ToolCard): string {
   const active = !isErrorToolCard(tc) && isActiveToolCard(tc);
-  return "tool-head" + (active ? " active-tool-head" : "");
+  const file = tc.toolName === "read_file" || tc.toolName === "view_image" || isWriteToolCard(tc);
+  return "tool-head" + (file ? " file-tool-head" : "") + (active ? " active-tool-head" : "");
 }
 
 function toolLabelClass(tc: ToolCard): string {
@@ -2462,8 +2432,13 @@ function renderFileListHtml(tc: ToolCard): string {
 }
 
 function renderToolExpandedHtml(tc: ToolCard): string {
+  if (tc.toolName === "ask_user_question") return renderQuestionResult(tc, md);
   const resultIsError = tc.status === "failed" || tc.status === "rejected";
   if (resultIsError) return renderErroredToolExpandedHtml(tc);
+  const featureResult = chatFeature.renderResult?.(tc, escapeHtml, CARD_SEPARATOR_HTML);
+  if (featureResult !== undefined) return renderToolOutputSurface(featureResult, false);
+  // Successful edits show their diff directly in the shared output card.
+  if (isWriteToolCard(tc)) return renderChangeCard(tc);
 
   if (tc.toolName === "update_todos") {
     const todos = todosFromCard(tc);
@@ -2478,54 +2453,29 @@ function renderToolExpandedHtml(tc: ToolCard): string {
     if (list) return renderToolOutputSurface(list, false);
     // Fall through to the raw preview if the result didn't parse.
   }
-  const command = isCommandTool(tc) ? toolCommand(tc) : "";
-  const stopProcessAction = (tc.toolName === "run_command" || tc.toolName === "run_process") && tc.processJobId && tc.processRunning
-    ? `<button class="copy-btn code-block-stop" type="button" data-stop-process="${escapeHtml(tc.processJobId)}" data-tip="${tc.processStopping ? "Stopping process" : "Stop process"}" aria-label="${tc.processStopping ? "Stopping process" : "Stop process"}" ${tc.processStopping ? "disabled" : ""}>${stopIcon()}</button>`
-    : "";
-  const commandBlock = command ? renderCopyableCodeBlock(command, "bash", "$ ", stopProcessAction) : "";
-  // A successful file edit already shows the full diff, so its "Out: wrote N
-  // bytes" preview is redundant — drop it (but keep error output).
-  const hideWriteOut = isWriteToolCard(tc) && !resultIsError;
-  const result = tc.resultPreview && !hideWriteOut
-    ? renderToolResult(tc, resultIsError)
-    : "";
-  const diff = isWriteToolCard(tc)
-    ? renderWriteExpandedState(tc)
-    : "";
-  const surfaceClass = isWriteToolCard(tc) && diff ? " edit-diff-surface" : "";
-  return renderToolOutputSurface(`${commandBlock}${diff}${result}`, false, surfaceClass);
+  if (tc.toolName === "search_memories" || tc.toolName === "recall_memory") {
+    const content = renderMemoryResult(tc.toolName, tc.resultPreview ?? "", md);
+    if (content) return renderToolOutputSurface(content, false);
+  }
+  const commandBlock = chatFeature.renderHeader?.(tc, toolArgs(tc), renderCopyableCodeBlock, escapeHtml, stopIcon()) ?? "";
+  const result = tc.resultPreview ? renderToolResult(tc, false) : "";
+  return renderToolOutputSurface([commandBlock, result].filter(Boolean).join(CARD_SEPARATOR_HTML), false);
 }
 
 /**
- * Failed commands mirror the successful command layout: the attempted command
- * and its diagnostic share one surface, separated by the standard divider. The
- * whole surface is red so it still reads as an error.
- *
- * Other tools keep their attempted context neutral and put only the diagnostic
- * in the shared red error surface. In particular, edit-diff-surface deliberately
- * has a transparent background; combining it with the error class used to make
- * revision-mismatch messages look like unboxed red text.
+ * Failed tools use the shared error surface. Commands and edits retain their
+ * attempted operation above the diagnostic, separated by the standard divider.
  */
 function renderErroredToolExpandedHtml(tc: ToolCard): string {
-  const command = isCommandTool(tc) ? toolCommand(tc) : "";
-  const commandBlock = command ? renderCopyableCodeBlock(command, "bash", "$ ") : "";
+  const commandBlock = chatFeature.renderHeader?.(tc, toolArgs(tc), renderCopyableCodeBlock, escapeHtml, stopIcon(), true) ?? "";
   const diagnostic = renderToolResult(tc, true);
-  if (isCommandTool(tc)) {
-    return renderToolOutputSurface(commandBlock + diagnostic, true);
+  if (isFeatureTool(tc)) {
+    return renderToolOutputSurface([commandBlock, diagnostic].filter(Boolean).join(CARD_SEPARATOR_HTML), true);
   }
   if (isWriteToolCard(tc)) {
     return renderChangeCard(tc, toolResultDetail(tc));
   }
-  const diff = isWriteToolCard(tc) ? renderWriteExpandedState(tc) : "";
-  const context = commandBlock + diff;
-  const contextClass = isWriteToolCard(tc) && diff ? " edit-diff-surface" : "";
-  const contextSurface = renderToolOutputSurface(context, false, contextClass);
-  return contextSurface + renderToolOutputSurface(diagnostic, true);
-}
-
-function renderToolOutputSurface(content: string, error: boolean, extraClass = ""): string {
-  if (!content) return "";
-  return `<div class="tool-output-surface${error ? " error" : ""}${extraClass}">${content}</div>`;
+  return renderToolOutputSurface(diagnostic, true);
 }
 
 function renderToolResult(tc: ToolCard, error: boolean): string {
@@ -2540,50 +2490,13 @@ function toolResultDetail(tc: ToolCard): string {
   const text = tc.resultPreview ?? "";
   // Older saved command results may predate output sanitization. Clean them at
   // render time as well so reopening a chat cannot expose ANSI control glyphs.
-  if (isCommandTool(tc)) return sanitizeTerminalText(text);
+  const formatted = chatFeature.formatResult?.(tc, text);
+  if (formatted !== undefined) return formatted;
   if (tc.toolName !== "tool_call") return text;
   // The first malformed-call line is represented compactly in the card head.
   // Keep the remaining diagnostic and raw arguments in the expanded surface.
   const lines = text.split("\n");
   return lines.slice(1).join("\n");
-}
-
-function renderWriteExpandedState(tc: ToolCard): string {
-  const steps = renderEditStepsHtml(tc);
-  if (tc.diffPreview) return renderChangeCard(tc);
-  if (tc.status === "failed" || tc.status === "rejected") return steps;
-  // Mount the finished diff card's header immediately. Its live path, operation,
-  // and +/- stats stay in place while the body is still being generated.
-  return renderChangeCard(tc);
-}
-
-/**
- * The exact tool call behind a single (ungrouped) edit card, with its target
- * lines, e.g. "Edit  replace_range 10-12". The "Edit file" header alone hides
- * whether write_file, insert_text, or replace_range ran — which is exactly
- * what the user needs to attribute a mistargeted edit.
- */
-function renderEditStepsHtml(tc: ToolCard): string {
-  if (!isWriteToolCard(tc)) return "";
-  return `<div class="edit-steps"><span class="edit-steps-label">Edit</span><span class="edit-step">${escapeHtml(editStepLabel(tc))}</span></div>`;
-}
-
-/** Short per-call label for an edit: tool name plus the lines it targeted. */
-function editStepLabel(tc: ToolCard): string {
-  const args = editDisplayArgs(tc);
-  const toolName = tc.toolName;
-  if (toolName === "insert_text") {
-    const line = readRangeNumber(args.line ?? args.lineNumber ?? args.line_number);
-    return line !== undefined ? `insert_text @${line}` : "insert_text";
-  }
-  if (toolName === "replace_range") {
-    const start = readRangeNumber(args.startLine ?? args.start_line ?? args.start);
-    const end = readRangeNumber(args.endLine ?? args.end_line ?? args.end);
-    return start !== undefined && end !== undefined
-      ? `replace_range ${start}-${end}`
-      : "replace_range";
-  }
-  return toolName;
 }
 
 function compactActivityToolCard(activity: CompactActivity, expanded: boolean): ToolCard {
@@ -2625,19 +2538,22 @@ function compactActivityOutput(activity: CompactActivity): string {
 }
 
 function toolIcon(tc: ToolCard): string {
+  const featureIcon = chatFeature.icons?.[tc.toolName];
+  if (featureIcon) return featureIcon;
+  if (tc.toolName === "list_dir") return folderIcon();
   if (tc.toolName === "compact_context") return compactIcon();
   if (tc.toolName === "update_todos") return checklistIcon();
   if (tc.toolName === "ask_user_question") return questionIcon();
-  if (isCommandTool(tc)) return terminalIcon();
+  if (isFeatureTool(tc)) return chatFeature.icon?.() ?? searchIcon();
   if (isWriteToolCard(tc)) return pencilIcon();
+  if (tc.toolName === "search_memories" || tc.toolName === "recall_memory") return cloudIcon();
+  if (tc.toolName === "view_image") return viewImageIcon();
   if (tc.toolName === "read_file") return readFileIcon();
   return searchIcon();
 }
 
-function isCommandTool(tc: ToolCard): boolean {
-  return tc.toolName === "run_command" || tc.toolName === "run_process" ||
-    tc.toolName === "wait_process" || tc.toolName === "stop_process" ||
-    tc.category === "safeCmd" || tc.category === "command" || tc.category === "process";
+function isFeatureTool(tc: ToolCard): boolean {
+  return chatFeature.recognizes?.(tc.toolName) ?? false;
 }
 
 function isWriteToolCard(tc: ToolCard): boolean {
@@ -2646,30 +2562,29 @@ function isWriteToolCard(tc: ToolCard): boolean {
 
 function renderChangeCard(tc: ToolCard, errorText?: string): string {
   const path = toolPath(tc);
-  const displayPath = path ? workspaceFileName(path) : "Edited file";
-  const pathTip = path ? toolFilePathTooltip(path) : displayPath;
   const hasError = errorText !== undefined;
   const hasDiff = !hasError && !!tc.diffPreview;
-  const stats = hasError ? undefined : writeStats(tc);
+  const unavailable = !hasError && !hasDiff && tc.diffUnavailable;
+  const stats = writeStats(tc);
   const operation = editOperationLabel(tc.toolName, editDisplayArgs(tc));
   const copyText = (tc.diffPreview ?? "").split("\n").map(line => {
     const parsed = parseDiffLine(line);
     return `${parsed.marker ? `${parsed.marker} ` : "  "}${parsed.code}`;
   }).join("\n");
-  return `<div class="tool-change-card${hasDiff || hasError ? "" : " pending-diff"}${hasError ? " error-diff" : ""}">
-    <div class="tool-change-head">
-      <button class="tool-change-path" type="button" data-open-file="${escapeHtml(path)}" data-tip="${escapeHtml(pathTip)}">${escapeHtml(displayPath)}</button>
+  const content = `<div class="tool-output-header tool-change-head">
+      <span class="tool-label-main">${renderToolPathLabel(tc)}</span>
       ${stats ? diffStatHtml(stats) : ""}
       ${operation ? `<span class="tool-change-operation">${escapeHtml(operation)}</span>` : ""}
-      ${hasDiff ? `<button class="copy-btn tool-change-copy" type="button" data-copy-code aria-label="Copy diff">${copyIcon()}</button>` : ""}
+      ${hasDiff ? `<button class="copy-btn block-code-copy-btn tool-change-copy" type="button" data-copy-code aria-label="Copy diff">${copyIcon()}</button>` : ""}
     </div>
+    ${hasError || hasDiff || unavailable ? CARD_SEPARATOR_HTML : ""}
     ${hasError
       ? `<div class="tool-change-error">${escapeHtml(errorText)}</div>`
       : hasDiff
         ? `<pre class="tool-diff edit-preview change-diff">${renderDiffLines(tc.diffPreview ?? "", path)}</pre>
     <span class="copy-code-source tool-change-copy-source">${escapeHtml(copyText)}</span>`
-        : ""}
-  </div>`;
+        : unavailable ? '<div class="tool-change-unavailable">This edit’s diff wasn’t saved.</div>' : ""}`;
+  return renderToolOutputSurface(content, hasError, " tool-change-card");
 }
 
 /** Merge progressively parsed line locations into the eventual tool arguments. */
@@ -2727,10 +2642,9 @@ function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine
 
 /** Header name for a tool card. */
 function toolCardHeadName(tc: ToolCard): string {
-  if (tc.toolName === "run_command" || tc.toolName === "run_process") {
-    return tc.processRunning ? "Running command" : commandToolLabel(tc.status);
-  }
-  const includeFileNoun = !isWriteToolCard(tc) && tc.toolName !== "read_file";
+  const featureLabel = chatFeature.headerLabel?.(tc, isActiveToolCard(tc));
+  if (featureLabel) return featureLabel;
+  const includeFileNoun = !isWriteToolCard(tc) && !["read_file", "view_image", "list_dir"].includes(tc.toolName);
   if (!isErrorToolCard(tc) && isActiveToolCard(tc)) {
     return activeToolLabel(tc.toolName, tc.createsNewFile, includeFileNoun);
   }
@@ -2745,12 +2659,15 @@ function toolApprovalName(tc: ToolCard): string {
 }
 
 function isActiveToolCard(tc: ToolCard): boolean {
-  return toolActivityIsActive(tc.toolName, tc.status, tc.processRunning);
+  return toolActivityIsActive(
+    tc.toolName,
+    tc.status,
+    tc.processRunning,
+    state.contextActivityIds.has(tc.toolId),
+    state.serverPending === "title"
+  );
 }
 
-function ownsRunningProcess(tc: ToolCard): boolean {
-  return toolOwnsRunningProcess(tc.toolName, tc.processRunning);
-}
 
 function isErrorToolCard(tc: ToolCard): tc is ToolCard & { status: "failed" | "rejected" } {
   return tc.status === "failed" || tc.status === "rejected";
@@ -2758,39 +2675,40 @@ function isErrorToolCard(tc: ToolCard): tc is ToolCard & { status: "failed" | "r
 
 function toolDisplayName(toolName: string): string {
   const aliases: Record<string, string> = {
+    search_memories: "Search memories",
+    recall_memory: "Recall memory",
+    view_image: "View image",
     read_file: "Read file",
-    list_dir: "Read directory",
+    list_dir: "List",
     write_file: "Write file",
     create_file: "Create file",
     edit_file: "Edit file",
     insert_text: "Edit file",
     replace_range: "Edit file",
     glob: "Search for files",
-    run_command: "Run command",
-    run_process: "Run command",
-    wait_process: "Wait for process",
-    stop_process: "Stop process",
     update_todos: "Update todos",
     ask_user_question: "Ask question",
     compact_context: "Compact context"
   };
-  return aliases[toolName] ?? toolName;
+  return chatFeature.aliases?.[toolName] ?? aliases[toolName] ?? toolName;
 }
 
 function toolCardLabel(tc: ToolCard): string {
   if (tc.toolName === "tool_call") return "Could not be parsed; nothing was executed";
-  if (tc.toolName === "read_file" || tc.toolName === "list_dir" || isWriteToolCard(tc)) {
+  if (tc.toolName === "read_file" || tc.toolName === "view_image" || tc.toolName === "list_dir" || isWriteToolCard(tc)) {
     const path = toolPath(tc);
     const stats = isWriteToolCard(tc) ? writeStats(tc) : undefined;
     if (stats) return `${path} +${stats.added} -${stats.removed}`;
     return path;
   }
+  if (tc.toolName === "search_memories") return String(toolArgs(tc).query ?? "");
+  if (tc.toolName === "recall_memory") return String(toolArgs(tc).name ?? "");
   if (tc.toolName === "glob") return String(toolArgs(tc).pattern ?? "");
-  if (tc.toolName === "run_command" || tc.toolName === "run_process") {
+  if (isFeatureTool(tc)) {
     // The expanded command surface shows the full, copyable command directly
     // below the heading. Keep the compact summary only while the card is
     // collapsed so the same command is not repeated on adjacent rows.
-    return toolBodyOpen(tc) ? "" : toolCommand(tc);
+    return toolBodyOpen(tc) ? "" : toolOperation(tc);
   }
   if (tc.toolName === "compact_context") return "";
   return "";
@@ -2812,45 +2730,39 @@ function diffStatHtml(stats: { added: number; removed: number }): string {
 }
 
 function renderToolCardLabel(tc: ToolCard): string {
+  const featureLabel = chatFeature.renderLabel?.(tc, toolArgs(tc), escapeHtml);
+  if (featureLabel !== undefined) return featureLabel;
   if (tc.toolName === "update_todos") {
     const todos = todosFromCard(tc);
     const done = todos.filter(t => t.status === "completed").length;
     return `<span class="tool-label-text">(${done}/${todos.length})</span>`;
   }
   if (isWriteToolCard(tc)) {
-    if (toolBodyOpen(tc) && writeHasVisibleDiff(tc)) return "";
     // Same node structure the in-place patcher (renderToolHeadLabel) maintains,
     // so a string-rendered card hands over cleanly to targeted updates.
+    if (toolBodyOpen(tc)) return "";
     const stats = writeStats(tc);
     return `<span class="tool-label-main">${renderToolPathLabel(tc)}</span>` + (stats ? diffStatHtml(stats) : "");
   }
+  if (tc.toolName === "view_image") return renderToolPathLabel(tc);
   if (tc.toolName === "read_file") return renderToolPathLabel(tc) + readRangeHtml(tc);
   if (tc.toolName === "ask_user_question") {
+    if (toolBodyOpen(tc)) return "";
     const { question } = parseQuestionPayload(tc);
-    const answer = answeredValue(tc);
-    const answered = answer ? `<span class="question-answered">→ ${escapeHtml(answer)}</span>` : "";
-    return `<span class="tool-label-text">${escapeHtml(question)}</span>${answered}`;
+    return `<span class="tool-label-text">${escapeHtml(question)}</span>`;
   }
   const label = toolCardLabel(tc);
   return label ? `<span class="tool-label-text">${escapeHtml(label)}</span>` : "";
 }
 
-function writeHasVisibleDiff(tc: ToolCard): boolean {
-  return isWriteToolCard(tc);
-}
-
-/** The answer the user gave to an ask_user_question card, once resolved. */
-function answeredValue(tc: ToolCard): string | undefined {
-  if (tc.status !== "executed" || !tc.resultPreview) return undefined;
-  const match = /^the user has answered your question: "([\s\S]*)"$/.exec(tc.resultPreview);
-  return match ? match[1] : undefined;
-}
-
 function renderToolApprovalLabel(tc: ToolCard): string {
+  const featureLabel = chatFeature.renderLabel?.(tc, toolArgs(tc), escapeHtml);
+  if (featureLabel !== undefined) return featureLabel;
   if (isWriteToolCard(tc)) {
     const stats = writeStats(tc);
     return stats ? `${renderToolPathLabel(tc)} ${diffStatHtml(stats)}` : renderToolPathLabel(tc);
   }
+  if (tc.toolName === "view_image") return renderToolPathLabel(tc);
   if (tc.toolName === "read_file") return renderToolPathLabel(tc) + readRangeHtml(tc);
   return escapeHtml(toolCardLabel(tc));
 }
@@ -2878,7 +2790,7 @@ function readRangeNumber(value: unknown): number | undefined {
 function renderToolPathLabel(tc: ToolCard): string {
   const filePath = toolPath(tc);
   if (!filePath) return `<span class="tool-label-text"></span>`;
-  const compactFilePath = isWriteToolCard(tc) || tc.toolName === "read_file";
+  const compactFilePath = isWriteToolCard(tc) || tc.toolName === "read_file" || tc.toolName === "view_image";
   const displayPath = compactFilePath ? workspaceFileName(filePath) : filePath;
   const tooltip = compactFilePath ? ` data-tip="${escapeHtml(toolFilePathTooltip(filePath))}"` : "";
   return `<button class="tool-path-link tool-label-text" type="button" data-open-file="${escapeHtml(filePath)}"${tooltip}>${escapeHtml(displayPath)}</button>`;
@@ -2913,13 +2825,8 @@ function findToolCard(toolId: string): ToolCard | undefined {
   return undefined;
 }
 
-function toolCommand(tc: ToolCard): string {
-  const args = toolArgs(tc);
-  if (tc.toolName === "run_process") {
-    const argv = Array.isArray(args.args) ? args.args.filter(value => typeof value === "string") : [];
-    return [String(args.program ?? ""), ...argv].join(" ").trim();
-  }
-  return String(args.command ?? "");
+function toolOperation(tc: ToolCard): string {
+  return chatFeature.operation?.(tc, toolArgs(tc)) ?? "";
 }
 
 function toolArgs(tc: ToolCard): Record<string, unknown> {
@@ -3011,6 +2918,7 @@ function summaryRepeatsVisibleText(m: Message, summary: string): boolean {
 }
 
 function restoreAssistantParts(msg: Message, recordMessage: ChatRecord["messages"][number]): void {
+  msg.recordTs = recordMessage.ts;
   let restoredText = "";
   let restoredThought = "";
   let runThought: Extract<MessagePart, { kind: "thought" }> | null = null;
@@ -3074,34 +2982,25 @@ function restoreAssistantParts(msg: Message, recordMessage: ChatRecord["messages
 }
 
 
-function updateScrollState(body: HTMLElement, fromUserScroll: boolean): void {
+function updateScrollState(body: HTMLElement): void {
   const distance = body.scrollHeight - body.scrollTop - body.clientHeight;
   state.savedScrollTop = body.scrollTop;
   state.scrollDownOpacity = Math.max(0.15, Math.min(1, distance / 140));
   const btn = root.querySelector("#scrollDown") as HTMLButtonElement | null;
   if (btn) btn.style.opacity = state.scrollDownOpacity.toFixed(2);
-  // Re-engage follow ONLY when the real user-scroll event lands at the bottom.
-  // The render-internal call (fromUserScroll=false) must never re-engage — a short
-  // streamed token can push savedTop within 4px of the new bottom and clobber the
-  // user's intent to read older content.
-  if (fromUserScroll && distance <= 4 && !state.autoScroll) {
-    state.autoScroll = true;
-    render();
-  }
+  updateScrollDownButton();
 }
 
-function markUserScrollIntent(body: HTMLElement): void {
-  requestAnimationFrame(() => {
-    const distance = body.scrollHeight - body.scrollTop - body.clientHeight;
-    if (distance <= 4) {
-      if (!state.autoScroll) {
-        state.autoScroll = true;
-        render();
-      }
-    } else {
-      state.autoScroll = false;
+/** Nested code/output panes consume their own gestures until they reach an edge. */
+function scrollReachesChat(body: HTMLElement, target: EventTarget | null, delta: number): boolean {
+  let element = target instanceof HTMLElement ? target : target instanceof Element ? target.parentElement : null;
+  while (element && element !== body) {
+    if (element.scrollHeight > element.clientHeight && /^(auto|scroll)$/.test(getComputedStyle(element).overflowY)) {
+      if (delta < 0 ? element.scrollTop > 0 : element.scrollTop + element.clientHeight < element.scrollHeight) return false;
     }
-  });
+    element = element.parentElement;
+  }
+  return true;
 }
 
 function bindOnce(): void {
@@ -3131,15 +3030,53 @@ function bindOnce(): void {
   });
   const body = chatBody();
   if (body) {
-    body.addEventListener("scroll", () => updateScrollState(body, true));
-    const userIsScrolling = (): void => markUserScrollIntent(body);
-    body.addEventListener("wheel", userIsScrolling, { passive: true });
-    body.addEventListener("touchmove", userIsScrolling, { passive: true });
-    body.addEventListener("keydown", e => {
-      const k = e.key;
-      if (k === "PageUp" || k === "PageDown" || k === "ArrowUp" || k === "ArrowDown" || k === "Home" || k === "End" || k === " ") {
-        userIsScrolling();
-      }
+    body.addEventListener("scroll", () => {
+      scrollFollow.onScroll(body);
+      updateScrollState(body);
+    });
+    body.addEventListener("scrollend", () => scrollFollow.endGesture());
+    const userIsScrolling = (delta: number, target: EventTarget | null): void => {
+      if (!delta || !scrollReachesChat(body, target, delta)) return;
+      scrollFollow.userIntent(delta < 0 ? -1 : 1, body);
+      updateScrollState(body);
+    };
+    body.addEventListener("wheel", event => {
+      if (!event.ctrlKey && Math.abs(event.deltaY) > Math.abs(event.deltaX)) userIsScrolling(event.deltaY, event.target);
+    }, { passive: true, capture: true });
+    let touchY: number | undefined;
+    body.addEventListener("touchstart", event => {
+      touchY = event.touches.length === 1 ? event.touches[0].clientY : undefined;
+    }, { passive: true });
+    body.addEventListener("touchmove", event => {
+      if (event.touches.length !== 1) { touchY = undefined; return; }
+      const nextY = event.touches[0].clientY;
+      if (touchY !== undefined) userIsScrolling(touchY - nextY, event.target);
+      touchY = nextY;
+    }, { passive: true, capture: true });
+    document.addEventListener("keydown", e => {
+      if (e.defaultPrevented || e.altKey || e.metaKey) return;
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      if (target !== document.body && target !== document.documentElement && (!target || !body.contains(target))) return;
+      if (target?.isContentEditable || target?.closest("input, textarea, select")) return;
+      if (e.key === " " && target?.closest("button, a, summary")) return;
+      const delta = ["PageUp", "ArrowUp", "Home"].includes(e.key) || (e.key === " " && e.shiftKey) ? -1
+        : ["PageDown", "ArrowDown", "End", " "].includes(e.key) ? 1 : 0;
+      userIsScrolling(delta, e.target);
+    });
+    body.addEventListener("pointerdown", event => {
+      const gutter = body.offsetWidth - body.clientWidth;
+      const rect = body.getBoundingClientRect();
+      if (event.button !== 0 || event.target !== body || gutter <= 0 || event.clientX < rect.right - gutter) return;
+      scrollFollow.beginDrag(body);
+      updateScrollState(body);
+    }, { capture: true });
+    const endScrollDrag = (): void => { scrollFollow.endDrag(body); updateScrollState(body); };
+    window.addEventListener("pointerup", endScrollDrag);
+    window.addEventListener("pointercancel", endScrollDrag);
+    window.addEventListener("blur", () => {
+      if (!scrollFollow.dragging) return;
+      scrollFollow.pause();
+      updateScrollState(body);
     });
   }
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
@@ -3188,7 +3125,10 @@ function bindOnce(): void {
         closeImagePreview();
       } else if (e.key === "Tab") {
         e.preventDefault();
-        imagePreviewCloseButton()?.focus();
+        const controls = Array.from(imagePreviewElement()!.querySelectorAll<HTMLElement>("button, [tabindex='0']"))
+          .filter(element => element.getClientRects().length > 0);
+        const index = controls.indexOf(document.activeElement as HTMLElement);
+        controls[(index + (e.shiftKey ? -1 : 1) + controls.length) % controls.length]?.focus();
       }
       return;
     }
@@ -3232,7 +3172,12 @@ function bindOnce(): void {
     if (toolId) submitQuestionAnswer(toolId, state.questionDraft.trim());
   });
   installTooltips();
-  window.addEventListener("resize", syncShimmerAnimations);
+  window.addEventListener("resize", () => {
+    syncToolHeaderScrollbars();
+    syncShimmerAnimations();
+  });
+  document.fonts.addEventListener("loadingdone", syncToolHeaderScrollbars);
+  chatFeature.bind?.(root);
   root.addEventListener("pointerdown", e => {
     const target = e.target as HTMLElement;
     if (target.closest("#cancel")) {
@@ -3241,7 +3186,7 @@ function bindOnce(): void {
       return;
     }
     const workEl = target.closest("[data-work-toggle]") as HTMLElement | null;
-    if (workEl && !target.closest("button")) {
+    if (workEl && !target.closest("button, a")) {
       e.preventDefault();
       const groupId = workEl.dataset.workToggle!;
       const m = state.messages.find(x => findWorkUnit(resolveRenderUnits(x), groupId));
@@ -3249,7 +3194,7 @@ function bindOnce(): void {
         const group = findWorkUnit(resolveRenderUnits(m), groupId);
         m.workGroupExpanded ??= new Map<string, boolean>();
         m.workGroupExpanded.set(groupId, !(group?.expanded ?? false));
-        state.autoScroll = false;
+        scrollFollow.pause();
         render();
       }
       return;
@@ -3263,13 +3208,13 @@ function bindOnce(): void {
       if (part) {
         const currentExpanded = part.userExpanded ?? false;
         part.userExpanded = !currentExpanded;
-        state.autoScroll = false;
+        scrollFollow.pause();
         render();
       }
       return;
     }
     const toolEl = target.closest("[data-tool-toggle]") as HTMLElement | null;
-    if (toolEl && !target.closest("button")) {
+    if (toolEl && !target.closest("button, a")) {
       e.preventDefault();
       const id = toolEl.dataset.toolToggle!;
       for (const m of state.messages) {
@@ -3278,39 +3223,42 @@ function bindOnce(): void {
           if (tc.toolName === "compact_context" && tc.status === "pending") return;
           tc.expanded = !tc.expanded;
           if (tc.expanded && isWriteToolCard(tc)) {
-            if (tc.status === "executed" && !tc.diffPreview && !tc.diffRequested) {
+            if (tc.status === "executed" && !tc.diffPreview && !tc.diffRequested && !tc.diffUnavailable) {
               tc.diffRequested = true;
               send({ type: "requestToolDiff", toolId: tc.toolId });
             }
           }
-          state.autoScroll = false;
+          scrollFollow.pause();
           render();
           return;
         }
       }
     }
-    const stopProcess = target.closest("[data-stop-process]") as HTMLButtonElement | null;
-    if (stopProcess) {
+    if (chatFeature.click?.(target, state.messages.flatMap(message => message.toolCards), send)) {
       e.preventDefault();
-      const jobId = stopProcess.dataset.stopProcess!;
-      for (const message of state.messages) {
-        for (const card of message.toolCards) {
-          if (card.processJobId === jobId) card.processStopping = true;
-        }
-      }
-      send({ type: "stopProcess", jobId });
       render();
-      return;
     }
   });
   root.addEventListener("click", e => {
     const target = e.target as HTMLElement;
-    const preview = target.closest("[data-open-image-preview]") as HTMLButtonElement | null;
-    if (preview) {
-      openImagePreview(preview);
+    const filePreview = target.closest<HTMLElement>("[data-open-attachment]");
+    if (filePreview) {
+      openAttachmentPreview(filePreview);
+      return;
+    }
+    const previewNavigation = target.closest<HTMLElement>("[data-attachment-preview-step]");
+    if (previewNavigation && attachmentGallery) {
+      attachmentGallery = moveAttachmentGallery(attachmentGallery, previewNavigation.dataset.attachmentPreviewStep === "-1" ? -1 : 1);
+      renderAttachmentGalleryItem();
       return;
     }
     const previewDialog = target.closest("#imagePreview") as HTMLElement | null;
+    if (target.closest("[data-open-preview-in-editor]") && textAttachmentPreview) {
+      const attachmentId = textAttachmentPreview.attachment.id;
+      closeImagePreview();
+      send({ type: "openAttachment", attachmentId });
+      return;
+    }
     if (target.closest("[data-close-image-preview]") || target === previewDialog) {
       closeImagePreview();
       return;
@@ -3403,7 +3351,7 @@ function bindOnce(): void {
       const m = state.messages.find(x => x.id === fileChangesToggle.dataset.fileChangesToggle);
       if (m) {
         m.fileChangesExpanded = !(m.fileChangesExpanded ?? false);
-        state.autoScroll = false;
+        scrollFollow.pause();
         render();
       }
       return;
@@ -3416,7 +3364,7 @@ function bindOnce(): void {
         m.expandedFileChanges ??= new Set<string>();
         if (m.expandedFileChanges.has(key)) m.expandedFileChanges.delete(key);
         else m.expandedFileChanges.add(key);
-        state.autoScroll = false;
+        scrollFollow.pause();
         render();
       }
       return;
@@ -3460,7 +3408,11 @@ function bindOnce(): void {
     }
     else if (target.closest("#send")) submit();
     else if (target.closest("#queueMessage")) submit();
-    else if (target.closest("#attachImage")) send({ type: "selectAttachment" });
+    else if (target.closest("#attachFiles")) {
+      state.attachmentPastePending = true;
+      render();
+      send({ type: "selectAttachment" });
+    }
     else if (target.closest("[data-remove-draft-attachment]")) {
       const remove = target.closest("[data-remove-draft-attachment]") as HTMLElement;
       const attachmentId = remove.dataset.removeDraftAttachment;
@@ -3482,7 +3434,11 @@ function bindOnce(): void {
       render();
     }
     else if (target.closest("#scrollDown")) {
-      state.autoScroll = true;
+      const body = chatBody();
+      if (body) {
+        body.scrollTop = body.scrollHeight;
+        scrollFollow.reset(true, body);
+      }
       render();
     } else {
       const review = target.closest("[data-review-path]") as HTMLElement | null;
@@ -3614,6 +3570,14 @@ function applyQueuedMessageOrder(ids: string[]): void {
 }
 
 let imagePreviewReturnFocus: HTMLElement | null = null;
+let attachmentGallery: AttachmentGallery | undefined;
+let attachmentPreviewRequestId = 0;
+let textAttachmentPreview: {
+  attachment: UiAttachment;
+  requestId: number;
+  text?: string;
+  error?: string;
+} | undefined;
 
 function imagePreviewElement(): HTMLElement | null {
   return root.querySelector("#imagePreview") as HTMLElement | null;
@@ -3623,17 +3587,75 @@ function imagePreviewCloseButton(): HTMLButtonElement | null {
   return root.querySelector("[data-close-image-preview]") as HTMLButtonElement | null;
 }
 
-function openImagePreview(trigger: HTMLButtonElement): void {
-  const source = trigger.querySelector("img");
+function openAttachmentPreview(trigger: HTMLElement): void {
+  attachmentGallery = createAttachmentGallery([
+    state.draftAttachments,
+    ...state.queuedMessages.map(message => message.attachments ?? []),
+    ...state.messages.map(message => (message.attachments ?? []).filter(attachment =>
+      message.recordTs !== state.editingMessageTs || !state.editingRemovedAttachmentIds.has(attachment.id)
+    ))
+  ], trigger.dataset.openAttachment ?? "");
+  if (!attachmentGallery) return;
+  renderAttachmentGalleryItem();
+  showAttachmentPreview(trigger);
+}
+
+function renderAttachmentGalleryItem(): void {
+  if (!attachmentGallery) return;
+  const attachment = attachmentGallery.attachments[attachmentGallery.index];
+  for (const button of Array.from(root.querySelectorAll<HTMLButtonElement>("[data-attachment-preview-step]"))) {
+    button.hidden = attachmentGallery.attachments.length < 2;
+  }
+  if (isImageAttachment(attachment)) openImagePreview(attachment);
+  else openTextAttachmentPreview(attachment);
+}
+
+function openImagePreview(attachment: UiAttachment): void {
   const dialog = imagePreviewElement();
   const image = root.querySelector("#imagePreviewImage") as HTMLImageElement | null;
   const caption = root.querySelector("#imagePreviewCaption") as HTMLElement | null;
-  if (!source || !dialog || !image || !caption) return;
+  if (!dialog || !image || !caption) return;
 
+  textAttachmentPreview = undefined;
+  dialog.classList.remove("text-preview");
+  root.querySelector<HTMLElement>("#attachmentPreviewText")!.hidden = true;
+  root.querySelector<HTMLElement>("[data-open-preview-in-editor]")!.hidden = true;
+  image.hidden = false;
+  image.src = attachment.previewUri;
+  image.alt = attachment.fileName;
+  caption.textContent = attachment.fileName;
+}
+
+function openTextAttachmentPreview(attachment: UiAttachment): void {
+  const dialog = imagePreviewElement();
+  if (!dialog) return;
+  textAttachmentPreview = { attachment, requestId: ++attachmentPreviewRequestId };
+  dialog.classList.add("text-preview");
+  root.querySelector<HTMLElement>("#imagePreviewImage")!.hidden = true;
+  root.querySelector<HTMLElement>("#attachmentPreviewText")!.hidden = false;
+  root.querySelector<HTMLElement>("[data-open-preview-in-editor]")!.hidden = false;
+  root.querySelector<HTMLElement>("#imagePreviewCaption")!.textContent = attachment.fileName;
+  renderTextAttachmentPreview();
+  root.querySelector<HTMLElement>("#attachmentPreviewText")!.scrollTop = 0;
+  root.querySelector<HTMLElement>("#attachmentPreviewText")!.scrollLeft = 0;
+  send({ type: "requestAttachmentText", attachmentId: attachment.id, requestId: textAttachmentPreview.requestId });
+}
+
+function renderTextAttachmentPreview(): void {
+  const preview = textAttachmentPreview;
+  const content = root.querySelector<HTMLElement>("#attachmentPreviewText code");
+  if (!preview || !content) return;
+  if (preview.text !== undefined) {
+    setHtml(content, highlightCode(preview.text, highlightLanguageForPath(preview.attachment.fileName)));
+  } else {
+    setHtml(content, escapeHtml(preview.error ?? "Loading attachment…"));
+  }
+}
+
+function showAttachmentPreview(trigger: HTMLElement): void {
+  const dialog = imagePreviewElement();
+  if (!dialog) return;
   imagePreviewReturnFocus = trigger;
-  image.src = source.currentSrc || source.src;
-  image.alt = source.alt;
-  caption.textContent = source.alt;
   dialog.hidden = false;
   document.body.classList.add("image-preview-open");
   setImagePreviewBackgroundInert(true);
@@ -3641,6 +3663,8 @@ function openImagePreview(trigger: HTMLButtonElement): void {
 }
 
 function closeImagePreview(restoreFocus = true): void {
+  attachmentGallery = undefined;
+  textAttachmentPreview = undefined;
   const dialog = imagePreviewElement();
   if (!dialog || dialog.hidden) return;
   dialog.hidden = true;
@@ -3683,7 +3707,7 @@ function startMessageEdit(messageTs: number): void {
   state.editingMessageTs = messageTs;
   state.editDraft = message.text;
   state.editingRemovedAttachmentIds = new Set();
-  state.autoScroll = false;
+  scrollFollow.pause();
   render();
   requestAnimationFrame(() => {
     const input = root.querySelector("[data-edit-input]") as HTMLTextAreaElement | null;
@@ -3708,71 +3732,59 @@ function submitMessageEdit(): void {
   if (messageTs === undefined || (!text && retainedAttachments.length === 0) || state.busy) return;
   state.editingMessageTs = undefined;
   state.editDraft = "";
-  state.autoScroll = true;
   send({ type: "editMessage", messageTs, text, removeAttachmentIds: [...state.editingRemovedAttachmentIds] });
   state.editingRemovedAttachmentIds = new Set();
   render();
 }
 
-const MAX_PASTED_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_PASTED_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 async function handleComposerPaste(event: ClipboardEvent): Promise<void> {
   const sourceChatId = activeChatId;
-  const imageItem = Array.from(event.clipboardData?.items ?? [])
-    .find(item => item.kind === "file" && item.type.toLowerCase().startsWith("image/"));
-  if (!imageItem) return;
+  const data = event.clipboardData;
+  if (!data) return;
+  const files = Array.from(data.files);
+  if (!files.length) {
+    for (const item of Array.from(data.items)) {
+      if (item.kind === "file") { const file = item.getAsFile(); if (file) files.push(file); }
+    }
+  }
+  const uris = clipboardFileUris(data.getData("text/uri-list") || data.getData("application/vnd.code.uri-list") || data.getData("x-special/gnome-copied-files"));
+  const text = data.getData("text/plain");
+  if (!files.length && !uris.length && !isLargePaste(text)) return;
   event.preventDefault();
-
   if (state.attachmentPastePending) {
-    state.notices.push({ id: `n_${Date.now()}`, text: "Wait for the current image to finish attaching." });
+    state.notices.push({ id: `n_${Date.now()}`, text: "Wait for the current files to finish attaching." });
     render();
     return;
   }
-  if (state.draftAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
-    state.notices.push({ id: `n_${Date.now()}`, text: `You can attach up to ${MAX_ATTACHMENTS_PER_MESSAGE} images to one message.` });
+  const count = files.length || uris.length || 1;
+  if (state.draftAttachments.length + count > MAX_ATTACHMENTS_PER_MESSAGE) {
+    state.notices.push({ id: `n_${Date.now()}`, text: `You can attach up to ${MAX_ATTACHMENTS_PER_MESSAGE} files to one message.` });
     render();
     return;
   }
-
-  const mimeType = imageItem.type.toLowerCase();
-  const extension = mimeType === "image/png" ? "png"
-    : mimeType === "image/jpeg" ? "jpg"
-      : mimeType === "image/webp" ? "webp"
-        : undefined;
-  if (!extension) {
-    state.notices.push({ id: `n_${Date.now()}`, text: "Paste a JPEG, PNG, or WebP image." });
-    render();
-    return;
-  }
-
-  const file = imageItem.getAsFile();
-  if (!file || file.size === 0) {
-    state.notices.push({ id: `n_${Date.now()}`, text: "The pasted image is empty." });
-    render();
-    return;
-  }
-  if (file.size > MAX_PASTED_IMAGE_BYTES) {
-    state.notices.push({ id: `n_${Date.now()}`, text: "Images must be 10 MiB or smaller." });
-    render();
-    return;
-  }
-
   state.attachmentPastePending = true;
   render();
   try {
-    const dataUrl = await readFileAsDataUrl(file);
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    if (sourceChatId !== activeChatId) return;
-    send({
-      type: "pasteAttachment",
-      fileName: `pasted-image-${timestamp}.${extension}`,
-      mimeType,
-      dataUrl
-    });
-  } catch {
+    if (files.length) {
+      const uploads = await Promise.all(files.map(async file => {
+        if (file.type.startsWith("image/") && !state.supportsVision) throw new Error("The server has not reported vision support. Image attachments are unavailable.");
+        if (file.size > MAX_PASTED_ATTACHMENT_BYTES) throw new Error("Attachments must be 10 MiB or smaller.");
+        const imageSuffix = file.type === "image/png" ? "png" : file.type === "image/jpeg" ? "jpg" : file.type === "image/webp" ? "webp" : undefined;
+        return { fileName: file.name || (imageSuffix ? `pasted-image.${imageSuffix}` : "Pasted text"), dataUrl: await readFileAsDataUrl(file) };
+      }));
+      if (sourceChatId !== activeChatId) return;
+      send({ type: "pasteAttachments", files: uploads });
+    } else if (uris.length) {
+      send({ type: "pasteFileUris", uris });
+    } else {
+      send({ type: "pasteText", text });
+    }
+  } catch (error) {
     if (sourceChatId !== activeChatId) return;
     state.attachmentPastePending = false;
-    state.notices.push({ id: `n_${Date.now()}`, text: "Could not read the pasted image." });
+    state.notices.push({ id: `n_${Date.now()}`, text: (error as Error).message });
     render();
   }
 }
@@ -3782,9 +3794,9 @@ function readFileAsDataUrl(file: File): Promise<string> {
     const reader = new FileReader();
     reader.addEventListener("load", () => {
       if (typeof reader.result === "string") resolve(reader.result);
-      else reject(new Error("Clipboard image did not produce a data URL."));
+      else reject(new Error("Clipboard file did not produce a data URL."));
     });
-    reader.addEventListener("error", () => reject(reader.error ?? new Error("Could not read clipboard image.")));
+    reader.addEventListener("error", () => reject(reader.error ?? new Error("Could not read clipboard file.")));
     reader.readAsDataURL(file);
   });
 }
@@ -3935,6 +3947,25 @@ function searchIcon(): string {
   </svg>`;
 }
 
+function folderIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <g transform="translate(0 1.2) scale(1 .9)">
+      <path d="M3 7V5a2 2 0 0 1 2-2h5l3 3h6a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>
+      <path d="M3 8h18"/>
+    </g>
+  </svg>`;
+}
+
+function viewImageIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M2 5.8C5 7 6.5 3.2 12 3.2S19 7 22 5.8"/>
+    <path d="M2 9.3C5 10.5 7 6.5 12 6.5s7 4 10 2.8M4.5 9.8c4.5 4.8 10.5 4.8 15 0"/>
+    <circle cx="12" cy="9" r="2.5" fill="currentColor" stroke="none"/>
+    <path d="M8 12.8c3.5 5.5 7 8 11 6.8 4-1.2 3-6.5-.2-5.7-2.8.7-2.1 4.1.1 3.2"/>
+    <path d="M6.8 12.1C8 15 3 15.8 7.1 21c-1-3.4 1.3-5 1.4-7.4Z" fill="currentColor" stroke="none"/>
+  </svg>`;
+}
+
 function readFileIcon(): string {
   return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <g transform="translate(0 .6) scale(1 .95)">
@@ -3970,13 +4001,7 @@ function forkIcon(): string {
   </svg>`;
 }
 
-function terminalIcon(): string {
-  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <rect x="3.5" y="5" width="17" height="14" rx="3"/>
-    <path d="m7.5 9.25 3 2.75-3 2.75"/>
-    <path d="M13.5 15h3.5"/>
-  </svg>`;
-}
+
 
 function compactIcon(): string {
   return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
@@ -4072,6 +4097,7 @@ function circleIcon(ratio: number): string {
 function loadFromRecord(rec: ChatRecord): void {
   state.messages = [];
   state.notices = [];
+  const fileChanges = restoredToolFileChanges(rec);
   let currentUserTs: number | undefined;
   for (const [index, m] of rec.messages.entries()) {
     const id = restoredRecordMessageId(index, m.ts);
@@ -4116,19 +4142,30 @@ function loadFromRecord(rec: ChatRecord): void {
         state.messages.push(last);
       }
       const restoredName = m.toolCall?.name ?? "tool";
-      // File lists and commands have scrollable output surfaces, so retain
-      // their full bounded content when a saved chat is restored.
+      // Keep full output for detailed tool surfaces, including question answers,
+      // when a saved chat is restored.
       const showsFullResult = restoredName === "list_dir" || restoredName === "glob" ||
-        restoredName === "run_command" || restoredName === "run_process";
+        chatFeature.recognizes?.(restoredName) || chatFeature.fullResult?.(restoredName) ||
+        restoredName === "search_memories" || restoredName === "recall_memory" ||
+        restoredName === "ask_user_question";
       const malformedToolCall = restoredName === "tool_call";
+      const fileChange = fileChanges.get(index);
       const tc: ToolCard = {
         toolId: restoredToolCardId(index, m.ts),
         toolName: restoredName,
         argsJson: m.toolCall?.argsJson ?? "{}",
         category: malformedToolCall ? "unknown" : "read",
         status: restoredToolStatus(m.toolCall?.status, m.content, malformedToolCall),
-        resultPreview: showsFullResult ? m.content : m.content.slice(0, 400),
+        resultPreview: m.toolCall?.status === "failed" && m.toolCall.processOutput !== undefined
+          ? m.toolCall.processOutput : m.toolCall?.displayResult ?? (showsFullResult ? m.content : m.content.slice(0, 400)),
+        diffPreview: fileChange?.diffPreview,
+        added: fileChange?.added,
+        removed: fileChange?.removed,
+        diffUnavailable: !fileChange,
         createsNewFile: restoredCreatesNewFile(restoredName, m.toolCall?.createsNewFile),
+        processCommand: m.toolCall?.processCommand,
+        processOutput: m.toolCall?.processOutput,
+        processExitCode: m.toolCall?.processExitCode,
         expanded: false
       };
       last.toolCards.push(tc);
@@ -4152,7 +4189,7 @@ function handleHostMessage(msg: ExtToChat): void {
       for (const event of msg.events) handleHostMessage(event);
       if (draft) restoreHistoryView(state.messages, draft.history);
       state.busy = msg.busy;
-      state.autoScroll = draft?.autoScroll ?? true;
+      scrollFollow.reset(draft?.autoScroll ?? true, chatBody()!);
       state.savedScrollTop = draft?.scrollTop ?? 0;
       restoringChat = false;
       const input = root.querySelector<HTMLTextAreaElement>("#input");
@@ -4165,7 +4202,14 @@ function handleHostMessage(msg: ExtToChat): void {
           entry.open = draft?.expandedMemorySources.has(entry.dataset.memoryEntry!) ?? false;
         });
       }
-      if (draft && !draft.autoScroll) chatBody()!.scrollTop = draft.scrollTop;
+      root.querySelectorAll<HTMLDetailsElement>("[data-memory-creation]").forEach(entry => {
+        entry.open = draft?.expandedMemoryCreations.has(entry.dataset.memoryCreation!) ?? false;
+      });
+      if (draft && !draft.autoScroll) {
+        chatBody()!.scrollTop = draft.scrollTop;
+        scrollFollow.recordLayout(chatBody()!);
+        updateScrollState(chatBody()!);
+      }
       return;
     }
     if (msg.type === "settings") {
@@ -4204,13 +4248,24 @@ function handleHostMessage(msg: ExtToChat): void {
       render();
       return;
     }
+    if (msg.type === "attachmentImportState") {
+      state.attachmentPastePending = msg.pending;
+      render();
+      return;
+    }
     if (msg.type === "attachmentSelected") {
-      state.attachmentPastePending = false;
       if (!state.draftAttachments.some(attachment => attachment.id === msg.attachment.id)
           && state.draftAttachments.length < MAX_ATTACHMENTS_PER_MESSAGE) {
         state.draftAttachments.push(msg.attachment);
       }
       render();
+      return;
+    }
+    if (msg.type === "attachmentText") {
+      if (textAttachmentPreview?.requestId !== msg.requestId || textAttachmentPreview.attachment.id !== msg.attachmentId) return;
+      textAttachmentPreview.text = msg.text;
+      textAttachmentPreview.error = msg.error;
+      renderTextAttachmentPreview();
       return;
     }
     if (msg.type === "attachmentPasteFailed") {
@@ -4227,10 +4282,17 @@ function handleHostMessage(msg: ExtToChat): void {
     }
   }
   if (!("kind" in msg)) return;
+  if (chatFeature.event?.(msg, state.messages.flatMap(message => message.toolCards))) { render(); return; }
   switch (msg.kind) {
+    case "visionCapability":
+      state.supportsVision = msg.supported;
+      render();
+      break;
     case "memoriesUsed": state.memories = msg.memories; render(); break;
+    case "memoryCreations": state.memoryCreations = msg.creations; render(); break;
     case "chatLoaded": {
       state.memories = [];
+      state.memoryCreations = msg.record.memoryCreations ?? [];
       closeImagePreview(false);
       hiddenApprovalToolIds.clear();
       state.editingMessageTs = undefined;
@@ -4239,7 +4301,8 @@ function handleHostMessage(msg: ExtToChat): void {
       state.chatTitle = msg.record.title;
       state.hasChat = true;
       state.serverPending = undefined;
-      const pendingCompactActivity = state.compactActivity?.status === "pending" ? state.compactActivity : undefined;
+      const pendingCompactActivity = state.compactActivity?.status === "pending" || (state.compactActivity && state.contextActivityIds.has(state.compactActivity.id))
+        ? state.compactActivity : undefined;
       if (!pendingCompactActivity) state.compactActivity = undefined;
       loadFromRecord(msg.record);
       if (pendingCompactActivity) {
@@ -4248,7 +4311,6 @@ function handleHostMessage(msg: ExtToChat): void {
       }
       const contextMessages = msg.contextMessageCount ?? msg.record.messages.length;
       applyCompactStatus(contextMessages, state.compactMinMessages, contextMessages >= state.compactMinMessages);
-      state.autoScroll = true;
       render();
       break;
     }
@@ -4256,15 +4318,22 @@ function handleHostMessage(msg: ExtToChat): void {
       state.hasChat = true;
       state.chatTitle = msg.title;
       chatTabs = chatTabs.map(tab => tab.id === activeChatId ? { ...tab, title: msg.title } : tab);
-      updateHeaderTitle();
+      // A published title proves naming is complete. Reconcile its status too,
+      // even if the separate titleGenerationFinished notice was missed.
+      if (state.serverPending === "title") {
+        state.serverPending = "server";
+        render();
+      } else updateHeaderTitle();
       break;
     case "chatClosed":
+      state.contextActivityIds.clear();
       state.notices = [];
       if (!restoringChat) saveChatView();
       activeChatId = undefined;
       state.draft = "";
       state.questionDraft = "";
       state.memories = [];
+      state.memoryCreations = [];
       closeImagePreview(false);
       hiddenApprovalToolIds.clear();
       state.editingMessageTs = undefined;
@@ -4280,7 +4349,7 @@ function handleHostMessage(msg: ExtToChat): void {
       state.tokens = 0;
       state.busy = false;
       state.serverPending = undefined;
-      state.autoScroll = true;
+      scrollFollow.reset(true, chatBody()!);
       state.compactMenuOpen = false;
       state.chatModeMenuOpen = false;
       state.reasoningEffortMenuOpen = false;
@@ -4297,12 +4366,10 @@ function handleHostMessage(msg: ExtToChat): void {
     case "turnPreparing":
       state.busy = true;
       state.serverPending = msg.reason;
-      state.autoScroll = true;
       render();
       break;
     case "turnWorkStarted": {
       state.busy = true;
-      state.autoScroll = true;
       const m = getOrCreateMsg(msg.messageId, "assistant");
       const lastUser = [...state.messages].reverse().find(message => message.role === "user");
       m.responseToTs = lastUser?.recordTs;
@@ -4324,7 +4391,6 @@ function handleHostMessage(msg: ExtToChat): void {
       state.compactMenuOpen = false;
       state.chatModeMenuOpen = false;
       state.reasoningEffortMenuOpen = false;
-      state.autoScroll = true;
       {
         const m = getOrCreateMsg(msg.messageId, "assistant");
         const lastUser = [...state.messages].reverse().find(message => message.role === "user");
@@ -4428,6 +4494,11 @@ function handleHostMessage(msg: ExtToChat): void {
           diffRequested: false,
           status: "pending",
           createsNewFile: msg.createsNewFile,
+          processJobId: msg.processJobId,
+          processCommand: msg.processCommand,
+          processRunning: msg.processRunning,
+          processOutput: msg.processOutput,
+          processExitCode: msg.processExitCode,
           expanded: false
         };
         m.toolCards.push(card);
@@ -4444,6 +4515,11 @@ function handleHostMessage(msg: ExtToChat): void {
         card.progress = undefined;
         card.status = "pending";
         if (typeof msg.createsNewFile === "boolean") card.createsNewFile = msg.createsNewFile;
+        card.processJobId = msg.processJobId;
+        card.processCommand = msg.processCommand;
+        card.processRunning = msg.processRunning;
+        card.processOutput = msg.processOutput;
+        card.processExitCode = msg.processExitCode;
       }
       render();
       break;
@@ -4453,6 +4529,7 @@ function handleHostMessage(msg: ExtToChat): void {
         const tc = m.toolCards.find(t => t.toolId === msg.toolId);
         if (tc && isActiveToolCard(tc)) {
           tc.resultPreview = msg.resultPreview;
+          if (msg.processOutput !== undefined) tc.processOutput = msg.processOutput;
           break;
         }
       }
@@ -4480,7 +4557,10 @@ function handleHostMessage(msg: ExtToChat): void {
           }
           if (typeof msg.createsNewFile === "boolean") tc.createsNewFile = msg.createsNewFile;
           if (msg.processJobId) tc.processJobId = msg.processJobId;
+          if (msg.processCommand !== undefined) tc.processCommand = msg.processCommand;
           if (typeof msg.processRunning === "boolean") tc.processRunning = msg.processRunning;
+          if (msg.processOutput !== undefined) tc.processOutput = msg.processOutput;
+          if (msg.processExitCode !== undefined) tc.processExitCode = msg.processExitCode;
           // A write resolving while its card is already open should show its
           // diff without another toggle — fetch it now.
           if (msg.status === "executed" && isWriteToolCard(tc) && !tc.diffPreview && !tc.diffRequested) {
@@ -4494,19 +4574,10 @@ function handleHostMessage(msg: ExtToChat): void {
       render();
       break;
     }
-    case "processJobState": {
-      for (const message of state.messages) {
-        for (const card of message.toolCards) {
-          if (card.toolId !== msg.toolId && card.processJobId !== msg.jobId) continue;
-          card.processJobId = msg.jobId;
-          card.processRunning = msg.running;
-          card.processStopping = false;
-          if (msg.resultPreview) card.resultPreview = msg.resultPreview;
-        }
-      }
+    case "contextActivity":
+      state.contextActivityIds = new Set(msg.activityIds);
       render();
       break;
-    }
     case "fileChanges": {
       const m = getOrCreateMsg(msg.messageId, "assistant");
       m.fileChanges = msg.changes;
@@ -4594,7 +4665,6 @@ function handleHostMessage(msg: ExtToChat): void {
         state.compactActivity = activity;
         upsertCompactActivityMessage(activity);
       }
-      state.autoScroll = true;
       render();
       break;
     case "compactEnd":
@@ -4614,7 +4684,6 @@ function handleHostMessage(msg: ExtToChat): void {
         upsertCompactActivityMessage(activity);
       }
       if (msg.source === "auto" && state.busy) state.serverPending = "server";
-      state.autoScroll = true;
       render();
       break;
     case "turnEnd":
@@ -4622,6 +4691,7 @@ function handleHostMessage(msg: ExtToChat): void {
       state.serverPending = state.queuedMessages.length > 0 ? "server" : undefined;
       for (const m of state.messages) {
         finalizeLiveThoughts(m);
+        if (m.id === msg.messageId) m.recordTs = msg.messageTs;
         if (m.id === msg.messageId && m.workStartedAt !== undefined && m.workEndedAt === undefined) {
           m.workEndedAt = Date.now();
         }
@@ -4645,6 +4715,10 @@ startShiki();
 send({ type: "ready" });
 render();
 
+let renderedCalendarDay = new Date().toDateString();
 window.setInterval(() => {
-  if (state.messages.some(isAssistantTurnLive)) render(false);
+  const day = new Date().toDateString();
+  const dateChanged = day !== renderedCalendarDay;
+  renderedCalendarDay = day;
+  if (dateChanged || state.messages.some(isAssistantTurnLive)) render(false);
 }, 1000);

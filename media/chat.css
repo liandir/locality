@@ -9,6 +9,8 @@
 
 :root {
   --icon-action-size: 28px;
+  --chat-part-gap: 6px;
+  --chat-message-gap: calc(3 * var(--chat-part-gap));
   --composer-radius: 16px;
   --composer-action-radius: 10px;
   --surface-fill: color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
@@ -18,8 +20,6 @@
   --code-fill: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
   --code-inline-fill: var(--code-fill);
   --hover-help-fill: color-mix(in srgb, var(--vscode-foreground) 18%, var(--vscode-sideBar-background, var(--vscode-editor-background)));
-  --tool-error-foreground: color-mix(in srgb, var(--vscode-errorForeground) 78%, #5c1111);
-  --tool-error-idle: color-mix(in srgb, var(--vscode-errorForeground) 56%, #3f0d0d);
   --accent-accept-fill: color-mix(in srgb, #2ea043 18%, transparent);
   --accent-reject-fill: color-mix(in srgb, var(--vscode-errorForeground) 16%, transparent);
   /* Live activity: a muted idle text colour with a shimmer that inverts per
@@ -50,7 +50,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .icon-btn:hover { background: var(--surface-fill); color: var(--vscode-foreground); }
 .icon-btn:focus-visible { outline: none; background: var(--surface-fill); color: var(--vscode-foreground); }
 
-.chat-body { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 14px; }
+.chat-body { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: var(--chat-message-gap); }
 
 #emptyState { width: min(100%, 620px); margin: 8px auto 0; }
 #emptyState[hidden] { display: none; }
@@ -64,7 +64,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .recent-chat-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent-chat-time { flex: 0 0 auto; color: var(--vscode-descriptionForeground); font-size: 0.82em; }
 .recent-chat-view-all { align-self: center; min-height: 0; margin-top: 5px; padding: 2px 4px; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: 0; font: inherit; font-size: 0.82em; text-align: center; cursor: pointer; }
-.recent-chat-view-all:hover, .recent-chat-view-all:focus-visible { background: transparent; color: var(--vscode-foreground); text-decoration: underline; }
+.recent-chat-view-all:hover, .recent-chat-view-all:focus-visible { background: transparent; color: var(--vscode-foreground); }
 
 /* Todo checklist inside an Update Todos card. Color-free; status is
    conveyed by emphasis, not hue. */
@@ -91,7 +91,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .todo-item.completed .todo-box::before { transform: translate(-50%, -50%) rotate(45deg); }
 .todo-item.completed .todo-box::after { transform: translate(-50%, -50%) rotate(-45deg); }
 
-.msg { display: flex; flex-direction: column; gap: 6px; }
+.msg { display: flex; flex-direction: column; gap: var(--chat-part-gap); }
 .msg.user .bubble { align-self: flex-end; background: var(--surface-fill); border: 1px solid transparent; padding: 8px 11px; border-radius: var(--control-radius); max-width: 90%; }
 .user-edit-card { align-self: flex-end; width: min(90%, 680px); display: flex; flex-direction: column; gap: 7px; padding: 9px; background: var(--surface-fill); border: 1px solid transparent; border-radius: var(--control-radius); box-sizing: border-box; }
 .user-edit-input { width: 100%; min-height: 72px; resize: vertical; padding: 4px 6px; background: transparent; color: var(--vscode-input-foreground); border: 0; border-radius: 0; outline: none; font: inherit; line-height: 1.45; box-sizing: border-box; }
@@ -105,7 +105,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .user-edit-submit:disabled { opacity: 0.5; cursor: default; }
 .msg.assistant .bubble { padding: 4px 0; }
 .assistant-markdown { color: var(--vscode-foreground); line-height: 1.55; padding: 2px 0; }
-.msg.assistant .card.answer { background: var(--surface-fill); border-color: transparent; padding: 8px 11px; border-radius: var(--control-radius); }
+.msg.assistant .card.answer { padding: 8px 11px; }
 .msg.assistant.has-file-changes > .part.final-answer-part .card.answer {
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
@@ -113,6 +113,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .message-actions { display: flex; align-items: center; gap: 1px; min-height: 24px; margin-top: -2px; }
 .msg.user .message-actions { align-self: flex-end; flex-direction: row-reverse; max-width: 90%; padding-right: 2px; }
 .msg.assistant .message-actions { align-self: flex-start; }
+.message-date { flex: 0 0 auto; margin-inline: 7px; font-variant-numeric: tabular-nums; color: var(--vscode-descriptionForeground); font-size: 0.82em; line-height: 1.35; white-space: nowrap; }
 .copy-btn { width: 28px; height: 24px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 0; border-radius: var(--control-radius); cursor: pointer; opacity: 0.72; transition: background 0.12s, color 0.12s, opacity 0.12s; }
 .copy-btn:hover { background: var(--surface-fill); color: var(--vscode-foreground); opacity: 1; }
 .copy-btn:focus-visible { outline: none; background: var(--surface-fill); color: var(--vscode-foreground); }
@@ -150,9 +151,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   font-weight: 600;
 }
 .workspace-file-link { font-weight: 400; display: inline-block; color: var(--vscode-textLink-foreground); line-height: inherit; white-space: nowrap; text-decoration: none; vertical-align: baseline; }
+/* Paint the same inline font box as ordinary code, including the file icon.
+   An inline-block would also highlight the paragraph's taller line-height. */
+.workspace-file-link:has(code.inline-code) { display: inline; font-family: var(--vscode-editor-font-family); background: var(--code-inline-fill); padding: 1px 5px; border-radius: var(--control-radius); }
+.workspace-file-link code.inline-code { background: transparent; padding: 0; border-radius: 0; color: inherit; }
 .workspace-file-link :is(strong, b) { font-weight: 400; }
 .workspace-file-link:hover, .workspace-file-link:focus-visible { color: var(--vscode-textLink-activeForeground); text-decoration: none; outline: none; }
-.workspace-file-link:is(:hover, :focus-visible) .workspace-file-link-label { text-decoration: underline dashed; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+.workspace-file-link-label { text-decoration: none; text-decoration-style: dashed; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+.workspace-file-link:is(:hover, :focus-visible) .workspace-file-link-label { text-decoration-line: underline; }
 .workspace-file-link-icon { display: inline-flex; align-items: center; justify-content: center; width: 1em; height: 1em; margin-right: 1px; color: inherit; font-family: "VS Code Seti"; font-size: 1.18em; font-style: normal; font-weight: normal; line-height: 1; vertical-align: middle; }
 .copy-code-block {
   margin: 0.65em 0;
@@ -231,83 +237,38 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
    and the enclosing "Worked for..." header use --tool-idle; in light themes
    that mixes toward the background, then hover restores the dark foreground. */
 .thinking, .thinking-head { color: var(--tool-idle); }
-.work-head:hover, .thinking-head:hover, .tool-head:hover { color: var(--vscode-foreground); }
+/* Highlight the complete tool heading, including compact file reads and links. */
+.work-head:hover, .thinking-head:hover,
+.tool-head:is(:hover, :focus-visible, :has(:focus-visible)) { color: var(--vscode-foreground); }
 .disclosure-trigger:hover > .disclosure-icon {
   color: var(--vscode-foreground);
 }
-/* Grouped histories use one compact vertical rhythm. Containers contribute no
-   additional top/bottom padding; the row headings own their spacing. */
-.work-body { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
-.work-section.session { padding: 0; }
-.work-section.session > .work-body { gap: 0; padding-top: 0; margin-top: 0; }
-.work-section.session:is(.open, .live) > .work-head {
-  width: 100%;
-  box-sizing: border-box;
-  /* Keep the same 3px top padding as the collapsed head so opening the
-     history never nudges its summary label downward. The matching bottom
-     padding makes the summary-to-history gap equal the tool-to-tool gap. */
-  padding: 3px 0;
-  border-bottom: 0;
-}
-.work-section.session:is(.open, .live) > .work-body > .part:first-child
-  > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) {
-  padding-top: 3px;
-}
-.work-section.session.live:not(.open) > .work-body.current-only > .part:first-child
-  > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) {
-  padding-top: 3px;
-}
-.work-section.conglomerate { margin: 1px 0 2px; padding: 2px 0; }
+/* Keep the live stream's spacing when its chronology moves into Worked
+   history: 6px between render units, with compact rows inside sub-sessions. */
+.work-body { position: relative; display: flex; flex-direction: column; gap: 0; padding: 0; margin-top: 0; font-weight: 400; opacity: 0.94; }
+.work-section.session, .work-section.conglomerate { margin: 0; padding: 0; }
+.work-section.session:is(.open, .live) > .work-head,
 .work-section.conglomerate.open > .work-head {
   width: 100%;
   box-sizing: border-box;
-  /* The top-level summary is deliberately a touch roomier than a sub-session
-     summary, without moving the Worked-for label when it opens. */
-  padding: 3px 0 8px;
+  padding: 3px 0;
   border-bottom: 0;
 }
 .work-section.conglomerate.settled.open > .work-head {
+  /* Match the gap between activity rows and model text below the divider. */
+  padding-bottom: calc(3px + var(--chat-part-gap));
+  margin-bottom: calc(2 * var(--chat-part-gap));
   border-bottom: 1px solid var(--surface-stroke);
 }
-.work-section.conglomerate > .work-body { gap: 0; padding-top: 17px; opacity: 1; }
-.work-section.conglomerate > .work-body > .part:first-child
-  > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) {
-  padding-top: 3px;
-}
-.work-section.conglomerate > .work-body > .part.intermediate-part:first-child
-  > .intermediate-answer { padding-top: 3px; }
-.work-section.conglomerate.open + .part.final-answer-part { margin-top: 4px; }
+.work-section.conglomerate > .work-body { gap: var(--chat-part-gap); opacity: 1; }
+.msg.assistant.timeline > .part:is(.thought-part, .tool-part)
+  > :is(.thinking, .tool-card),
 .work-body > .part > :is(.thinking, .tool-card) { padding: 0; }
-.work-body > .part > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) { padding: 5px 0; }
-/* In an expanded sub-session, every activity heading uses the summary's 3px
-   rhythm. This keeps the gap below the summary identical to every later gap,
-   regardless of whether adjacent rows are thoughts or tools. */
-.work-section.session.open > .work-body:not(.current-only)
-  > .part > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) {
-  padding: 3px 0;
-}
-/* A one-item sub-session renders its thought/tool directly. Remove the
-   activity wrapper's default 4px padding at the top level, and normalize its
-   heading inside an expanded Worked-for history, so both contexts use the
-   same 3px rhythm as a collapsed multi-item sub-session summary. */
-.msg.assistant.timeline > .part:is(.thought-part, .tool-part)
-  > :is(.thinking, .tool-card) { padding: 0; }
-.work-section.conglomerate > .work-body > .part:is(.thought-part, .tool-part)
-  > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) { padding: 3px 0; }
-.msg.assistant.timeline > .part:is(.thought-part, .tool-part)
-  + .part:is(.thought-part, .tool-part) { margin-top: 0; }
-.work-body > .part:is(.thought-part, .tool-part)
-  + .part:is(.thought-part, .tool-part) { margin-top: 0; }
-.intermediate-answer { padding: 5px 0; }
-/* Give intermediate model output and terminal abort notices the same
-   breathing room above and below, whether the neighboring activity is a
-   thought, tool, or grouped sub-session. Adjacent activity rows stay compact. */
-.work-section.conglomerate > .work-body
-  > .part:is(.intermediate-part, .abort-part)
-  + :is(.part.thought-part, .part.tool-part, .work-section.session),
-.work-section.conglomerate > .work-body
-  > :is(.part.thought-part, .part.tool-part, .work-section.session)
-  + .part:is(.intermediate-part, .abort-part) { margin-top: 12px; }
+.work-body > .part > :is(.thinking, .tool-card) > :is(.thinking-head, .tool-head) { padding: 3px 0; }
+/* Add one shared gap to the container's gap at each activity/text boundary. */
+:is(.work-section, .tool-part) + .text-part,
+.intermediate-part + :is(.work-section, .tool-part) { margin-top: var(--chat-part-gap); }
+.intermediate-answer { padding: 0; }
 .thinking-body { padding: 3px 0 1px; margin-top: 0; font-weight: 400; line-height: 1.4; opacity: 0.94; }
 .thinking-body > :first-child { margin-top: 0; }
 .thinking-body > :last-child { margin-bottom: 0; }
@@ -324,9 +285,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 /* The activity in a collapsed live session discloses its parent history, so
    its chevron stays right-facing even if that tool retained an open state. */
 .work-body.current-only .disclosure-icon { transform: rotate(0deg); }
-/* One continuous sweep per active heading. Applying the gradient once to the
-   heading makes the highlight travel across its name, path, and range instead
-   of restarting independently on every text fragment. */
+/* One continuous sweep across the tool name, file links, ranges and counts.
+   Hovered targets become opaque below without interrupting the animation. */
 .shimmer,
 .active-tool-head {
   background-color: var(--shimmer-edge);
@@ -345,20 +305,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   background-clip: text;
 }
 .shimmer { color: transparent; }
-.active-tool-head > .tool-name,
-.active-tool-head > .tool-label { color: transparent; }
-/* Hover/focus takes visual precedence over the running shimmer. The animation
+.active-tool-head > :is(.tool-name, .tool-label) { color: transparent; }
+/* Hover/keyboard focus takes precedence over the running shimmer. The animation
    remains attached to the heading, while opaque foreground colors make the
    complete active row (including its bouncing icon) read like other hovered
-   tools until the pointer or focus leaves. */
-.active-tool-head:is(:hover, :focus-within) > .tool-name,
-.active-tool-head:is(:hover, :focus-within) > .tool-label,
-.active-tool-head:is(:hover, :focus-within) > .tool-icon {
+   tools. Retained pointer focus on native summaries must not latch this state. */
+.active-tool-head:is(:hover, :focus-visible, :has(:focus-visible)) > :is(.tool-name, .tool-label, .tool-icon) {
   color: var(--vscode-foreground);
 }
-/* Live thinking applies its shimmer to the complete measured label. Make it
-   opaque with the rest of the row while hovered without stopping the idle
-   animation. */
+/* Live thinking and work summaries shimmer across the complete measured
+   label. Keep the text opaque while hovered without stopping the animation. */
+.work-head:is(:hover, :focus-within) .shimmer,
 .thinking-head:is(:hover, :focus-within) .shimmer {
   color: var(--vscode-foreground);
 }
@@ -392,6 +349,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   opacity: 0;
 }
 .disclosure-trigger:is(:hover, :focus-within) > .disclosure-icon { opacity: 1; }
+/* Keep the collapse affordance visible for expanded tools and native details. */
+.tool-card:is(.open, [open]) > .tool-head > .disclosure-icon { opacity: 1; }
 .tool-icon { margin-right: 8px; }
 .active-tool-head > .tool-icon { color: var(--tool-idle); }
 .active-tool-head > .tool-icon svg {
@@ -403,14 +362,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   0%, 20%, 36%, 100% { color: var(--shimmer-edge); }
   28% { color: var(--shimmer-peak); }
 }
-.active-tool-head:is(:hover, :focus-within) > .tool-icon svg { color: var(--vscode-foreground) !important; }
+.active-tool-head:is(:hover, :focus-visible, :has(:focus-visible)) > .tool-icon svg { color: var(--vscode-foreground) !important; }
 /* While the model is working, the active tool icon (and the live thinking
    brain) lifts gently from a slightly lowered rest position. Finished icons
    do not receive this transform and retain their existing alignment. */
 .tool-card.streaming .tool-icon,
 .tool-card.pending .tool-icon,
 .tool-card.approved .tool-icon,
-.tool-card.process-running .tool-icon,
+
+.active-tool-head > .tool-icon,
+.work-type-icon.active,
 .work-section.live .work-icon,
 .thinking.live .thinking-icon {
   animation: icon-bounce 1.15s cubic-bezier(0.42, 0, 0.24, 1) infinite;
@@ -422,77 +383,112 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   84% { transform: translateY(0.55px); }
 }
 .tool-label { flex: 1 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; overflow: hidden; white-space: nowrap; }
+.tool-label.edit-label { align-items: baseline; }
 .tool-label[hidden] { display: none; }
 .tool-label-text { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The read range sits beside the path as a sibling link and does not shrink. */
 .read-range { flex: 0 0 auto; }
-.tool-path-link { max-width: 100%; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; text-decoration: none; }
-/* Keep the 1px dashed underline inside clipped/ellipsized path labels. */
-.tool-path-link, .tool-change-path { position: relative; }
-:is(.tool-path-link, .tool-change-path):is(:hover, :focus-visible)::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  border-bottom: 1px dashed var(--file-link-underline-color, currentColor);
-  pointer-events: none;
+.tool-path-link { max-width: 100%; padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+/* Native underlines keep links in the heading's text paint layer so its
+   background-clip shimmer still reaches them in VS Code's Chromium. */
+.tool-path-link {
+  text-decoration: none;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 1px;
+  text-decoration-skip-ink: none;
 }
-/* Shimmer headings have transparent text; their underline must remain visible. */
-.active-tool-head .tool-path-link { --file-link-underline-color: var(--tool-idle); }
-.active-tool-head:is(:hover, :focus-within) .tool-path-link { --file-link-underline-color: var(--vscode-foreground); }
+.tool-path-link:is(:hover, :focus-visible) { text-decoration-line: underline; }
 .tool-path-link:focus-visible { outline: none; }
 .tool-label-main { min-width: 0; overflow: hidden; display: inline-flex; }
 .diff-stat-group { flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 0; }
-/* The editor monospace's smaller glyph box reads slightly high beside the UI
-   font used by tool labels. Nudge only that inline instance into optical alignment. */
-.tool-label > .diff-stat-group { position: relative; top: 1px; }
 /* tabular-nums: every digit the same width, so a counting stat never makes the
    label wobble horizontally. */
 .diff-stat { font-family: var(--vscode-editor-font-family); font-weight: 400; font-size: 0.95em; font-variant-numeric: tabular-nums; transition: color 0.12s; }
 .diff-stat.add { color: #3fb950; }
-.diff-stat.del { color: #ff7b72; }
-/* Edit/create counts stay gray until the tool row itself is inspected. */
+.diff-stat.del { color: var(--error-highlight-foreground); }
+/* Settled edit/create counts stay colored for an open diff or row hover.
+   Active counts share the heading's shimmer. */
 .tool-head .diff-stat { color: inherit; }
-.tool-head:hover .diff-stat.add { color: #3fb950; }
-.tool-head:hover .diff-stat.del { color: #ff7b72; }
+.tool-card:not(.failed):not(.rejected) > .tool-head:hover .diff-stat.add,
+.tool-card.open:not(.failed):not(.rejected) > .tool-head:not(.active-tool-head) .diff-stat.add { color: #3fb950; }
+.tool-card:not(.failed):not(.rejected) > .tool-head:hover .diff-stat.del,
+.tool-card.open:not(.failed):not(.rejected) > .tool-head:not(.active-tool-head) .diff-stat.del { color: var(--error-highlight-foreground); }
 .tool-expanded { padding: 3px 0 1px 24px; margin-top: 0; font-size: inherit; font-weight: 400; line-height: 1.4; opacity: 0.94; }
 /* Expanded tool payloads inherit from the chat rather than the editor's font
    size setting. Code-oriented payloads step down slightly because the editor
    font's x-height otherwise reads larger than the surrounding tool row. */
-.tool-command, .tool-result, .tool-diff { font-family: var(--vscode-editor-font-family); font-size: inherit; background: transparent; padding: 2px 0; overflow: auto; margin: 0; max-height: 220px; line-height: 1.35; }
-.tool-expanded :is(.tool-command, .tool-result, .tool-diff, .copy-code-block) { font-size: 0.92em; }
+.tool-result, .tool-diff { font-family: var(--vscode-editor-font-family); font-size: inherit; background: transparent; padding: 2px 0; overflow: auto; margin: 0; max-height: 220px; line-height: 1.35; }
+.tool-expanded :is(.tool-result, .tool-diff, .copy-code-block) { font-size: 0.92em; }
 .tool-expanded .copy-code-block { margin: 2px 0 0; }
 .tool-expanded .copy-code-block pre { padding: 6px 36px 6px 8px; }
 .tool-card.output-surface-tool > .tool-expanded { padding-left: 0; }
+/* Tool results, summaries, and notices share one borderless card surface. */
+.tool-output-surface, .card, .notice, .change-summary {
+  background: var(--surface-fill);
+  border: 1px solid transparent;
+  border-radius: var(--control-radius);
+}
 .tool-output-surface {
   margin-top: 1px;
   padding: 6px 8px;
   overflow: hidden;
-  background: var(--surface-fill);
-  border: 1px solid var(--surface-stroke);
-  border-radius: var(--control-radius);
   color: var(--tool-idle);
 }
 .tool-output-surface + .tool-output-surface { margin-top: 6px; }
+.card-separator { height: 1px; margin: 0 8px; background: var(--surface-stroke); }
+.tool-output-surface .assistant-markdown { padding: 0; color: inherit; line-height: inherit; }
 .tool-output-surface.error {
   background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent);
   border-color: transparent;
-  color: var(--tool-error-foreground);
+  color: var(--error-foreground);
 }
-.tool-output-surface > .copy-code-block { margin: 0; background: transparent; border-radius: 0; }
-.tool-output-surface > .copy-code-block pre { padding: 2px 32px 2px 0; }
-.tool-output-surface > .copy-code-block.has-extra-actions pre { padding-right: 62px; }
-.tool-output-surface > .copy-code-block .code-block-actions { top: 0; right: 0; }
+/* Commands, process checks, and file diffs use one header layout. Keep text
+   and actions in normal flow so both are centered within the same line box. */
+.tool-output-surface:has(> .tool-output-header) { padding: 0; border-width: 0; }
+.tool-output-surface > .tool-output-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 20px;
+  margin: 0;
+  padding: 4px 8px;
+  background: transparent;
+  border-radius: 0;
+  color: inherit;
+  font-family: var(--vscode-editor-font-family);
+  font-size: 0.88em;
+  line-height: 1.35;
+}
+/* Command text keeps the same padded row with or without overflow. Its
+   scrollbar sits below that row, just above the separator. */
+.tool-output-surface > .tool-output-header:has(> pre) { padding-block: 0; }
+.tool-output-surface > .tool-output-header.has-horizontal-scrollbar { padding-bottom: 2px; }
+/* A small optical adjustment keeps header text from reading too high. */
+.tool-output-header > :is(.tool-label-main, .diff-stat-group, .tool-change-operation),
+.tool-output-header > pre > code { transform: translateY(1px); }
+.tool-output-surface > .tool-output-header pre { flex: 1; min-width: 0; margin: 0; padding: 4px 0; line-height: inherit; scrollbar-gutter: auto; }
+.tool-output-surface > .tool-output-header pre code { line-height: max(20px, 1.35em); }
+.tool-output-surface > .tool-output-header .code-block-actions { position: static; flex: 0 0 auto; order: 1; }
+.tool-output-header.has-horizontal-scrollbar .code-block-actions { margin-bottom: var(--scrollbar-hover-size); }
+.tool-output-header .block-code-copy-btn { height: 20px; }
 .tool-output-surface .code-display-prefix { color: var(--vscode-descriptionForeground); }
-.tool-output-surface > .copy-code-block + :is(.tool-result, .tool-error-result) {
+.tool-output-surface > .tool-question-section + .tool-question-section {
   margin-top: 5px;
   padding-top: 5px;
   border-top: 1px solid var(--surface-stroke);
 }
-.code-block-stop { width: 28px; height: 24px; background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--vscode-errorForeground); border-color: transparent; }
-.code-block-stop:hover, .code-block-stop:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 20%, transparent); color: var(--vscode-errorForeground); }
-.code-block-stop:disabled { opacity: 0.62; cursor: default; }
+/* Separators are independent inset elements so diff rows stay full width. */
+.tool-output-surface > .card-separator + :is(.tool-result, .tool-error-result, .tool-diff, .tool-change-error, .tool-change-unavailable, .tool-filelist) {
+  margin: 0;
+  padding: 5px 8px 6px;
+}
+.tool-output-surface > .card-separator + .tool-diff { padding: 0; }
+.tool-question-section { overflow-wrap: anywhere; }
+.tool-question-section > :first-child { margin-top: 0; }
+.tool-question-section > :last-child { margin-bottom: 0; }
+.tool-question-options { list-style: none; margin: 0; padding: 0; }
+.tool-question-options li, .tool-question-answer { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* list_dir / glob results: a plain vertical stack of names in the UI font,
    in the same muted --tool-idle as the thinking body and the other expanded
    tool output (not the high-contrast foreground). */
@@ -509,11 +505,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
    glyph, operation, target or command, range/stats, and disclosure affordance. */
 .tool-card:is(.failed, .rejected) .tool-head,
 .tool-card:is(.failed, .rejected) .tool-head * {
-  color: var(--tool-error-idle);
+  color: var(--error-foreground);
 }
 .tool-card:is(.failed, .rejected) .tool-head:is(:hover, :focus-within),
 .tool-card:is(.failed, .rejected) .tool-head:is(:hover, :focus-within) * {
-  color: var(--tool-error-foreground);
+  color: var(--error-highlight-foreground);
 }
 .tool-error-result {
   margin: 0;
@@ -527,34 +523,26 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-write-note-reedit { display: flex; align-items: center; gap: 6px; margin: 2px 0 1px; padding: 0; background: transparent; border: 0; color: var(--vscode-descriptionForeground); font-size: 0.85em; font-weight: 600; }
 .reedit-spinner { flex: 0 0 auto; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--surface-stroke-strong); border-top-color: var(--vscode-foreground); animation: reedit-spin 0.8s linear infinite; }
 @keyframes reedit-spin { to { transform: rotate(360deg); } }
-.tool-output-surface.edit-diff-surface { padding: 0; overflow: visible; background: transparent; border: 0; }
-.tool-change-card { position: relative; margin-top: 2px; border: 1px solid var(--surface-stroke); border-radius: var(--control-radius); overflow: hidden; background: var(--vscode-editor-background, var(--vscode-sideBar-background)); }
-.tool-change-head { min-height: 24px; display: flex; align-items: center; gap: 5px; padding: 0 6px 0 8px; color: var(--tool-idle); background: var(--surface-fill); border-bottom: 1px solid var(--surface-stroke); font-size: 0.88em; }
-.tool-change-head .diff-stat.add { color: #3fb950; }
-.tool-change-head .diff-stat.del { color: #ff7b72; }
-.tool-change-card.pending-diff .tool-change-head { border-bottom: 0; }
-.tool-change-error { max-height: 240px; overflow: auto; padding: 8px 10px; background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--tool-error-foreground); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.4; }
-.tool-change-path { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; background: transparent; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
-.tool-change-path:hover, .tool-change-path:focus-visible { color: var(--vscode-foreground); outline: none; }
-.tool-change-operation { flex: 0 0 auto; color: var(--vscode-descriptionForeground); font-family: var(--vscode-editor-font-family); font-size: 0.86em; white-space: nowrap; opacity: 0.78; }
-.tool-change-copy { flex: 0 0 auto; width: 22px; height: 20px; margin-left: auto; opacity: 0.62; }
+.tool-change-card { position: relative; }
+.tool-change-head > .tool-label-main { margin-left: 4px; }
+.tool-change-head .tool-path-link:is(:hover, :focus-visible) { color: var(--vscode-foreground); }
+/* Expanded failures use the same resting/highlight reds as their history row. */
+.tool-card:is(.failed, .rejected) > .tool-expanded { opacity: 1; }
+.tool-output-surface.error .tool-change-operation { opacity: 1; }
+.tool-output-surface.error .diff-stat { color: inherit; }
+.tool-output-surface.error .tool-path-link:is(:hover, :focus-visible) { color: var(--error-highlight-foreground); }
+.tool-change-head .diff-stat { font-size: inherit; }
+.tool-change-error { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.4; }
+.tool-change-operation { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.9em; opacity: 0.78; }
+.tool-change-copy { flex: 0 0 auto; margin-left: auto; }
 .tool-change-copy-source { display: none; }
 .tool-change-summary { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; color: var(--vscode-foreground); }
 .tool-change-card .tool-change-row { cursor: default; }
 .tool-change-card .tool-change-row:hover { color: var(--vscode-descriptionForeground); background: transparent; }
 .review-btn { flex: 0 0 auto; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: var(--control-radius); padding: 2px 9px; font: inherit; font-size: 0.78em; line-height: 1.35; cursor: pointer; text-transform: none; outline: none; }
 .review-btn:hover, .review-btn:focus-visible { background: var(--surface-fill-strong); color: var(--vscode-foreground); border-color: transparent; }
-.tool-diff.edit-preview { background: transparent; border: 0; border-radius: 0; padding: 3px 0; margin: 0; max-height: 240px; font-size: inherit; line-height: 1.2; }
-.edit-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 5px; margin: 1px 0; font-size: 0.8em; color: var(--vscode-descriptionForeground); }
-.edit-steps-label { font-weight: 400; letter-spacing: 0; font-size: 0.92em; opacity: 0.8; }
-.edit-step { font-family: var(--vscode-editor-font-family); }
-/* Expanded run of edits to one file: each member is a step with its own diff
-   (or streaming/pending/failed state) under a small tool+range heading. */
-.edit-step-item { margin-top: 5px; }
-.edit-step-item:first-child { margin-top: 0; }
-.edit-step-head { display: flex; align-items: center; gap: 6px; font-size: 0.8em; color: var(--vscode-descriptionForeground); }
-.edit-step-name { font-family: var(--vscode-editor-font-family); font-weight: 400; letter-spacing: 0; }
-.change-summary { background: var(--surface-fill); border: 0; border-radius: var(--control-radius); overflow: hidden; margin-top: 2px; }
+.tool-diff.edit-preview { background: transparent; border: 0; border-radius: 0; padding: 3px 0; margin: 0; max-height: 240px; line-height: 1.2; }
+.change-summary { overflow: hidden; margin-top: 2px; }
 .part.final-answer-part + .change-summary,
 .card.answer + .change-summary {
   border-top-left-radius: 0;
@@ -567,12 +555,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .change-summary-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .change-summary .review-btn { border: 0; }
 .change-summary .review-btn:hover { background: var(--surface-fill); border-color: transparent; }
-.change-file-list { border-top: 1px solid var(--surface-stroke); }
-.change-file-item + .change-file-item { border-top: 1px solid var(--surface-stroke); }
 .change-file-row { width: 100%; min-height: 28px; display: flex; align-items: center; gap: 7px; padding: 4px 7px; background: transparent; border: 0; color: var(--vscode-descriptionForeground); font: inherit; text-align: left; cursor: pointer; }
 .change-file-row:hover { color: var(--vscode-foreground); background: var(--surface-fill); }
 .change-file-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.change-summary .tool-diff.edit-preview { border-top: 1px solid var(--surface-stroke); max-height: 320px; }
+.change-summary .tool-diff.edit-preview { max-height: 320px; }
 .tool-diff .diff-lines { display: grid; width: max-content; min-width: 100%; }
 .tool-diff .diff-line { position: relative; display: grid; width: 100%; min-width: 0; grid-template-columns: 6ch minmax(0, 1fr); min-height: 0; padding: 2px 0; line-height: 1.2; white-space: pre; }
 .tool-diff .diff-line::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: transparent; }
@@ -583,18 +569,18 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-diff .diff-line.neutral { color: var(--vscode-descriptionForeground); }
 .tool-diff .diff-no { color: var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground)); text-align: right; padding: 0 10px 0 5px; user-select: none; opacity: 0.82; }
 .tool-diff .diff-line.add .diff-no { color: color-mix(in srgb, #56d364 72%, var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground))); }
-.tool-diff .diff-line.del .diff-no { color: color-mix(in srgb, #ff7b72 72%, var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground))); }
+.tool-diff .diff-line.del .diff-no { color: var(--error-foreground); opacity: 1; }
 .tool-diff .diff-code { min-width: 0; padding-right: 9px; color: var(--vscode-editor-foreground, var(--vscode-foreground)); }
 
-.card { background: var(--surface-fill); border: 1px solid var(--surface-fill); border-radius: var(--control-radius); padding: 8px 10px; }
-.card.summary { background: color-mix(in srgb, #2ea043 8%, transparent); border-color: color-mix(in srgb, #2ea043 8%, transparent); font-weight: 500; }
+.card { padding: 8px 10px; }
+.card.summary { font-weight: 500; }
 .msg.assistant .card.answer.abort {
   background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent);
   border-color: transparent;
-  color: var(--vscode-errorForeground);
+  color: var(--error-foreground);
   white-space: pre-wrap;
 }
-.notice { align-self: center; display: inline-flex; align-items: center; gap: 6px; max-width: 92%; padding: 6px 9px; border: 1px solid var(--surface-fill); border-radius: var(--control-radius); color: var(--vscode-descriptionForeground); background: var(--surface-fill); font-size: 0.86em; }
+.notice { align-self: center; display: inline-flex; align-items: center; gap: 6px; max-width: 92%; padding: 6px 9px; color: var(--vscode-descriptionForeground); font-size: 0.86em; }
 .card-actions { display: flex; gap: 6px; margin-top: 6px; }
 .card-actions .approve,
 .card-actions .reject {
@@ -612,7 +598,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   background: var(--accent-accept-fill);
   border-color: transparent;
 }
-.card-actions .reject:hover {
+.card-actions .reject:hover, .card-actions .reject:focus-visible {
+  color: var(--error-highlight-foreground);
   background: var(--accent-reject-fill);
   border-color: transparent;
 }
@@ -649,7 +636,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .queued-message-input:focus { border-color: transparent; outline: none; }
 .queued-message-action { flex: 0 0 auto; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: var(--control-radius); font: inherit; font-size: 18px; line-height: 1; cursor: pointer; outline: none; }
 .queued-message-action:hover, .queued-message-action:focus-visible { background: var(--surface-fill-strong); color: var(--vscode-foreground); }
-.queued-message-action.remove:hover, .queued-message-action.remove:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); border-color: transparent; color: var(--vscode-errorForeground); }
+.queued-message-action.remove:hover, .queued-message-action.remove:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); border-color: transparent; color: var(--error-highlight-foreground); }
 .queued-message-action.save:hover, .queued-message-action.save:focus-visible { color: var(--vscode-testing-iconPassed, #3fb950); }
 .scroll-down {
   position: absolute;
@@ -680,15 +667,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .approval-summary { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--vscode-descriptionForeground); font-size: 0.9em; }
 .approval-summary > strong { flex: 0 0 auto; white-space: nowrap; }
 .approval-summary span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.command-approval-hint {
-  padding: 8px 10px;
-  background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent);
-  color: var(--tool-error-foreground);
-  border: 1px solid transparent;
-  border-radius: var(--control-radius);
-  font-size: 0.86em;
-  line-height: 1.35;
-}
 .approval-actions { display: flex; flex-direction: column; gap: 8px; }
 .approval-actions .approve,
 .approval-actions .reject {
@@ -705,7 +683,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
 .approval-actions .approve:hover { background: var(--accent-accept-fill); border-color: transparent; }
-.approval-actions .reject:hover { background: var(--accent-reject-fill); border-color: transparent; }
+.approval-actions .reject:hover, .approval-actions .reject:focus-visible { color: var(--error-highlight-foreground); background: var(--accent-reject-fill); border-color: transparent; }
 
 /* ask_user_question box: the question, a stack of suggestion buttons, and a
    free-text "other" answer with its own submit. Built on .approval-composer. */
@@ -723,7 +701,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   font: inherit; cursor: pointer; line-height: 1.35;
   transition: background 0.12s, border-color 0.12s;
 }
-.question-option:hover { background: var(--accent-accept-fill); border-color: transparent; }
+.question-option:hover, .question-option:focus-visible { background: var(--surface-fill-strong); border-color: transparent; }
 .question-other { position: relative; }
 .question-other-input {
   display: block; width: 100%; min-width: 0; resize: vertical; min-height: 54px; max-height: 160px;
@@ -732,14 +710,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   border-radius: var(--control-radius); font: inherit; line-height: 1.4; box-sizing: border-box; outline: none;
 }
 .question-other-input:focus { background: var(--surface-fill-strong); border-color: transparent; }
-/* The chosen answer recorded inline on the resolved Ask Question card. */
-.question-answered { flex: 0 0 auto; margin-left: 6px; opacity: 0.9; }
 #sendSlot { position: absolute; right: 10px; bottom: 10px; display: inline-flex; gap: 5px; }
 .composer-attach { position: absolute; left: 10px; bottom: 13px; width: var(--icon-action-size); height: var(--icon-action-size); display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: var(--control-radius); cursor: pointer; outline: none; }
 .composer-attach svg { display: block; }
 .composer-attach:hover, .composer-attach:focus-visible { background: var(--surface-fill-strong); color: var(--vscode-foreground); }
 .composer-attach:disabled { opacity: 0.45; cursor: default; }
-.composer-attachment { position: absolute; left: 42px; right: 52px; bottom: 10px; display: flex; align-items: center; gap: 5px; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.composer-attachment { position: absolute; left: 42px; right: 52px; bottom: 10px; display: flex; align-items: center; gap: 5px; min-width: 0; overflow-x: auto; overflow-y: hidden; }
 .composer-attachment[hidden] { display: none; }
 .composer-row.busy .composer-attachment { right: 92px; }
 .composer-attachment-item { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; max-width: min(220px, 72vw); height: 30px; box-sizing: border-box; padding: 1px 3px 1px 1px; background: var(--surface-fill-strong); border: 1px solid transparent; border-radius: var(--control-radius); }
@@ -747,9 +723,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .composer-attachment-preview:hover, .composer-attachment-preview:focus-visible { background: var(--surface-fill); }
 .composer-attachment-preview img { width: 100%; height: 100%; display: block; object-fit: cover; border-radius: var(--control-radius); }
 .composer-attachment-preview:hover img, .composer-attachment-preview:focus-visible img { opacity: 0.82; }
+.text-attachment-preview { display: inline-flex; align-items: center; justify-content: center; color: var(--vscode-descriptionForeground); cursor: zoom-in; }
+.text-attachment-preview .workspace-file-link-icon { font-size: 22px; margin: 0; }
 .composer-attachment-name { min-width: 0; max-width: 145px; overflow: hidden; color: var(--vscode-descriptionForeground); font-size: 0.82em; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
 .composer-attachment-remove { width: 22px; height: 22px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: var(--control-radius); font: inherit; font-size: 17px; line-height: 1; cursor: pointer; }
-.composer-attachment-remove:hover, .composer-attachment-remove:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--vscode-errorForeground); }
+.composer-attachment-remove:hover, .composer-attachment-remove:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--error-highlight-foreground); }
 .image-attachments { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .image-attachment { display: flex; align-items: center; gap: 9px; min-width: 0; width: fit-content; max-width: 100%; padding: 6px 8px; background: var(--surface-fill); border: 1px solid transparent; border-radius: var(--control-radius); box-sizing: border-box; }
 .image-attachment-preview { width: 64px; height: 48px; flex: 0 0 auto; box-sizing: border-box; padding: 0; background: transparent; border: 1px solid transparent; border-radius: var(--control-radius); cursor: zoom-in; overflow: hidden; }
@@ -760,23 +738,36 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .image-attachment-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .image-attachment-meta small { color: var(--vscode-descriptionForeground); }
 .image-attachment-remove { width: 26px; height: 26px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: var(--control-radius); font: inherit; font-size: 18px; cursor: pointer; outline: none; }
-.image-attachment-remove:hover, .image-attachment-remove:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--vscode-errorForeground); }
+.image-attachment-remove:hover, .image-attachment-remove:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--error-highlight-foreground); }
 .msg.user .bubble .image-attachment { margin-bottom: 8px; background: color-mix(in srgb, var(--vscode-editor-background) 14%, transparent); }
 .image-preview { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; box-sizing: border-box; padding: 48px 18px 20px; background: color-mix(in srgb, var(--vscode-editor-background) 88%, transparent); }
 .image-preview[hidden] { display: none; }
 .image-preview-content { display: flex; flex-direction: column; align-items: center; gap: 10px; max-width: 100%; max-height: 100%; margin: 0; }
 .image-preview-content img { display: block; max-width: 100%; max-height: calc(100vh - 110px); object-fit: contain; }
+.image-preview-content [hidden], .attachment-preview-open[hidden] { display: none; }
+.image-preview.text-preview .image-preview-content { width: min(900px, 100%); min-height: 0; }
+.attachment-preview-text { width: 100%; max-height: calc(100vh - 150px); min-height: 120px; box-sizing: border-box; overflow: auto; margin: 0; padding: 14px; border: 1px solid transparent; border-radius: var(--control-radius); background: linear-gradient(var(--surface-fill), var(--surface-fill)), var(--vscode-editor-background); color: var(--vscode-editor-foreground, var(--vscode-foreground)); font-family: var(--vscode-editor-font-family, monospace); font-size: var(--vscode-editor-font-size, 13px); line-height: 1.5; tab-size: 4; text-align: left; white-space: pre; }
+.attachment-preview-text code { font: inherit; color: inherit; background: transparent; padding: 0; border: 0; border-radius: 0; }
+.attachment-preview-text:focus-visible { outline: none; background: linear-gradient(var(--surface-fill-strong), var(--surface-fill-strong)), var(--vscode-editor-background); }
+.attachment-preview-open { position: absolute; top: 10px; left: 18px; padding: 5px 10px; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; border-radius: var(--control-radius); font: inherit; cursor: pointer; outline: none; }
+.attachment-preview-open:hover, .attachment-preview-open:focus-visible { background: var(--surface-fill-strong); }
 .image-preview-content figcaption { max-width: min(680px, calc(100vw - 72px)); color: var(--vscode-descriptionForeground); line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.image-preview-close { position: absolute; top: 10px; right: 10px; width: var(--icon-action-size); height: var(--icon-action-size); display: inline-flex; align-items: center; justify-content: center; padding: 0; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; border-radius: var(--control-radius); cursor: pointer; }
-.image-preview-close:hover, .image-preview-close:focus-visible { background: var(--surface-fill-strong); }
+.image-preview-close, .attachment-preview-nav { position: absolute; width: var(--icon-action-size); height: var(--icon-action-size); display: inline-flex; align-items: center; justify-content: center; padding: 0; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; border-radius: var(--control-radius); cursor: pointer; }
+.image-preview-close { top: 10px; right: 10px; }
+.image-preview-close:hover, .image-preview-close:focus-visible, .attachment-preview-nav:hover, .attachment-preview-nav:focus-visible { background: var(--surface-fill-strong); }
+.attachment-preview-nav { top: 50%; transform: translateY(-50%); z-index: 1; }
+.attachment-preview-nav[hidden] { display: none; }
+.attachment-preview-previous { left: 10px; }
+.attachment-preview-next { right: 10px; }
+.attachment-preview-previous svg { transform: rotate(180deg); }
 body.image-preview-open .chat-body { overflow: hidden; }
 .send-btn { position: static; }
 .send-btn, .question-submit { width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; border-radius: var(--composer-action-radius); cursor: pointer; outline: none; transition: background 0.12s, opacity 0.12s; }
 .question-submit { position: absolute; right: 10px; bottom: 10px; }
 .send-btn:hover, .send-btn:focus-visible, .question-submit:hover:not(:disabled), .question-submit:focus-visible:not(:disabled) { background: var(--surface-fill-strong); border-color: transparent; }
 .send-btn:disabled, .question-submit:disabled { opacity: 0.55; cursor: default; }
-.send-btn.cancel-btn { background: var(--accent-reject-fill); border-color: transparent; color: var(--vscode-errorForeground); }
-.send-btn.cancel-btn:hover, .send-btn.cancel-btn:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 26%, transparent); border-color: transparent; }
+.send-btn.cancel-btn { background: var(--accent-reject-fill); border-color: transparent; color: var(--error-foreground); }
+.send-btn.cancel-btn:hover, .send-btn.cancel-btn:focus-visible { color: var(--error-highlight-foreground); background: color-mix(in srgb, var(--vscode-errorForeground) 26%, transparent); border-color: transparent; }
 .composer-toggles { display: flex; gap: 8px; margin-top: 8px; font-size: 0.88em; color: var(--vscode-descriptionForeground); align-items: center; min-width: 0; }
 .mode-pill, .ctx-pill { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 26px; box-sizing: border-box; line-height: 1; white-space: nowrap; flex: 0 0 auto; background: transparent; color: var(--vscode-descriptionForeground); border: 0; padding: 2px 9px; border-radius: var(--control-radius); cursor: pointer; font: inherit; transition: background 0.12s, color 0.12s; }
 .mode-pill:hover, .ctx-pill:hover { background: var(--surface-fill); color: var(--vscode-foreground); }
@@ -836,7 +827,8 @@ body.image-preview-open .chat-body { overflow: hidden; }
 .ctx-pill { margin-left: 0; }
 .ctx-pill span { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 .ctx-pill svg { display: block; }
-.ctx-pill.danger { color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-errorForeground) 8%, transparent); }
+.ctx-pill.danger { color: var(--error-foreground); background: color-mix(in srgb, var(--vscode-errorForeground) 8%, transparent); }
+.ctx-pill.danger:is(:hover, :focus-visible, .active-menu) { color: var(--error-highlight-foreground); }
 .ctx-pill.active-menu { background: var(--surface-fill); color: var(--vscode-foreground); }
 .ctx-pill.nudge { animation: compact-wiggle 0.28s ease-in-out 0s 2; }
 .compact-menu {
@@ -887,6 +879,8 @@ body.image-preview-open .chat-body { overflow: hidden; }
   .tool-card.streaming .tool-icon,
   .tool-card.pending .tool-icon,
   .tool-card.approved .tool-icon,
+  .active-tool-head > .tool-icon,
+  .work-type-icon.active,
   .thinking.live .thinking-icon,
   .tool-card.write.streaming .tool-head::before,
   .tool-card.write.pending .tool-head::before,
@@ -895,6 +889,7 @@ body.image-preview-open .chat-body { overflow: hidden; }
 }
 
 .memory-disclosure { margin: 8px 0; }
+.memory-disclosure[hidden] { display: none; }
 .memory-disclosure > summary, .memory-source > summary { list-style: none; outline: none; }
 .memory-disclosure > summary::-webkit-details-marker, .memory-source > summary::-webkit-details-marker { display: none; }
 .memory-disclosure > summary:focus-visible,
@@ -903,15 +898,19 @@ body.image-preview-open .chat-body { overflow: hidden; }
 .memory-disclosure[open] > summary .disclosure-icon,
 .memory-source[open] > summary .disclosure-icon { transform: rotate(90deg); }
 .memory-source { padding: 0; }
+/* Match the answer-to-memory gap to the gap before the next chat message. */
+.msg.assistant > [data-memory-creation] { margin-top: calc(var(--chat-message-gap) - var(--chat-part-gap)); }
 /* Native memory summaries retain pointer focus after clicks. Keep their
    keyboard-only focus affordance separate from tool rows' focus-within rule. */
 .memory-source > summary.disclosure-trigger > .disclosure-icon { opacity: 0; }
 .memory-source > summary.disclosure-trigger:is(:hover, :focus-visible, :has(:focus-visible)) > .disclosure-icon { opacity: 1; }
-.memory-source .memory-source-icon { color: var(--vscode-textLink-foreground); }
-.memory-details { padding: 4px 0 8px; }
 .memory-date { color: var(--vscode-descriptionForeground); margin-bottom: 4px; font-size: 0.85em; }
+.tool-memory-item { align-items: flex-start; }
+.tool-memory-item > .tool-filelist-icon { margin-top: 2px; }
+.tool-memory-entry { min-width: 0; overflow-wrap: anywhere; }
+.tool-memory-name { white-space: normal; }
 
-.chat-tabs { display: flex; flex: 1; min-width: 0; gap: 2px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; scrollbar-color: var(--vscode-scrollbarSlider-background, var(--surface-fill-strong)) transparent; font-size: var(--vscode-font-size); font-weight: normal; }
+.chat-tabs { display: flex; flex: 1; min-width: 0; gap: 2px; overflow-x: auto; overflow-y: hidden; font-size: var(--vscode-font-size); font-weight: normal; }
 .chat-tabs .chat-tab { flex: 0 0 auto; width: max-content; min-width: 75px; max-width: 240px; height: 28px; padding: 0 4px 0 0; gap: 0; background: var(--vscode-tab-inactiveBackground, transparent); color: var(--vscode-tab-inactiveForeground, var(--vscode-descriptionForeground)); }
 .chat-tabs .chat-tab.active { background: var(--vscode-tab-activeBackground, var(--surface-fill-strong)); color: var(--vscode-tab-activeForeground, var(--vscode-foreground)); }
 .chat-tabs .chat-tab:hover { background: var(--vscode-list-hoverBackground, var(--surface-fill)); color: var(--vscode-foreground); }

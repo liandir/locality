@@ -1,7 +1,16 @@
+import type MarkdownIt from "markdown-it";
+
 export interface WorkspaceFileLink {
   path: string;
   tooltip: string;
   line?: number;
+}
+
+/** Let workspace file URIs reach the guarded file-link renderer. */
+export function enableWorkspaceFileLinks(md: MarkdownIt, getWorkspaceRoot: () => string | undefined): void {
+  const validateLink = md.validateLink.bind(md);
+  md.validateLink = href => validateLink(href)
+    || (/^file:/i.test(href) && resolveWorkspaceFileLink(href, getWorkspaceRoot()) !== undefined);
 }
 
 /** Return only the final file-name segment for either slash convention. */
@@ -56,16 +65,14 @@ export function resolveWorkspaceFileLink(
   if (isAbsolute(normalizedCandidate)) {
     if (!normalizedRoot || !isInside(normalizedRoot, normalizedCandidate)) return undefined;
     const path = platformPath(normalizedCandidate, workspaceRoot!);
-    return { path, tooltip: path, line };
+    const tooltip = platformPath(normalizedCandidate.slice(normalizedRoot.length + 1), workspaceRoot) || ".";
+    return { path, tooltip, line };
   }
 
   const relative = normalizeRelative(normalizedCandidate);
   if (!relative) return undefined;
   const path = platformPath(relative, workspaceRoot);
-  const tooltip = normalizedRoot
-    ? platformPath(`${normalizedRoot}/${relative}`, workspaceRoot!)
-    : path;
-  return { path, tooltip, line };
+  return { path, tooltip: path, line };
 }
 
 function decodeHref(href: string): string {

@@ -13,11 +13,10 @@ describe("tool calling profiles", () => {
     }
   });
 
-  it("maps former auto and legacy modes through their family", () => {
-    expect(normalizeToolCallingProfile("auto", "gemma4")).toBe("compat-gemma4");
-    expect(normalizeToolCallingProfile("legacy", "qwen3")).toBe("compat-qwen3");
-    expect(normalizeToolCallingProfile(undefined, "qwen3")).toBe("compat-qwen3");
-    expect(normalizeToolCallingProfile("native", "qwen3")).toBe("native");
+  it("uses the default profile for missing or invalid settings", () => {
+    expect(normalizeToolCallingProfile(undefined)).toBe("compat-gemma4");
+    expect(normalizeToolCallingProfile("unsupported")).toBe("compat-gemma4");
+    expect(normalizeToolCallingProfile(123)).toBe("compat-gemma4");
   });
 
   it("returns a recovery family only for compatibility profiles", () => {

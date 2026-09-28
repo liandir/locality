@@ -1,10 +1,10 @@
+import { readFeatureSettings, featureSettingKeys } from "../build/settings.js";
 import * as vscode from "vscode";
 import { DEFAULT_MEMORY_MAX_COUNT, MAX_MEMORY_COUNT } from "../chat/memoryLimits.js";
 import { normalizeToolCallingProfile, type ToolCallingProfile } from "../llm/toolCallingProfile.js";
-import { migrateLegacyDefaultSafeCommands, type SafeCommandEntry } from "../tools/safeCommands.js";
 import { normalizeReasoningEfforts, type ReasoningEfforts } from "../chat/reasoningEffort.js";
 
-const NS = "localLlmHarness";
+const NS = "locality";
 
 export const DEFAULT_TITLE_PROMPT =
   "Summarize the user message in 2-6 words. Output ONLY the summary.";
@@ -32,39 +32,34 @@ export interface HarnessSettings {
   templateOverheadTokensPerMessage: number;
   autoapproveReads: boolean;
   autoapproveWrites: boolean;
-  autoapproveCommands: boolean;
-  safeCommands: SafeCommandEntry[];
+  autoapproveCommands?: boolean;
+  autoapproveSafeCommands?: boolean;
+  safeCommandPatterns?: unknown;
+  webSearchEndpoint?: string;
+  /** Host-derived capability flag, never a configurable permission. */
+  webToolsEnabled?: boolean;
+  autoapproveWebSearch?: boolean;
 }
 
 export function readSettings(): HarnessSettings {
   const cfg = vscode.workspace.getConfiguration(NS);
-  const legacyFamily = cfg.get<string>("modelFamily");
-  const explicitProfile = explicitConfigurationValue(cfg, "toolCallingMode");
-  const explicitLegacyFamily = explicitConfigurationValue(cfg, "modelFamily");
-  const explicitReasoningBudget = explicitConfigurationValue(cfg, "reasoningBudget");
-  const legacyCappedTokens = explicitConfigurationValue(cfg, "cappedThinkingTokens");
   return {
     endpoint: cfg.get<string>("endpoint") ?? "http://localhost:8080/v1",
     model: cfg.get<string>("model")?.trim() || "local",
-    toolCallingMode: normalizeToolCallingProfile(
-      explicitProfile ?? (explicitLegacyFamily === undefined ? cfg.get<string>("toolCallingMode") : "auto"),
-      legacyFamily
-    ),
-    // Low default on purpose: tool calls carry exact line numbers, and
-    // sampling noise there directly produces mistargeted edits.
-    temperature: clampNumber(cfg.get<number>("temperature") ?? 0.3, 0, 2, 0.3),
+    toolCallingMode: normalizeToolCallingProfile(cfg.get<unknown>("toolCallingMode")),
+    temperature: clampNumber(cfg.get<number>("temperature") ?? 0.8, 0, 2, 0.8),
     topK: Math.round(clampNumber(cfg.get<number>("topK") ?? 40, 0, Number.MAX_SAFE_INTEGER, 40)),
     topP: clampNumber(cfg.get<number>("topP") ?? 0.95, 0, 1, 0.95),
     reasoningBudget: Math.round(clampNumber(
-      Number(explicitReasoningBudget ?? legacyCappedTokens ?? cfg.get<number>("reasoningBudget") ?? 16384),
+      Number(cfg.get<number>("reasoningBudget") ?? -1),
       -1,
       Number.MAX_SAFE_INTEGER,
-      16384
+      -1
     )),
     reasoningEfforts: normalizeReasoningEfforts(cfg.get<unknown>("reasoningEfforts")),
     titlePrompt: cfg.get<string>("titlePrompt")?.trim() || DEFAULT_TITLE_PROMPT,
     commitMessagePrompt: cfg.get<string>("commitMessagePrompt")?.trim() || DEFAULT_COMMIT_MESSAGE_PROMPT,
-    showThinking: cfg.get<boolean>("showThinking") ?? true,
+    showThinking: cfg.get<boolean>("showThinking") ?? false,
     memoryEnabled: cfg.inspect?.<boolean>("memoryEnabled")?.workspaceValue === true,
     memoryMaxCount: Math.floor(clampNumber(cfg.get<number>("memoryMaxCount") ?? DEFAULT_MEMORY_MAX_COUNT, 1, MAX_MEMORY_COUNT, DEFAULT_MEMORY_MAX_COUNT)),
     autoCompact: cfg.get<boolean>("autoCompact") ?? true,
@@ -74,20 +69,8 @@ export function readSettings(): HarnessSettings {
     templateOverheadTokensPerMessage: clampNumber(Math.round(cfg.get<number>("templateOverheadTokensPerMessage") ?? 4), 0, 64, 4),
     autoapproveReads: cfg.get<boolean>("autoapproveReads") ?? true,
     autoapproveWrites: cfg.get<boolean>("autoapproveWrites") ?? false,
-    autoapproveCommands: cfg.get<boolean>("autoapproveCommands") ?? false,
-    safeCommands: cfg.get<SafeCommandEntry[]>("safeCommands") ?? []
+    ...readFeatureSettings(cfg)
   };
-}
-
-function explicitConfigurationValue(cfg: vscode.WorkspaceConfiguration, key: string): unknown {
-  if (typeof cfg.inspect !== "function") return undefined;
-  const inspect = cfg.inspect<unknown>(key);
-  return inspect?.workspaceFolderLanguageValue
-    ?? inspect?.workspaceFolderValue
-    ?? inspect?.workspaceLanguageValue
-    ?? inspect?.workspaceValue
-    ?? inspect?.globalLanguageValue
-    ?? inspect?.globalValue;
 }
 
 function clampPercent(value: number): number {
@@ -104,12 +87,13 @@ export async function writeSetting<K extends keyof HarnessSettings>(
   key: K,
   value: HarnessSettings[K]
 ): Promise<void> {
+  if (!SETTING_KEYS.includes(key)) throw new Error("Setting is unavailable in this edition.");
   const cfg = vscode.workspace.getConfiguration(NS);
   await cfg.update(key, value, key === "memoryEnabled" || key === "memoryMaxCount" ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global);
 }
 
 /** Every harness setting key; maps 1:1 to the package.json configuration properties. */
-const SETTING_KEYS: (keyof HarnessSettings)[] = [
+export const SETTING_KEYS: (keyof HarnessSettings)[] = [
   "endpoint",
   "model",
   "toolCallingMode",
@@ -130,28 +114,8 @@ const SETTING_KEYS: (keyof HarnessSettings)[] = [
   "templateOverheadTokensPerMessage",
   "autoapproveReads",
   "autoapproveWrites",
-  "autoapproveCommands",
-  "safeCommands"
+  ...featureSettingKeys as (keyof HarnessSettings)[]
 ];
-
-/** The safe-command auto-approval list contributed as the package.json default. */
-export function getDefaultSafeCommands(): SafeCommandEntry[] {
-  const cfg = vscode.workspace.getConfiguration(NS);
-  return cfg.inspect<SafeCommandEntry[]>("safeCommands")?.defaultValue ?? [];
-}
-
-/**
- * Write the effective safe commands into workspace settings if the workspace has
- * no override yet. This gives the workspace JSON editor a concrete list to edit
- * while preserving any user-level customization as the initial value.
- */
-export async function seedSafeCommandsIfUnset(): Promise<void> {
-  const cfg = vscode.workspace.getConfiguration(NS);
-  const info = cfg.inspect<SafeCommandEntry[]>("safeCommands");
-  if (info?.workspaceValue !== undefined) return;
-  const effective = cfg.get<SafeCommandEntry[]>("safeCommands") ?? getDefaultSafeCommands();
-  await cfg.update("safeCommands", effective, vscode.ConfigurationTarget.Workspace);
-}
 
 /** Seed effective generated-text instructions into workspace JSON for editing. */
 export async function seedGeneratedPromptsIfUnset(): Promise<void> {
@@ -170,23 +134,6 @@ export async function restoreDefaultGeneratedPrompts(): Promise<void> {
   await cfg.update("commitMessagePrompt", DEFAULT_COMMIT_MESSAGE_PROMPT, vscode.ConfigurationTarget.Workspace);
 }
 
-/** Overwrite the workspace safe-command auto-approval list with the defaults. */
-export async function restoreDefaultSafeCommands(): Promise<void> {
-  const cfg = vscode.workspace.getConfiguration(NS);
-  await cfg.update("safeCommands", getDefaultSafeCommands(), vscode.ConfigurationTarget.Workspace);
-}
-
-/** Refresh exact historical defaults copied into workspace settings. */
-export async function migrateLegacySafeCommands(): Promise<void> {
-  const cfg = vscode.workspace.getConfiguration(NS);
-  const workspaceValue = cfg.inspect<SafeCommandEntry[]>("safeCommands")?.workspaceValue;
-  if (!workspaceValue) return;
-  const migrated = migrateLegacyDefaultSafeCommands(workspaceValue);
-  if (migrated) {
-    await cfg.update("safeCommands", migrated, vscode.ConfigurationTarget.Workspace);
-  }
-}
-
 /** Reset every harness setting to its default by clearing the user override. */
 export async function resetAllSettings(): Promise<void> {
   const cfg = vscode.workspace.getConfiguration(NS);
@@ -194,11 +141,6 @@ export async function resetAllSettings(): Promise<void> {
     await cfg.update(key, undefined, vscode.ConfigurationTarget.Global);
     await cfg.update(key, undefined, vscode.ConfigurationTarget.Workspace);
   }
-  // Removed in the unified-profile migration; clear stale overrides too.
-  await cfg.update("modelFamily", undefined, vscode.ConfigurationTarget.Global);
-  await cfg.update("modelFamily", undefined, vscode.ConfigurationTarget.Workspace);
-  await cfg.update("cappedThinkingTokens", undefined, vscode.ConfigurationTarget.Global);
-  await cfg.update("cappedThinkingTokens", undefined, vscode.ConfigurationTarget.Workspace);
 }
 
 export function onSettingsChange(handler: () => void): vscode.Disposable {

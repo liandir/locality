@@ -7,11 +7,15 @@ dist/
 # Local Claude folder (plans, memory) — keep out of public repo
 .claude/
 
-# Local LLM Harness saved chats
-.local-llm-chats/
+# Locality saved chats
+.locality/
 
 # Editor / OS
 .vscode/
 .idea/
 *.swp
 *.log
+
+# Isolated edition builds and packages
+.build/
+artifacts/

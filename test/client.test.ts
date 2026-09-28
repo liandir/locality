@@ -128,6 +128,79 @@ describe("OpenAI-compatible client", () => {
     expect(accepted).toHaveBeenCalledTimes(1);
   });
 
+  it("requests and reads llama.cpp prompt progress before generated output", async () => {
+    const fetchMock = vi.fn(async () => sseResponse([
+      ...[0, 2048, 4096].map(processed => `data: ${JSON.stringify({
+        choices: [{ delta: { role: "assistant", content: null }, finish_reason: null }],
+        prompt_progress: { total: 4096, cache: 0, processed, time_ms: processed / 2 }
+      })}`),
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "Ready" } }] })}`,
+      "data: [DONE]"
+    ]));
+    vi.stubGlobal("fetch", fetchMock);
+    const chunks: LlmStreamChunk[] = [];
+    for await (const chunk of streamChat("http://127.0.0.1:8080", {
+      messages: [{ role: "user", content: "Continue" }], return_progress: true
+    }, new AbortController().signal)) chunks.push(chunk);
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string).return_progress).toBe(true);
+    expect(chunks).toEqual([
+      { kind: "promptProgress", processedTokens: 0, totalTokens: 4096 },
+      { kind: "promptProgress", processedTokens: 2048, totalTokens: 4096 },
+      { kind: "promptProgress", processedTokens: 4096, totalTokens: 4096 },
+      { kind: "text", text: "Ready" }
+    ]);
+  });
+
+  it("ignores malformed progress without interrupting the response", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      ...[
+        null, {}, { total: 0, processed: 0 }, { total: 20, processed: -1 },
+        { total: 20, processed: 21 }, { total: "20", processed: 1 },
+        { total: 20, processed: null }, { total: 20, processed: 0.5 }
+      ].map(prompt_progress => `data: ${JSON.stringify({ prompt_progress })}`),
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "Ready" } }] })}`,
+      "data: [DONE]"
+    ])));
+    const chunks: LlmStreamChunk[] = [];
+    for await (const chunk of streamChat("http://127.0.0.1:8080", {
+      messages: [], return_progress: true
+    }, new AbortController().signal)) chunks.push(chunk);
+    expect(chunks).toEqual([{ kind: "text", text: "Ready" }]);
+  });
+
+  it.each([
+    { content: "Answer" },
+    { reasoning_content: "Thinking" },
+    { tool_calls: [{ index: 0, function: { name: "read_file", arguments: '{"path":"a.ts"}' } }] }
+  ])("ignores late prompt progress after generation starts with %j", async delta => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta }] })}`,
+      `data: ${JSON.stringify({ prompt_progress: { total: 4096, processed: 2048 } })}`,
+      "data: [DONE]"
+    ])));
+    const chunks: LlmStreamChunk[] = [];
+    for await (const chunk of streamChat("http://127.0.0.1:8080", {
+      messages: [], return_progress: true
+    }, new AbortController().signal)) chunks.push(chunk);
+    expect(chunks.some(chunk => chunk.kind === "promptProgress")).toBe(false);
+    expect(chunks.some(chunk => ["text", "thought", "toolCall"].includes(chunk.kind))).toBe(true);
+  });
+
+  it("continues normally when an older server omits requested progress", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { role: "assistant", content: null } }] })}`,
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "Ready" } }] })}`,
+      "data: [DONE]"
+    ])));
+    const chunks: LlmStreamChunk[] = [];
+    for await (const chunk of streamChat("http://127.0.0.1:8080", {
+      messages: [], return_progress: true
+    }, new AbortController().signal)) chunks.push(chunk);
+    expect(chunks).toEqual([{ kind: "text", text: "Ready" }]);
+  });
+
   it("reads the model alias and context length from llama.cpp props", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       model_alias: "gemma-4-31b-it",
@@ -138,7 +211,8 @@ describe("OpenAI-compatible client", () => {
 
     await expect(fetchServerMetadata("http://127.0.0.1:8080/v1", { model: "gemma-4-31b-it", force: true })).resolves.toEqual({
       modelAlias: "gemma-4-31b-it",
-      contextSize: 65536
+      contextSize: 65536,
+      supportsVision: false
     });
     const [requestedUrl] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(requestedUrl).toBe("http://127.0.0.1:8080/props?model=gemma-4-31b-it");
@@ -152,7 +226,8 @@ describe("OpenAI-compatible client", () => {
 
     await expect(fetchServerMetadata("http://127.0.0.1:8080", { force: true })).resolves.toEqual({
       modelAlias: "qwen3-coder.gguf",
-      contextSize: 32768
+      contextSize: 32768,
+      supportsVision: false
     });
   });
 
@@ -386,7 +461,7 @@ describe("OpenAI-compatible client", () => {
   it("sends canonical tools and disables parallel calls by default", async () => {
     const fetchMock = vi.fn(async () => sseResponse(["data: [DONE]"]));
     vi.stubGlobal("fetch", fetchMock);
-    const tools = asOpenAiTools(toolsForMode(true));
+    const tools = asOpenAiTools(toolsForMode("plan"));
 
     for await (const chunk of streamChat(
       "http://127.0.0.1:8080",
@@ -403,7 +478,7 @@ describe("OpenAI-compatible client", () => {
   });
 
   it("offers argv-based execution to native models instead of the legacy shell-string tool", () => {
-    const names = toolsForMode(false, "native").map(tool => tool.name);
+    const names = toolsForMode("act", "native").map(tool => tool.name);
     expect(names).toContain("run_process");
     expect(names).not.toContain("run_command");
     expect(names).toContain("create_file");
@@ -411,7 +486,7 @@ describe("OpenAI-compatible client", () => {
     expect(names).not.toContain("write_file");
     expect(names).toContain("insert_text");
     expect(names).toContain("replace_range");
-    const process = toolsForMode(false, "native").find(tool => tool.name === "run_process")!;
+    const process = toolsForMode("act", "native").find(tool => tool.name === "run_process")!;
     expect(process.parameters.properties.args.items).toEqual({ type: "string" });
     expect(process.description).not.toContain("safe-list");
     expect(process.description).not.toContain("approval");
@@ -438,7 +513,7 @@ describe("OpenAI-compatible client", () => {
       "tools param requires --jinja flag",
       { status: 400 }
     )));
-    const tools = asOpenAiTools(toolsForMode(false));
+    const tools = asOpenAiTools(toolsForMode("act"));
 
     await expect((async () => {
       for await (const chunk of streamChat(
@@ -454,7 +529,7 @@ describe("OpenAI-compatible client", () => {
       JSON.stringify({ error: { code: 500, message: "Failed to parse tool call arguments as JSON: json.exception.parse_error.101 unexpected end of input" } }),
       { status: 500 }
     )));
-    const tools = asOpenAiTools(toolsForMode(false));
+    const tools = asOpenAiTools(toolsForMode("act"));
 
     await expect((async () => {
       for await (const chunk of streamChat(
@@ -483,5 +558,37 @@ describe("foreground inference scheduling", () => {
     expect(busy).toEqual([true, false]);
     expect(foregroundBusy()).toBe(false);
     expect(requests.every(request => !("background" in request))).toBe(true);
+  });
+});
+
+describe("server vision capabilities", () => {
+  it.each([true, false, undefined, "true", { enabled: true }])("requires an explicit modalities.vision boolean (%j)", async vision => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      model_alias: "vision-test",
+      default_generation_settings: { n_ctx: 32768 },
+      modalities: { vision, audio: true },
+      mmproj: "projector.gguf"
+    }))));
+    const metadata = await fetchServerMetadata("http://127.0.0.1:8080", { model: "vision-test", force: true });
+    expect(metadata.supportsVision).toBe(vision === true);
+  });
+
+  it("refreshes capability on reconnect and isolates selected models", async () => {
+    let vision = true;
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      model_alias: "capability-cache-test", default_generation_settings: { n_ctx: 32768 }, modalities: { vision }
+    })));
+    vi.stubGlobal("fetch", fetchMock);
+    const endpoint = "http://127.0.0.1:8080";
+    expect((await fetchServerMetadata(endpoint, { model: "vision-a", force: true })).supportsVision).toBe(true);
+    vision = false;
+    expect((await fetchServerMetadata(endpoint, { model: "text-b" })).supportsVision).toBe(false);
+    expect((await fetchServerMetadata(endpoint, { model: "vision-a" })).supportsVision).toBe(true);
+    expect((await fetchServerMetadata(endpoint, { model: "vision-a", force: true })).supportsVision).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    fetchMock.mockRejectedValueOnce(new Error("offline"));
+    await expect(fetchServerMetadata(endpoint, { model: "vision-a", force: true })).rejects.toThrow("offline");
+    vision = true;
+    expect((await fetchServerMetadata(endpoint, { model: "vision-a" })).supportsVision).toBe(true);
   });
 });

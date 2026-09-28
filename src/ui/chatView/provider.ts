@@ -1,3 +1,7 @@
+import { featureStyles } from "../../build/assets.js";
+import { fetchServerMetadata } from "../../llm/client.js";
+import { fileURLToPath } from "node:url";
+import { MAX_TEXT_ATTACHMENT_BYTES } from "../../chat/attachments.js";
 import type { WorkspaceMemory } from "../../chat/workspaceMemory.js";
 import * as vscode from "vscode";
 import * as path from "node:path";
@@ -15,33 +19,10 @@ import {
   type ReasoningEffort
 } from "../../chat/reasoningEffort.js";
 import { assertInsideWorkspace } from "../../tools/workspaceGuard.js";
-import { execFileUtf8 } from "../../util/exec.js";
+import { readGitHeadContent, type GitExtensionApi } from "../../scm/gitApi.js";
 import type { ChatToExt, ExtToChat, SideTab, UiAttachment, ChatTab } from "../messaging.js";
 import { reorderItemsById, shouldDrainMessageQueue } from "./queuedMessages.js";
 import { classifyWorkspacePath } from "./workspacePathTypes.js";
-
-interface GitChangeState {
-  uri?: vscode.Uri;
-  resourceUri?: vscode.Uri;
-  originalUri?: vscode.Uri;
-}
-
-interface GitRepositoryApi {
-  rootUri: vscode.Uri;
-  state?: {
-    workingTreeChanges?: GitChangeState[];
-    indexChanges?: GitChangeState[];
-    mergeChanges?: GitChangeState[];
-  };
-}
-
-interface GitApi {
-  repositories?: GitRepositoryApi[];
-}
-
-interface GitExtensionApi {
-  getAPI(version: number): GitApi;
-}
 
 interface ChatRuntime {
   session?: ChatSession;
@@ -58,21 +39,24 @@ interface ChatRuntime {
   removed: boolean;
   running: boolean;
   compacting: boolean;
+  memoryRefreshGeneration: number;
 }
 
 function newRuntime(): ChatRuntime {
   return { queuedMessages: [], stagedAttachmentIds: new Set(), pendingAttachments: new Map(),
     messageLoopRunning: false, sessionCreationPending: false, attachmentSelectionPending: false,
-    events: [], draft: "", open: true, removed: false, running: false, compacting: false };
+    events: [], draft: "", open: true, removed: false, running: false, compacting: false, memoryRefreshGeneration: 0 };
 }
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
-  static readonly viewType = "localLlmHarness.chat";
-  private static readonly reviewScheme = "local-llm-harness-review";
+  static readonly viewType = "locality.chat";
+  private static readonly reviewScheme = "locality-review";
   private view?: vscode.WebviewView;
   private runtimes = new Map<string, ChatRuntime>();
   private navigationGeneration = 0;
   private recentChatsGeneration = 0;
+  private visionGeneration = 0;
+  private visionEndpointKey?: string;
   private deleting = new Map<string, ChatStorage>();
   private clearingStorage?: ChatStorage;
 
@@ -140,13 +124,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private updateFocusContext(focused: boolean): void {
     if (this.chatFocusCtx !== focused) {
       this.chatFocusCtx = focused;
-      void vscode.commands.executeCommand("setContext", "localLlmHarness.chatFocus", focused);
+      void vscode.commands.executeCommand("setContext", "locality.chatFocus", focused);
     }
   }
 
   reveal(): void {
     this.view?.show?.(true);
-    void vscode.commands.executeCommand("localLlmHarness.chat.focus");
+    void vscode.commands.executeCommand("locality.chat.focus");
   }
 
   post(msg: UiEvent | ExtToChat): void {
@@ -161,8 +145,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     } else if ("kind" in msg && msg.kind === "chatLoaded") {
       const { contextMessages, ...transcript } = msg.record;
       delete transcript.memory;
-      delete transcript.memorySelection;
-      delete transcript.memoryUsage;
+      delete transcript.recalledMemories;
       payload = {
         ...msg,
         contextMessageCount: contextMessages?.length ?? transcript.messages.length,
@@ -189,6 +172,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   pushSettings(): void {
     const s = readSettings();
+    void this.refreshVisionCapability();
     const reasoningEffort = availableReasoningEffort(
       this.session?.getRecord().reasoningEffort ?? this.workspaceReasoningEffort(),
       s.reasoningEfforts
@@ -204,6 +188,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       autoCompactThresholdPercent: s.autoCompactThresholdPercent,
       workspaceRoot: this.getWorkspaceRoot()
     });
+  }
+
+  private async refreshVisionCapability(): Promise<boolean> {
+    const generation = ++this.visionGeneration;
+    const { endpoint, model } = readSettings();
+    const endpointKey = `${endpoint}\n${model}`;
+    if (this.visionEndpointKey !== endpointKey) {
+      this.visionEndpointKey = endpointKey;
+      this.post({ kind: "visionCapability", supported: false });
+    }
+    let supported = false;
+    try {
+      supported = (await fetchServerMetadata(endpoint, { model })).supportsVision;
+    } catch { /* Unknown capabilities keep image input unavailable. */ }
+    const current = readSettings();
+    if (endpoint !== current.endpoint || model !== current.model) return false;
+    if (generation === this.visionGeneration) this.post({ kind: "visionCapability", supported });
+    return supported;
   }
 
   async pushRecentChats(): Promise<void> {
@@ -226,7 +228,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return this.session?.getRecord();
   }
 
-  refreshMemoryVisibility(): void { for (const runtime of this.runtimes.values()) void runtime.session?.refreshMemoryVisibility(); }
+  refreshMemoryVisibility(): void {
+    for (const runtime of this.runtimes.values()) {
+      void runtime.session?.refreshMemoryVisibility();
+      void this.refreshMemoryCreations(runtime);
+    }
+  }
+
+  private async refreshMemoryCreations(runtime: ChatRuntime): Promise<void> {
+    if (!this.memory || !runtime.session) return;
+    const generation = ++runtime.memoryRefreshGeneration;
+    const creations = await this.memory.creations(runtime.session.getRecord().id);
+    if (runtime.removed || runtime.storage !== this.getStorage() || generation !== runtime.memoryRefreshGeneration) return;
+    const event: UiEvent = { kind: "memoryCreations", creations };
+    runtime.events = runtime.events.filter(old => old.kind !== "memoryCreations");
+    runtime.events.push(event);
+    if (runtime === this.active) this.post(event);
+  }
 
   getTabs(): ChatTab[] {
     return [...this.runtimes.values()].filter(runtime => runtime.open || runtime.running || runtime.compacting).map(runtime => ({
@@ -316,21 +334,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const storage = this.getStorage();
     const ws = this.getWorkspaceRoot();
     if (!storage || !ws) {
-      vscode.window.showErrorMessage("Local LLM Harness: open a folder to start a chat.");
+      vscode.window.showErrorMessage("Locality: open a folder to start a chat.");
       return;
     }
     const runtime = newRuntime();
     runtime.storage = storage;
     const session = new ChatSession({
-      storage, workspaceRoot: ws, record: rec,
+      storage, workspaceRoot: ws, record: rec, memory: this.memory, secrets: this.context.secrets,
       emit: event => {
         if (runtime.removed) return;
+        if (event.kind === "visionCapability") {
+          const current = readSettings();
+          if (event.endpoint === current.endpoint && event.model === current.model) this.post(event);
+          return;
+        }
         // A fresh baseline plus this turn's events preserves streamed text and
         // pending approvals without retaining an unbounded lifetime event log.
         if (event.kind === "turnPreparing" && !runtime.running) {
           const retained = new Map<string, UiEvent>();
           for (const old of runtime.events) {
-            if (["tokens", "memoriesUsed", "compactStatus"].includes(old.kind)) retained.set(old.kind, old);
+            if (["tokens", "memoriesUsed", "memoryCreations", "compactStatus"].includes(old.kind)) retained.set(old.kind, old);
           }
           runtime.events = [{ kind: "chatLoaded", record: structuredClone(session.getRecord()) }, ...retained.values()];
           runtime.running = true;
@@ -349,7 +372,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (event.kind === "turnEnd" || event.kind === "abort") {
           runtime.running = false;
           this.pushTabs();
-          if (event.kind === "turnEnd") this.memory?.enqueue(rec.id);
+          if (event.kind === "turnEnd" && event.messageTs !== undefined) this.memory?.enqueue(rec.id, false, event.messageTs);
         }
         if (event.kind === "titleChanged") { this.onChatOpened(rec); this.pushTabs(); }
       }
@@ -373,6 +396,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const attachment = runtime.pendingAttachments.get(id);
       if (attachment) this.post({ type: "attachmentSelected", attachment: this.toUiAttachment(attachment, runtime) });
     }
+    this.post({ type: "attachmentImportState", pending: runtime.attachmentSelectionPending });
     this.pushSettings();
     this.pushTabs();
     void this.pushRecentChats();
@@ -430,8 +454,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private workspaceReasoningEffort(): ReasoningEffort {
     return normalizeReasoningEffort(
-      this.context.workspaceState.get<unknown>(WORKSPACE_REASONING_EFFORT_KEY)
-        ?? this.context.workspaceState.get<unknown>("localLlmHarness.workspaceThinkingMode", DEFAULT_REASONING_EFFORT)
+      this.context.workspaceState.get<unknown>(WORKSPACE_REASONING_EFFORT_KEY, DEFAULT_REASONING_EFFORT)
     );
   }
 
@@ -478,9 +501,48 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "selectAttachment":
         await this.selectAttachment();
         break;
-      case "pasteAttachment":
-        await this.pasteAttachment(m.fileName, m.mimeType, m.dataUrl);
+      case "pasteAttachments":
+        await this.pasteAttachments(m.files);
         break;
+      case "pasteText":
+        if (Buffer.byteLength(m.text, "utf8") > MAX_TEXT_ATTACHMENT_BYTES) {
+          this.post({ type: "attachmentPasteFailed", error: "Pasted text must be 1 MiB or smaller." });
+        } else {
+          await this.pasteAttachments([{ fileName: "Pasted text", dataUrl: `data:text/plain;base64,${Buffer.from(m.text, "utf8").toString("base64")}` }]);
+        }
+        break;
+      case "pasteFileUris":
+        try {
+          const uris = m.uris.map(uri => vscode.Uri.file(fileURLToPath(uri)));
+          await this.selectAttachment(uris);
+        } catch (error) {
+          this.post({ type: "attachmentPasteFailed", error: (error as Error).message });
+        }
+        break;
+      case "openAttachment": {
+        const attachment = this.findAttachmentFile(m.attachmentId);
+        if (attachment && this.session && this.active.storage) {
+          await vscode.commands.executeCommand("vscode.open", vscode.Uri.file(this.active.storage.attachmentPath(this.session.getRecord().id, attachment)));
+        }
+        break;
+      }
+      case "requestAttachmentText": {
+        const runtime = this.active;
+        const attachment = this.findAttachmentFile(m.attachmentId);
+        const chatId = runtime.session?.getRecord().id;
+        let text: string | undefined;
+        let error: string | undefined;
+        try {
+          if (!attachment || !chatId || !runtime.storage) throw new Error("Attachment is no longer available.");
+          text = await runtime.storage.attachmentText(chatId, attachment);
+        } catch (err) {
+          error = (err as Error).message;
+        }
+        if (runtime === this.active && !runtime.removed) {
+          this.post({ type: "attachmentText", attachmentId: m.attachmentId, requestId: m.requestId, text, error });
+        }
+        break;
+      }
       case "discardAttachment": {
         const attachment = this.takeStagedAttachment(m.attachmentId);
         if (attachment && this.session) await this.getStorage()?.deleteAttachment(this.session.getRecord().id, attachment);
@@ -546,24 +608,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "cancel": this.session?.cancel(); break;
       case "approveTool": this.session?.approve(m.toolId, m.approved); break;
       case "answerQuestion": this.session?.answerQuestion(m.toolId, m.answer); break;
-      case "stopProcess": await this.session?.stopProcessFromUser(m.jobId); break;
+      case "featureAction": await this.session?.handleFeatureAction(m.id); break;
       case "setChatMode": await this.setChatMode(m.mode); break;
       case "setReasoningEffort": await this.setReasoningEffort(m.effort); break;
       case "compactNow": await this.compactNow(); break;
       case "compactInterruptAndRun": await this.compactAfterInterrupt(); break;
       case "newChat":
-        await vscode.commands.executeCommand("localLlmHarness.newChat");
+        await vscode.commands.executeCommand("locality.newChat");
         break;
       case "openChats":
         this.onOpenSideTab("chats");
-        await vscode.commands.executeCommand("workbench.view.extension.localLlmHarness");
+        await vscode.commands.executeCommand("workbench.view.extension.locality");
         break;
       case "deleteCurrent":
-        await vscode.commands.executeCommand("localLlmHarness.deleteChat");
+        await vscode.commands.executeCommand("locality.deleteChat");
         break;
       case "openSettings":
         this.onOpenSideTab("settings");
-        await vscode.commands.executeCommand("workbench.view.extension.localLlmHarness");
+        await vscode.commands.executeCommand("workbench.view.extension.locality");
         break;
       case "acceptPlan": {
         const runtime = this.active;
@@ -716,100 +778,126 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const attachment = message.attachments?.find(item => item.id === id);
       if (attachment) return attachment;
     }
+    for (const message of this.session?.getRecord().messages ?? []) {
+      const attachment = message.attachments?.find(item => item.id === id);
+      if (attachment) return attachment;
+    }
     return this.pendingAttachments.get(id);
   }
 
-  private async selectAttachment(): Promise<void> {
+  private async selectAttachment(clipboardFiles?: vscode.Uri[]): Promise<void> {
     let runtime = this.active;
-    if (runtime.attachmentSelectionPending) return;
+    if (runtime.attachmentSelectionPending) {
+      this.post({ type: "attachmentPasteFailed", error: "Another attachment is already being added." });
+      this.post({ type: "attachmentImportState", pending: true });
+      return;
+    }
     runtime.attachmentSelectionPending = true;
+    this.post({ type: "attachmentImportState", pending: true });
     try {
-      const selected = await vscode.window.showOpenDialog({
+      const allowImages = await this.refreshVisionCapability();
+      if (runtime.removed) return;
+      const selected = clipboardFiles ?? await vscode.window.showOpenDialog({
         canSelectFiles: true,
         canSelectFolders: false,
         canSelectMany: true,
-        openLabel: "Attach images",
-        filters: { Images: ["png", "jpg", "jpeg", "webp"] }
+        openLabel: "Attach files",
+        filters: { "All files": ["*"], ...(allowImages ? { Images: ["png", "jpg", "jpeg", "webp"] } : {}), "Text and code": ["txt", "md", "log", "json", "yaml", "yml", "xml", "csv", "ts", "tsx", "js", "jsx", "py", "go", "rs", "java", "c", "cpp", "h", "html", "css", "sh", "sql"] }
       });
       if (!selected?.length || runtime.removed) return;
       if (!runtime.session) {
         const rec = await this.onCreateChat();
         runtime = this.active;
+        runtime.attachmentSelectionPending = true;
+        this.post({ type: "attachmentImportState", pending: true });
         if (!rec || !runtime.session) return;
       }
       if (runtime.removed) return;
       const available = MAX_ATTACHMENTS_PER_MESSAGE - runtime.stagedAttachmentIds.size;
       for (const uri of selected.slice(0, available)) {
-        const attachment = await runtime.storage!.importAttachment(runtime.session.getRecord().id, uri.fsPath);
+        const allowImages = await this.refreshVisionCapability();
+        if (runtime.removed) return;
+        const attachment = await runtime.storage!.importAttachment(runtime.session.getRecord().id, uri.fsPath, { allowImages });
         if (runtime.removed) { await runtime.storage!.deleteAttachment(runtime.session!.getRecord().id, attachment); return; }
         runtime.pendingAttachments.set(attachment.id, attachment);
         runtime.stagedAttachmentIds.add(attachment.id);
         if (runtime === this.active) this.post({ type: "attachmentSelected", attachment: this.toUiAttachment(attachment, runtime) });
       }
       if (selected.length > available) {
-        if (runtime === this.active) this.post({ kind: "notice", text: `You can attach up to ${MAX_ATTACHMENTS_PER_MESSAGE} images to one message.` });
+        if (runtime === this.active) this.post({ kind: "notice", text: `You can attach up to ${MAX_ATTACHMENTS_PER_MESSAGE} files to one message.` });
       }
     } catch (error) {
       if (runtime === this.active) this.post({ kind: "notice", text: (error as Error).message });
     } finally {
       runtime.attachmentSelectionPending = false;
+      if (runtime === this.active) this.post({ type: "attachmentImportState", pending: false });
     }
   }
 
-  private async pasteAttachment(fileName: string, mimeType: string, dataUrl: string): Promise<void> {
+  private async pasteAttachments(files: { fileName: string; dataUrl: string }[]): Promise<void> {
     let runtime = this.active;
     if (runtime.attachmentSelectionPending) {
-      if (runtime === this.active) this.post({ type: "attachmentPasteFailed", error: "Another image attachment is already being added." });
+      this.post({ type: "attachmentPasteFailed", error: "Another attachment is already being added." });
+      this.post({ type: "attachmentImportState", pending: true });
       return;
     }
     runtime.attachmentSelectionPending = true;
+    this.post({ type: "attachmentImportState", pending: true });
     try {
-      if (runtime.stagedAttachmentIds.size >= MAX_ATTACHMENTS_PER_MESSAGE) {
-        throw new Error(`You can attach up to ${MAX_ATTACHMENTS_PER_MESSAGE} images to one message.`);
+      const available = MAX_ATTACHMENTS_PER_MESSAGE - runtime.stagedAttachmentIds.size;
+      if (files.length > available) throw new Error(`You can attach up to ${MAX_ATTACHMENTS_PER_MESSAGE} files to one message.`);
+      for (const file of files) {
+        const match = /^data:[^,]*;base64,/.exec(file.dataUrl);
+        if (!match) throw new Error("The pasted file data is invalid.");
+        const encoded = file.dataUrl.slice(match[0].length);
+        if (encoded.length > Math.ceil(MAX_ATTACHMENT_BYTES / 3) * 4) throw new Error("Attachments must be 10 MiB or smaller.");
+        if (encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) throw new Error("The pasted file data is invalid.");
+        const bytes = Buffer.from(encoded, "base64");
+        if (!runtime.session) {
+          const rec = await this.onCreateChat();
+          runtime = this.active;
+          runtime.attachmentSelectionPending = true;
+          this.post({ type: "attachmentImportState", pending: true });
+          if (!rec || !runtime.session) throw new Error("Could not create a chat for the pasted files.");
+        }
+        if (runtime.removed) return;
+        const allowImages = await this.refreshVisionCapability();
+        if (runtime.removed) return;
+        const attachment = await runtime.storage!.importAttachmentBytes(runtime.session.getRecord().id, file.fileName, bytes, { allowImages });
+        if (runtime.removed) { await runtime.storage!.deleteAttachment(runtime.session!.getRecord().id, attachment); return; }
+        runtime.pendingAttachments.set(attachment.id, attachment);
+        runtime.stagedAttachmentIds.add(attachment.id);
+        if (runtime === this.active) this.post({ type: "attachmentSelected", attachment: this.toUiAttachment(attachment, runtime) });
       }
-      if (!(mimeType === "image/png" || mimeType === "image/jpeg" || mimeType === "image/webp")) {
-        throw new Error("Paste a JPEG, PNG, or WebP image.");
-      }
-      const prefix = `data:${mimeType};base64,`;
-      if (!dataUrl.startsWith(prefix)) throw new Error("The pasted image data is invalid.");
-      const encoded = dataUrl.slice(prefix.length);
-      const maxEncodedLength = Math.ceil(MAX_ATTACHMENT_BYTES / 3) * 4;
-      if (encoded.length > maxEncodedLength) throw new Error("Images must be 10 MiB or smaller.");
-      if (!encoded || encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) {
-        throw new Error("The pasted image data is invalid.");
-      }
-      const bytes = Buffer.from(encoded, "base64");
-      if (!runtime.session) {
-        const rec = await this.onCreateChat();
-        runtime = this.active;
-        if (!rec || !runtime.session) throw new Error("Could not create a chat for the pasted image.");
-      }
-      const attachment = await runtime.storage!.importAttachmentBytes(runtime.session.getRecord().id, fileName, bytes);
-      if (runtime.removed) { await runtime.storage!.deleteAttachment(runtime.session!.getRecord().id, attachment); return; }
-      runtime.pendingAttachments.set(attachment.id, attachment);
-      runtime.stagedAttachmentIds.add(attachment.id);
-      if (runtime === this.active) this.post({ type: "attachmentSelected", attachment: this.toUiAttachment(attachment, runtime) });
     } catch (error) {
       if (runtime === this.active) this.post({ type: "attachmentPasteFailed", error: (error as Error).message });
     } finally {
       runtime.attachmentSelectionPending = false;
+      if (runtime === this.active) this.post({ type: "attachmentImportState", pending: false });
     }
   }
 
   private async openWorkspaceFile(filePath: string, line?: number): Promise<void> {
     const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) {
-      vscode.window.showErrorMessage("Local LLM Harness: open a folder to open files.");
+      vscode.window.showErrorMessage("Locality: open a folder to open files.");
       return;
     }
 
     try {
       const absolute = await assertInsideWorkspace(workspaceRoot, filePath);
-      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(absolute));
+      const uri = vscode.Uri.file(absolute);
       // Reveal the requested 1-based line at the top and place the cursor there.
       const target = line !== undefined && Number.isInteger(line) && line >= 1
         ? new vscode.Range(line - 1, 0, line - 1, 0)
         : undefined;
+      if (!target) {
+        // Let VS Code choose the registered editor, including its image viewer.
+        // Opening a binary image as a text document rejects the file outright.
+        await vscode.commands.executeCommand("vscode.open", uri, { preview: false });
+        return;
+      }
+      const doc = await vscode.workspace.openTextDocument(uri);
       await vscode.window.showTextDocument(doc, { preview: false, selection: target });
       if (target) {
         const editor = vscode.window.activeTextEditor;
@@ -818,7 +906,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
       }
     } catch (err) {
-      vscode.window.showErrorMessage(`Local LLM Harness: could not open file: ${(err as Error).message}`);
+      vscode.window.showErrorMessage(`Locality: could not open file: ${(err as Error).message}`);
     }
   }
 
@@ -835,7 +923,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         { preview: false }
       );
     } catch (err) {
-      vscode.window.showErrorMessage(`Local LLM Harness: could not open review diff: ${(err as Error).message}`);
+      vscode.window.showErrorMessage(`Locality: could not open review diff: ${(err as Error).message}`);
     }
   }
 
@@ -858,7 +946,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         { preview: false }
       );
     } catch (err) {
-      vscode.window.showErrorMessage(`Local LLM Harness: could not open proposed diff: ${(err as Error).message}`);
+      vscode.window.showErrorMessage(`Locality: could not open proposed diff: ${(err as Error).message}`);
     }
   }
 
@@ -894,15 +982,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           return { originalUri: change.originalUri, modifiedUri: change.uri ?? change.resourceUri ?? fileUri };
         }
       } catch {
-        // Fall back to a direct git: URI below.
+        // Read HEAD through the same fixed Git API below.
       }
     }
 
     try {
-      const original = await this.readGitHeadContent(workspaceRoot, absolute);
+      const original = await readGitHeadContent(absolute);
       return { originalUri: this.snapshotReviewUri(`${path.relative(workspaceRoot, absolute)} (HEAD)`, original), modifiedUri: fileUri };
     } catch {
-      return { originalUri: this.snapshotReviewUri(`${path.relative(workspaceRoot, absolute)} (empty)`, ""), modifiedUri: fileUri };
+      throw new Error("The Git baseline is unavailable. Enable the built-in Git extension or review the captured edit diff.");
     }
   }
 
@@ -914,12 +1002,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
     this.reviewDocuments.set(uri.toString(), content);
     return uri;
-  }
-
-  private async readGitHeadContent(workspaceRoot: string, absolute: string): Promise<string> {
-    const relative = path.relative(workspaceRoot, absolute).replace(/\\/g, "/");
-    const { stdout } = await execFileUtf8("git", ["-C", workspaceRoot, "show", `HEAD:${relative}`]);
-    return stdout;
   }
 
   private html(webview: vscode.Webview): string {
@@ -944,6 +1026,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       <link rel="stylesheet" href="${katexCss}">
       <link rel="stylesheet" href="${cssUri}">
       <link rel="stylesheet" href="${webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media/chatControls.css"))}">
+      ${featureStyles.map(file => `<link rel="stylesheet" href="${webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", file))}">`).join("\n")}
     </head><body>
       <div id="app"></div>
       <script nonce="${nonce}" src="${scriptUri}"></script>
