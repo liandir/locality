@@ -171,7 +171,7 @@ describe("edition composition", () => {
     expect(settings.autoapproveWebSearch).toBe(true);
     const feature = api.createFeatures({ workspaceRoot: "/tmp", emit() {}, async appendResult() {} }).find(item => item.tools.includes("web_search"))!;
     expect(feature.needsApproval(settings)).toBe(false);
-    const html = api.sideFeature.renderSection!(settings as unknown as Record<string, unknown>, (key, _label, checked) => `${key}:${checked}`, value => value);
+    const html = api.sideFeature.render(settings as unknown as Record<string, unknown>, (key, _label, checked) => `${key}:${checked}`, value => value);
     expect(html).toContain("autoapproveWebSearch:true");
     for (const mode of ["act", "plan", "review"] as const) {
       const prompt = api.buildSystemPrompt({ family: "gemma4", mode, nativeTools: true, workspaceRoot: "/tmp", featureSettings: settings });

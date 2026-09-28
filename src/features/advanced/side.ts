@@ -11,8 +11,9 @@ let status: { ok?: boolean; text: string } | undefined;
 
 export const sideFeature: SideFeature = {
   label: "Advanced",
-  render: (settings, toggle, escape) => commands.render(settings, toggle, escape),
-  renderSection(settings, toggle, escape) {
+  render: (settings, toggle, escape) => commands.render(settings, toggle, escape)
+    + toggle("autoapproveWebSearch", "Auto-approve web requests", settings.autoapproveWebSearch === true),
+  renderSection(settings, _toggle, escape) {
     const disabled = testing || !loaded ? "disabled" : "";
     return `<section class="panel-section"><h3>Web search</h3>
       <div class="connection-settings" aria-label="Web search settings">
@@ -25,7 +26,8 @@ export const sideFeature: SideFeature = {
         <input id="webSearchApiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Required for Brave" ${disabled} />
         <p class="setting-help">Brave Web Search endpoint or SearXNG base URL. Brave requires an API key; SearXNG keys are optional. Set verifies and enables both web tools. Leave the endpoint blank to disable them.</p>
         ${status ? `<div class="validation ${status.ok === false ? "err" : status.ok ? "ok" : ""}" role="${status.ok === false ? "alert" : "status"}">${escape(status.text)}</div>` : ""}
-      </div>` + toggle("autoapproveWebSearch", "Auto-approve web requests", settings.autoapproveWebSearch === true) + "</section>";
+      </div>
+    </section>`;
   },
   bind(root, send, render) {
     commands.bind(root, send);
