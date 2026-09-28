@@ -4,7 +4,7 @@ vi.mock("../src/network/safeFetch.js", () => ({ safeFetch: mocks.fetch }));
 vi.mock("../src/config/settings.js", () => ({ readSettings: mocks.settings }));
 import type { HarnessSettings } from "../src/config/settings.js";
 import { createSearchFeature } from "../src/features/webSearch/runtime.js";
-import { searchRequest, searchSearxng, searchUrl } from "../src/features/webSearch/searxng.js";
+import { searchRequest, searchWeb, searchUrl } from "../src/features/webSearch/search.js";
 import { additionalPolicy } from "../src/features/webSearch/networkPolicy.js";
 import { chatFeature } from "../src/features/advanced/chat.js";
 
@@ -17,7 +17,7 @@ describe("SearXNG search", () => {
       { title: "bad", url: "javascript:alert(1)" },
       { title: "credentials", url: "https://user:password@example.org/" }
     ] })));
-    expect(await searchSearxng("http://localhost:8888", searchRequest({ query: "reference docs" }))).toEqual([
+    expect(await searchWeb("http://localhost:8888", searchRequest({ query: "reference docs" }))).toEqual([
       { title: "Title", url: "https://example.org/page", snippet: "Snippet", published: "2026-01-02" }
     ]);
     const [endpoint, request, options] = mocks.fetch.mock.calls[0];
@@ -42,11 +42,11 @@ describe("SearXNG search", () => {
 
   it("returns helpful errors without provider response bodies", async () => {
     mocks.fetch.mockResolvedValue(new Response("secret provider body", { status: 403 }));
-    await expect(searchSearxng("https://search.example", { query: "docs", count: 5 })).rejects.toThrow("HTTP 403");
+    await expect(searchWeb("https://search.example", { query: "docs", count: 5 })).rejects.toThrow("HTTP 403");
     mocks.fetch.mockResolvedValue(new Response("private rate-limit body", { status: 429 }));
-    await expect(searchSearxng("https://search.example", { query: "docs", count: 5 })).rejects.toThrow("rate limiting requests (HTTP 429)");
+    await expect(searchWeb("https://search.example", { query: "docs", count: 5 })).rejects.toThrow("rate limiting requests (HTTP 429)");
     mocks.fetch.mockResolvedValue(new Response("not json"));
-    await expect(searchSearxng("https://search.example", { query: "docs", count: 5 })).rejects.toThrow("invalid JSON");
+    await expect(searchWeb("https://search.example", { query: "docs", count: 5 })).rejects.toThrow("invalid JSON");
   });
 
   it.each([{ query: "" }, { query: "x".repeat(501) }, { query: "x", count: 0 }, { query: "x", count: 11 }])("rejects invalid arguments", args => {
@@ -88,7 +88,7 @@ describe("SearXNG search", () => {
   });
   it("sends an optional key only in the authorization header", async () => {
     mocks.fetch.mockResolvedValue(new Response('{"results":[]}'));
-    await searchSearxng("https://search.example", { query: "docs", count: 1 }, { apiKey: " test-secret " });
+    await searchWeb("https://search.example", { query: "docs", count: 1 }, { apiKey: " test-secret " });
     const [endpoint, url, options] = mocks.fetch.mock.calls[0];
     expect(options.headers.Authorization).toBe("Bearer test-secret");
     expect(endpoint + url).not.toContain("test-secret");
@@ -97,16 +97,16 @@ describe("SearXNG search", () => {
 
   it.each(["", "wrong-key"])("explains HTTP 401 with key %s", async apiKey => {
     mocks.fetch.mockResolvedValue(new Response("private response", { status: 401 }));
-    await expect(searchSearxng("https://search.example", { query: "docs", count: 1 }, { apiKey }))
+    await expect(searchWeb("https://search.example", { query: "docs", count: 1 }, { apiKey }))
       .rejects.toThrow(apiKey ? "authentication failed (HTTP 401)" : "requires authentication (HTTP 401)");
   });
 
   it("sanitizes transport errors and rejects malformed keys before sending", async () => {
     mocks.fetch.mockRejectedValue(new TypeError("fetch failed with secret-key"));
-    await expect(searchSearxng("https://search.example", { query: "docs", count: 1 }, { apiKey: "secret-key" }))
+    await expect(searchWeb("https://search.example", { query: "docs", count: 1 }, { apiKey: "secret-key" }))
       .rejects.toThrow("Could not connect to the search service");
     mocks.fetch.mockClear();
-    await expect(searchSearxng("https://search.example", { query: "docs", count: 1 }, { apiKey: "secret\nInjected: value" }))
+    await expect(searchWeb("https://search.example", { query: "docs", count: 1 }, { apiKey: "secret\nInjected: value" }))
       .rejects.toThrow("printable characters");
     expect(mocks.fetch).not.toHaveBeenCalled();
   });

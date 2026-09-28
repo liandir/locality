@@ -14,7 +14,7 @@ the same chat UI, storage, and Git commit-message generator:
 | No commands | No execution implementation included | No |
 | Safe list | User-configured regex rules and workspace checks for built-ins | No |
 | Commands | General execution with your OS permissions | No |
-| Advanced | General execution with your OS permissions | SearXNG |
+| Advanced | General execution with your OS permissions | Brave Search or SearXNG |
 
 Commands require approval by default. In Safe list, **Auto-approve safe commands**
 applies equally to all matching commands, including deletion. Commands outside
@@ -114,9 +114,18 @@ Safe Git currently requires a `.git` directory inside the workspace; linked
 worktrees and parent-repository discovery are not supported. Narrow recursive
 searches if the checked tree exceeds 10,000 entries.
 
-**Advanced search:** enter a SearXNG **Web search endpoint** (base URL) and optional
-**API-key** in Settings, above **Auto-approve web requests**. Click **Set** to
-run a test JSON search for `SearXNG` and save the connection if successful.
+**Advanced search:** in Settings → Web search, enter either:
+
+- **Brave Search:** `https://api.search.brave.com/res/v1/web/search` and your
+  Brave Search **API-key**. The official base URL `https://api.search.brave.com`
+  also works. Locality detects Brave from its exact official host.
+- **SearXNG:** your instance's base URL and an optional **API-key**.
+
+Click **Set** to run a test JSON search for `Locality` and save the connection if
+successful. Authentication, subscription, quota, and format errors use the red
+error box. Brave requires a Search API subscription; its other API endpoints
+are not supported by this adapter.
+
 This section sits between Chat (including workspace memories) and Automation.
 Both `web_search` and `read_webpage` are omitted from tool definitions and system
 prompts until the current endpoint is verified. Verification survives reloads;
@@ -125,13 +134,15 @@ connections once. The host stores verification separately from editable settings
 A blank or unverified endpoint disables both web tools; there is no public default. Connection,
 authentication, rate-limit, and response-format errors appear in red.
 
-A blank key sends no authentication header. When supplied, the key uses
-`Authorization: Bearer …` (supported by PrivAU). Keys are kept in VS Code secret
+SearXNG sends no authentication header with a blank key, or
+`Authorization: Bearer …` when supplied (supported by PrivAU). Brave requires
+a key and sends it in `X-Subscription-Token`. Keys are kept in VS Code secret
 storage, bound to the saved endpoint, and are never included in prompts, chat
-history, or settings JSON. Clearing the key and pressing Set removes it after
-a successful connection test. Changing the endpoint in user JSON does not send
+history, or settings JSON. For SearXNG, clearing the key and pressing Set removes
+it after a successful connection test. A blank endpoint clears the key and disables
+both web tools without a network request. Changing the endpoint in user JSON does not send
 an existing key to the new destination; use Set to configure its credentials.
-This integration expects the SearXNG JSON API, not arbitrary search-provider APIs.
+The adapter supports Brave Web Search and the SearXNG JSON API, not arbitrary search-provider APIs.
 
 Each search and page read requires approval unless you enable **Auto-approve web requests**.
 This switch applies in Act, Plan, and Review modes and is off by default.
@@ -152,8 +163,9 @@ and reserved addresses are blocked, including redirects and DNS changes.
 
 **Auto-approve web requests** covers both tools. The existing
 `locality.autoapproveWebSearch` key is retained for settings compatibility.
-Brave Search requires a separate provider adapter (its authentication header and
-response schema differ); a Brave URL/key cannot be used directly here yet.
+Brave queries use the same bounded result format as SearXNG: title, URL, snippet,
+and optional page date. Queries are limited to 500 characters and 75 words for
+Brave. Search credentials are never sent by `read_webpage`.
 
 **Build and package:** `npm run build` develops the Commands edition. Use
 `node esbuild.config.mjs --profile=no-commands` (or `safe-list`, `commands`,
@@ -420,7 +432,7 @@ by compaction in older versions cannot be recovered automatically.
 | `autoapproveCommands` | `false` | Commands and Advanced: skip command approval in Act mode. Review always asks. |
 | `autoapproveSafeCommands` | `false` | Safe list: skip approval for every matching command in Act mode. Review always asks. |
 | `safeCommandPatterns` | Built-in regex list | Safe list: whole-command patterns in user settings; empty means deny all. |
-| `webSearchEndpoint` | `""` | Advanced: SearXNG base URL, configured and tested in Settings. Empty or unverified omits both web tools. |
+| `webSearchEndpoint` | `""` | Advanced: Brave Web Search URL or SearXNG base URL, configured and tested in Settings. Empty or unverified omits both web tools. |
 | `autoapproveWebSearch` | `false` | Advanced: auto-approve searches and page reads in Act, Plan, and Review modes. User settings only. |
 
 The generated-text settings are instruction strings, not templates, so they do

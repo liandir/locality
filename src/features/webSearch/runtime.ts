@@ -2,7 +2,7 @@ import type { SecretStorage } from "vscode";
 import { readSearchApiKey } from "./credentials.js";
 import type { FeatureRuntime } from "../../build/contracts.js";
 import { readSettings } from "../../config/settings.js";
-import { searchRequest, searchSearxng, searchUrl } from "./searxng.js";
+import { searchRequest, searchWeb, searchUrl } from "./search.js";
 export function createSearchFeature(secrets?: SecretStorage): FeatureRuntime {
   const approvedDestinations = new WeakMap<Record<string, unknown>, string>();
   return {
@@ -24,7 +24,7 @@ export function createSearchFeature(secrets?: SecretStorage): FeatureRuntime {
       const endpoint = settings.webSearchEndpoint ?? "";
       if (approvedDestinations.get(args) !== endpoint) throw new Error("Search destination is no longer approved.");
       const apiKey = await readSearchApiKey(secrets, endpoint);
-      const results = await searchSearxng(endpoint, request, { signal, apiKey });
+      const results = await searchWeb(endpoint, request, { signal, apiKey });
       return { result: JSON.stringify({ query: request.query, results }) };
     }
   };

@@ -43,7 +43,7 @@ describe("Advanced search connection settings", () => {
   it.each(["", "personal-key"])("tests real JSON search, then saves with optional key %s", async apiKey => {
     await host().handle(set(apiKey));
     const [, url, options] = mocks.fetch.mock.calls[0];
-    expect(new URL(url).searchParams.get("q")).toBe("SearXNG");
+    expect(new URL(url).searchParams.get("q")).toBe("Locality");
     expect(new URL(url).searchParams.get("format")).toBe("json");
     expect(options.headers.Authorization).toBe(apiKey ? `Bearer ${apiKey}` : undefined);
     expect(mocks.write).toHaveBeenCalledExactlyOnceWith("webSearchEndpoint", "https://search.example");
@@ -138,6 +138,37 @@ describe("Advanced search connection settings", () => {
     expect(mocks.write).not.toHaveBeenCalled();
     expect(saved.has(SEARCH_SECRET_KEY)).toBe(false);
     expect(messages).toEqual([{ type: "webSearchSettings", endpoint: "", apiKey: "", verified: false, reset: true }]);
+  });
+
+  it("verifies Brave with the entered key and uses the stored key for tool calls", async () => {
+    const endpoint = "https://api.search.brave.com/res/v1/web/search";
+    mocks.fetch.mockImplementation(async () => new Response(JSON.stringify({ type: "search", web: { results: [{ title: "Brave result", url: "https://example.org", description: "Reference" }] } })));
+    const instance = host();
+    await instance.handle(set("brave-test-key", endpoint));
+    expect(messages.at(-1)).toEqual({ type: "webSearchValidation", ok: true, endpoint });
+    expect(isWebSearchVerified(endpoint)).toBe(true);
+    expect(await readSearchApiKey(secrets, endpoint)).toBe("brave-test-key");
+    expect(mocks.fetch.mock.calls[0][2].headers["X-Subscription-Token"]).toBe("brave-test-key");
+    expect(new URL(mocks.fetch.mock.calls[0][1]).searchParams.get("q")).toBe("Locality");
+    const feature = createSearchFeature(secrets);
+    const args = { query: "documentation" };
+    await feature.prepare("web_search", args, mocks.settings());
+    const result = await feature.execute("web_search", args, "call");
+    expect(JSON.parse(result.result)).toMatchObject({ query: "documentation", results: [{ title: "Brave result", url: "https://example.org/", snippet: "Reference" }] });
+    expect(mocks.fetch.mock.calls[1][2].headers["X-Subscription-Token"]).toBe("brave-test-key");
+    expect(result.result + JSON.stringify(settings) + JSON.stringify(messages)).not.toContain("brave-test-key");
+  });
+
+  it.each([undefined, 422, 429])("keeps Brave unavailable when verification fails (%s)", async status => {
+    const endpoint = "https://api.search.brave.com/res/v1/web/search";
+    if (status) mocks.fetch.mockResolvedValue(new Response("sensitive response", { status }));
+    await host().handle(set(status ? "invalid-key" : "", endpoint));
+    expect(isWebSearchVerified(endpoint)).toBe(false);
+    expect(mocks.write).not.toHaveBeenCalled();
+    expect(saved.has(SEARCH_SECRET_KEY)).toBe(false);
+    expect(messages.at(-1)).toMatchObject({ type: "webSearchValidation", ok: false });
+    expect(JSON.stringify(messages)).not.toMatch(/invalid-key|sensitive response/);
+    if (!status) expect(mocks.fetch).not.toHaveBeenCalled();
   });
 
 });

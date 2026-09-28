@@ -22,8 +22,8 @@ export const sideFeature: SideFeature = {
           <button id="setWebSearch" class="primary" aria-label="Test and save web search settings" ${disabled}>${testing ? "Testing…" : "Set"}</button>
         </div>
         <label class="field-label" for="webSearchApiKey">API-key</label>
-        <input id="webSearchApiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Optional" ${disabled} />
-        <p class="setting-help">SearXNG base URL. Set tests a search. An optional key uses Bearer authentication. Verify this connection to enable web tools. Leave it blank to disable both tools.</p>
+        <input id="webSearchApiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Required for Brave" ${disabled} />
+        <p class="setting-help">Brave Web Search endpoint or SearXNG base URL. Brave requires an API key; SearXNG keys are optional. Set verifies and enables both web tools. Leave the endpoint blank to disable them.</p>
         ${status ? `<div class="validation ${status.ok === false ? "err" : status.ok ? "ok" : ""}" role="${status.ok === false ? "alert" : "status"}">${escape(status.text)}</div>` : ""}
       </div>` + toggle("autoapproveWebSearch", "Auto-approve web requests", settings.autoapproveWebSearch === true) + "</section>";
   },

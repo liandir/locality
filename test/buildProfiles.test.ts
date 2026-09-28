@@ -89,7 +89,7 @@ describe("edition composition", () => {
     expect(typeof api.createSideHost === "function").toBe(profile === "advanced");
     if (profile !== "advanced") {
       expect(text).not.toContain("autoapproveWebSearch");
-      expect(text).not.toMatch(/read_webpage|webToolsEnabled|webSearchApiKey|validateWebSearch|webSearchSettings|pinnedTransport|Bearer/);
+      expect(text).not.toMatch(/read_webpage|webToolsEnabled|webSearchApiKey|validateWebSearch|webSearchSettings|pinnedTransport|Bearer|api\.search\.brave\.com|X-Subscription-Token/);
       expect(settings).not.toHaveProperty("webSearchEndpoint");
       expect(settings).not.toHaveProperty("autoapproveWebSearch");
       await expect(api.writeSetting("autoapproveWebSearch", true)).rejects.toThrow("unavailable");
@@ -101,7 +101,7 @@ describe("edition composition", () => {
       await expect(api.writeSetting("autoapproveCommands", true)).rejects.toThrow("unavailable");
     }
     if (profile !== "safe-list") expect(text).not.toContain("matchesSafeList");
-    if (profile !== "advanced") expect(text).not.toContain("searchSearxng");
+    if (profile !== "advanced") expect(text).not.toContain("searchWeb");
     if (profile === "safe-list") {
       expect(settings.safeCommandPatterns).toEqual(["git status"]);
       expect(settings.autoapproveSafeCommands).toBe(false);

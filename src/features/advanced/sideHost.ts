@@ -2,7 +2,7 @@ import type { SideHostFactory } from "../../build/sideHostContracts.js";
 import { readSettings, writeSetting } from "../../config/settings.js";
 import { credentialScope, readSearchApiKey, SEARCH_SECRET_KEY } from "../webSearch/credentials.js";
 import { initializeVerification, isWebSearchVerified, verifyWebSearch } from "../webSearch/verification.js";
-import { SearchError, searchSearxng } from "../webSearch/searxng.js";
+import { SearchError, searchWeb } from "../webSearch/search.js";
 
 export const createSideHost: SideHostFactory = (secrets, post, state) => {
   initializeVerification(state);
@@ -31,7 +31,7 @@ export const createSideHost: SideHostFactory = (secrets, post, state) => {
         const endpoint = message.endpoint.trim();
         const apiKey = message.apiKey.trim();
         // A real JSON search checks both authentication and format support.
-        if (endpoint) await searchSearxng(endpoint, { query: "SearXNG", count: 1 }, { apiKey, signal: pending.signal });
+        if (endpoint) await searchWeb(endpoint, { query: "Locality", count: 1 }, { apiKey, signal: pending.signal });
         if (version !== resetVersion) return true;
         const previous = await secrets.get(SEARCH_SECRET_KEY);
         if (version !== resetVersion) return true;

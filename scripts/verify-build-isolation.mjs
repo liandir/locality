@@ -8,7 +8,7 @@ const yauzl = require("yauzl");
 const optionalNames = {
   commands: ["run_command", "run_process", "wait_process", "stop_process", "autoapproveCommands", "CommandRuntime", "startManagedProcess"],
   safe: ["safeCommandPatterns", "autoapproveSafeCommands", "authorizeCommand", "matchesSafeList"],
-  search: ["web_search", "read_webpage", "readWebpage", "pinnedTransport", "isPublicPageAddress", "webToolsEnabled", "verifiedWebSearchEndpoint", "webSearchEndpoint", "autoapproveWebSearch", "searchSearxng", "webSearchApiKey", "validateWebSearch"]
+  search: ["web_search", "read_webpage", "readWebpage", "pinnedTransport", "isPublicPageAddress", "webToolsEnabled", "verifiedWebSearchEndpoint", "webSearchEndpoint", "autoapproveWebSearch", "searchWeb", "api.search.brave.com", "X-Subscription-Token", "webSearchApiKey", "validateWebSearch"]
 };
 
 function auditText(profile, name, text) {

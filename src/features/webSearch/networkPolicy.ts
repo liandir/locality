@@ -1,3 +1,4 @@
+import { searchDestination } from "./providers.js";
 import { webpagePolicy } from "./pagePolicy.js";
 import type { AdditionalFetchPolicy } from "../../network/policy.js";
 import { validateEndpoint } from "../../network/endpointValidator.js";
@@ -9,6 +10,5 @@ export async function additionalPolicy(endpoint: URL, target: URL, capability?: 
   if (endpoint.protocol !== "https:" && !(endpoint.protocol === "http:" && (await validateEndpoint(endpoint.href)).ok)) {
     throw new Error("Use HTTPS for search, or HTTP on a local/private IP endpoint.");
   }
-  const basePath = endpoint.pathname.replace(/\/$/, "");
-  if (target.pathname !== basePath + "/search") throw new Error("Only the configured search endpoint is available.");
+  if (target.pathname !== searchDestination(endpoint).url.pathname) throw new Error("Only the configured search endpoint is available.");
 }
