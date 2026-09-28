@@ -5,6 +5,7 @@ import { validMemory, validMemoryCreation, validSnapshot, type ChatMemory, type 
 import { MAX_MEMORY_COUNT } from "./memoryLimits.js";
 import { randomUUID } from "node:crypto";
 import { normalizeToolCallingProfile, type ToolCallingProfile } from "../llm/toolCallingProfile.js";
+import type { ChatToolResultDisplay } from "../ui/messaging.js";
 import type { FileChangeSummary } from "./fileChanges.js";
 import { attachmentFileType, isImageAttachment, MAX_TEXT_ATTACHMENT_BYTES } from "./attachments.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "./attachmentLimits.js";
@@ -56,7 +57,7 @@ export interface ChatMessage {
     processExitCode?: number;
     /** Exact change made by this call, independent of later edits to the same file. */
     fileChange?: FileChangeSummary;
-  };
+  } & ChatToolResultDisplay;
   /** File changes made during this assistant turn. */
   fileChanges?: FileChangeSummary[];
   /** Chat-owned image or text assets supplied by the user or a view_image tool result. */

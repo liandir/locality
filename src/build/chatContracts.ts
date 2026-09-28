@@ -8,6 +8,9 @@ export interface FeatureCard extends ChatToolProcess {
   resultPreview?: string;
 }
 export interface ChatFeature {
+  icons?: Record<string, string>;
+  bind?(root: HTMLElement): void;
+  renderLabel?(card: FeatureCard, args: Record<string, unknown>, escape: (value: string) => string): string | undefined;
   renderHeader?(card: FeatureCard, args: Record<string, unknown>, code: (text: string, language: string, prefix: string, actions?: string, decoration?: string) => string, escape: (value: string) => string, icon: string, error?: boolean): string;
   formatResult?(card: FeatureCard, text: string): string | undefined;
   activityClass?(card: FeatureCard): string;

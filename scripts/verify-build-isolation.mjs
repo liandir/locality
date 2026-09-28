@@ -8,7 +8,7 @@ const yauzl = require("yauzl");
 const optionalNames = {
   commands: ["run_command", "run_process", "wait_process", "stop_process", "autoapproveCommands", "CommandRuntime", "startManagedProcess"],
   safe: ["safeCommandPatterns", "autoapproveSafeCommands", "authorizeCommand", "matchesSafeList"],
-  search: ["web_search", "read_webpage", "readWebpage", "pinnedTransport", "isPublicPageAddress", "webToolsEnabled", "verifiedWebSearchEndpoint", "webSearchEndpoint", "autoapproveWebSearch", "searchWeb", "api.search.brave.com", "X-Subscription-Token", "webSearchApiKey", "validateWebSearch"]
+  search: ["web_search", "read_webpage", "readWebpage", "pinnedTransport", "isPublicPageAddress", "webToolsEnabled", "verifiedWebSearchEndpoint", "webSearchEndpoint", "autoapproveWebSearch", "searchWeb", "searchResultIcons", "tool-web-results", "api.search.brave.com", "X-Subscription-Token", "webSearchApiKey", "validateWebSearch"]
 };
 
 function auditText(profile, name, text) {
@@ -44,6 +44,9 @@ export async function auditArchive(profile, filename) {
         if (name.endsWith("/")) { zip.readEntry(); return; }
         if (/\.map$|(?:^|\/)(?:src|test|scripts|node_modules|\.build|artifacts)\//.test(name)) {
           zip.close(); reject(new Error(`Unshipped source/build content in archive: ${name}`)); return;
+        }
+        if (profile !== "advanced" && name.endsWith("/webTools.css")) {
+          zip.close(); reject(new Error(`Web tool styles in ${profile}`)); return;
         }
         if (profile === "no-commands" && name.endsWith("/commands.css")) {
           zip.close(); reject(new Error("Command styles leaked into No commands")); return;

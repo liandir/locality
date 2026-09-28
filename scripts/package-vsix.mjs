@@ -44,6 +44,7 @@ for (const profile of targets) {
   await writeFile(path.join(reportDir, `${profile}.json`), JSON.stringify(metadata));
   for (const name of await readdir(path.join(root, "media"))) {
     if (profile === "no-commands" && name === "commands.css") continue;
+    if (profile !== "advanced" && name === "webTools.css") continue;
     await cp(path.join(root, "media", name), path.join(stage, "media", name), { recursive: true });
   }
   const manifest = structuredClone(base);

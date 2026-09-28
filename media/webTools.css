@@ -1,0 +1,10 @@
+/* Web tools use the same muted links and hover emphasis as file-tool rows. */
+a.tool-url-link { color: inherit; }
+a.tool-url-link:focus { outline: none; box-shadow: none; }
+a.tool-url-link:is(:hover, :focus-visible) { color: var(--vscode-foreground); }
+.tool-card:is(.failed, .rejected) a.tool-url-link:is(:hover, :focus-visible) { color: var(--error-highlight-foreground); }
+.tool-web-results { gap: 3px; }
+.tool-result-icon { position: relative; width: 14px; height: 14px; }
+.tool-result-icon-image { position: absolute; inset: 0; width: 14px; height: 14px; object-fit: contain; }
+
+.tool-result-icon:has(> img) > svg { visibility: hidden; }

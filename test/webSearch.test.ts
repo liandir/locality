@@ -62,7 +62,45 @@ describe("SearXNG search", () => {
     expect(html).toContain('href="https://example.org/"');
     expect(html).not.toContain("<script>");
     expect(html).not.toContain("javascript:");
-    expect(html).toContain("&lt;img");
+    expect(html).not.toContain("&lt;img");
+    expect(html).not.toContain("&lt;script");
+    expect(html).not.toContain("&lt;query");
+    expect(html).toContain('>https://example.org/</a>');
+  });
+
+  it("keeps the query and linked page URL in the tool label, including failed calls", () => {
+    const escape = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;");
+    for (const status of ["executed", "failed", "pending"] as const) {
+      const card = { toolId: "label", toolName: "web_search", status };
+      expect(chatFeature.renderLabel!(card, { query: '<query "quoted">' }, escape)).toContain('for &lt;query &quot;quoted&quot;>');
+      const page = { ...card, toolName: "read_webpage" };
+      expect(chatFeature.renderLabel!(page, { url: "https://example.org/?a=1&b=2" }, escape)).toContain('href="https://example.org/?a=1&amp;b=2"');
+      expect(chatFeature.renderLabel!(page, { url: "javascript:alert(1)" }, escape)).toBe("");
+      expect(chatFeature.renderLabel!(page, { url: "https://user:secret@example.org" }, escape)).toBe("");
+    }
+    expect(chatFeature.icons?.web_search).toContain("<circle");
+    expect(chatFeature.icons?.read_webpage).toBe(chatFeature.icons?.web_search);
+  });
+
+  it("keeps downloaded favicons in the display payload, not model results", async () => {
+    const feature = createSearchFeature();
+    const args = { query: "docs" };
+    const settings = { webSearchEndpoint: "https://search.example", webToolsEnabled: true } as HarnessSettings;
+    mocks.settings.mockReturnValue(settings);
+    await feature.prepare("web_search", args, settings);
+    mocks.fetch.mockResolvedValueOnce(new Response(JSON.stringify({ results: [{ url: "https://example.org/docs", title: "Documentation", content: "Full model snippet" }] })))
+      .mockResolvedValueOnce(new Response(new Uint8Array([137,80,78,71,13,10,26,10,0,0,0,0])));
+    const result = await feature.execute("web_search", args, "call");
+    expect(JSON.parse(result.result).results[0]).toMatchObject({ title: "Documentation", snippet: "Full model snippet" });
+    expect(result.result).not.toContain("base64");
+    expect(JSON.parse(result.displayResult!).results[0]).toMatchObject({ url: "https://example.org/docs", favicon: expect.stringContaining("data:image/png;base64,") });
+  });
+
+  it("accepts only embedded raster icons in result markup", () => {
+    for (const icon of ["https://tracker.example/favicon.ico", "data:image/svg+xml;base64,PHN2Zz4=", 'x" onerror="bad()']) {
+      const html = chatFeature.renderResult!({ toolId: "icon", toolName: "web_search", status: "executed", resultPreview: JSON.stringify({ results: [{ url: "https://example.org", favicon: icon }] }) }, v => v, "<hr>");
+      expect(html).not.toContain("<img");
+    }
   });
 
   it.each([undefined, false, "true", 1])("requires approval unless search auto-approval is explicitly true (%s)", value => {

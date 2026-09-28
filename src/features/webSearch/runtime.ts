@@ -1,3 +1,4 @@
+import { searchResultIcons } from "./favicons.js";
 import type { SecretStorage } from "vscode";
 import { readSearchApiKey } from "./credentials.js";
 import type { FeatureRuntime } from "../../build/contracts.js";
@@ -25,7 +26,9 @@ export function createSearchFeature(secrets?: SecretStorage): FeatureRuntime {
       if (approvedDestinations.get(args) !== endpoint) throw new Error("Search destination is no longer approved.");
       const apiKey = await readSearchApiKey(secrets, endpoint);
       const results = await searchWeb(endpoint, request, { signal, apiKey });
-      return { result: JSON.stringify({ query: request.query, results }) };
+      const icons = await searchResultIcons(results, signal);
+      const displayResult = icons.size ? JSON.stringify({ results: results.map(({ url }) => ({ url, favicon: icons.get(url) })) }) : undefined;
+      return { result: JSON.stringify({ query: request.query, results }), ...(displayResult ? { displayResult } : {}) };
     }
   };
 }

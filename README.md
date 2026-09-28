@@ -490,6 +490,9 @@ trash icon. Deleting cannot be undone.
 - File tools cannot read or write outside the workspace root.
 - Commit-message generation reads only staged changes (`git diff --cached`)
   and sends that diff to the configured local/LAN endpoint.
+- Search results display compact URL links. Approved searches may also fetch each
+  result site's `/favicon.ico` through the public-web network guard, without cookies
+  or API credentials. Missing icons use a globe; titles and snippets still reach the model.
 - Only Advanced includes search and webpage reading, with approval per request by default.
   **Auto-approve web requests** skips those prompts when enabled. General commands run with your normal
   permissions and can fetch URLs, call APIs, install packages, or access files

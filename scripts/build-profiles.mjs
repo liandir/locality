@@ -7,7 +7,7 @@ const selections = {
   "no-commands": { tools: "none/tools", runtime: "none/runtime", settings: "none/settings", prompt: "none/prompt", side: "none/side", chat: "none/chat", assets: "none/assets" },
   "safe-list": { tools: "commands/safeList/definitions", runtime: "commands/safeList/runtime", settings: "commands/safeList/settings", prompt: "commands/safeList/prompt", side: "commands/safeList/side", chat: "commands/shared/ui" },
   commands: { tools: "commands/full/tools", runtime: "commands/full/runtime", settings: "commands/full/settings", prompt: "commands/full/prompt", side: "commands/full/side", chat: "commands/shared/ui" },
-  advanced: { tools: "advanced/tools", runtime: "advanced/runtime", settings: "advanced/settings", prompt: "advanced/prompt", side: "advanced/side", chat: "advanced/chat", networkPolicy: "webSearch/networkPolicy", sideHost: "advanced/sideHost" }
+  advanced: { tools: "advanced/tools", runtime: "advanced/runtime", settings: "advanced/settings", prompt: "advanced/prompt", side: "advanced/side", chat: "advanced/chat", assets: "advanced/assets", networkPolicy: "webSearch/networkPolicy", sideHost: "advanced/sideHost" }
 };
 
 export function assertProfile(profile) {

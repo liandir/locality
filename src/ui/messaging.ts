@@ -25,6 +25,11 @@ export interface ChatMemoryCreations {
   creations: MemoryCreation[];
 }
 
+/** Optional presentation payload, never sent to the model as tool content. */
+export interface ChatToolResultDisplay {
+  displayResult?: string;
+}
+
 /** Host-owned process identity, display command, and current Stop availability. */
 export interface ChatToolProcess {
   processJobId?: string;

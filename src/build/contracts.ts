@@ -1,7 +1,7 @@
 import type { SecretStorage } from "vscode";
 import type { HarnessSettings } from "../config/settings.js";
 import type { UiEvent } from "../chat/session.js";
-import type { ChatToolProcess } from "../ui/messaging.js";
+import type { ChatToolProcess, ChatToolResultDisplay } from "../ui/messaging.js";
 
 export type FeatureResultUpdate = ChatToolProcess & { status?: "failed" };
 
@@ -18,7 +18,7 @@ export interface FeatureRuntime {
   category(name: string): "command" | "process" | "search";
   needsApproval(settings: HarnessSettings): boolean;
   prepare(name: string, args: Record<string, unknown>, settings: HarnessSettings): Promise<ChatToolProcess>;
-  execute(name: string, args: Record<string, unknown>, toolId: string, signal?: AbortSignal): Promise<{ result: string } & ChatToolProcess>;
+  execute(name: string, args: Record<string, unknown>, toolId: string, signal?: AbortSignal): Promise<{ result: string } & ChatToolProcess & ChatToolResultDisplay>;
   action?(id: string): Promise<void>;
   cancel?(): void;
   endTurn?(): Promise<void>;

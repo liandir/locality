@@ -103,7 +103,8 @@ describe("read_webpage", () => {
   it("escapes all webpage output in the common tool-card renderer", () => {
     const escape = (s: string) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;");
     const result = chatFeature.renderResult!({ toolId: "page", toolName: "read_webpage", status: "executed", resultPreview: JSON.stringify({ url: request().url, title: "<img src=x>", text: "<script>bad()</script>" }) }, escape, "<hr>");
-    expect(result).toContain('href="https://example.org/article"');
+    expect(result).not.toContain("href=");
+    expect(result).toContain("&lt;script>bad()&lt;/script>");
     expect(result).not.toMatch(/<script>|<img/);
     expect(chatFeature.renderResult!({ toolId: "page", toolName: "read_webpage", status: "failed", resultPreview: "error: HTTP 403" }, escape, "<hr>")).toBeUndefined();
   });

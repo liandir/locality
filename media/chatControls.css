@@ -9,15 +9,16 @@
   --error-highlight-foreground: color-mix(in srgb, var(--vscode-errorForeground) 78%, #5c1111);
 }
 
-/* Text links share hover/focus underlines in both webviews. File links
-   underline their label separately so the icon stays undecorated. */
-a:not(.workspace-file-link), .link-button, .recent-chat-view-all {
+/* Text links share hover/focus underlines in both webviews. Workspace links
+   underline only their label; tool path/URL links keep the tighter underline
+   spacing defined by .tool-path-link so it fits their clipped header rows. */
+a:not(.workspace-file-link, .tool-path-link), .link-button, .recent-chat-view-all {
   text-decoration: none;
   text-decoration-style: dashed;
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
 }
-a:not(.workspace-file-link):is(:hover, :focus-visible),
+a:not(.workspace-file-link, .tool-path-link):is(:hover, :focus-visible),
 :is(.link-button, .recent-chat-view-all):is(:hover, :focus-visible) { text-decoration-line: underline; }
 
 /* Use Chromium's scrollbar parts so native tracks and arrow buttons cannot

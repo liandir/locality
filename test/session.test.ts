@@ -3532,3 +3532,32 @@ describe("workspace image viewing", () => {
     } finally { await fs.rm(root, { recursive: true, force: true }); }
   });
 });
+
+
+describe("tool presentation data", () => {
+  it("persists a separate display result without sending it to the model", async () => {
+    mocks.settings.toolCallingMode = "native";
+    let turn = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (turn++ === 0) yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"echo","args":["ok"]}', id: "display_test" };
+      else yield { kind: "text", text: "done" };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const session = new ChatSession({ storage: { save: vi.fn(async () => undefined) } as never, workspaceRoot: "/tmp/workspace", record, emit: event => events.push(event) });
+    const result = "Complete result for the model";
+    const displayResult = "Separate UI-only payload";
+    (session as unknown as { features: import("../src/build/contracts.js").FeatureRuntime[] }).features = [{
+      tools: ["run_process"], category: () => "command", needsApproval: () => false,
+      prepare: async () => ({}), execute: async () => ({ result, displayResult })
+    }];
+    await session.sendUserMessage("show result");
+    expect(record.messages.find(message => message.role === "tool")).toMatchObject({ content: result, toolCall: { displayResult } });
+    expect(events).toContainEqual(expect.objectContaining({ kind: "toolCallResolved", status: "executed", resultPreview: displayResult }));
+    expect(mocks.streamChat).toHaveBeenCalledTimes(2);
+    const prompt = JSON.stringify(mocks.streamChat.mock.calls[1][1].messages);
+    expect(prompt).toContain(result);
+    expect(prompt).not.toContain(displayResult);
+  });
+});

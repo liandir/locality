@@ -2538,6 +2538,8 @@ function compactActivityOutput(activity: CompactActivity): string {
 }
 
 function toolIcon(tc: ToolCard): string {
+  const featureIcon = chatFeature.icons?.[tc.toolName];
+  if (featureIcon) return featureIcon;
   if (tc.toolName === "list_dir") return folderIcon();
   if (tc.toolName === "compact_context") return compactIcon();
   if (tc.toolName === "update_todos") return checklistIcon();
@@ -2728,6 +2730,8 @@ function diffStatHtml(stats: { added: number; removed: number }): string {
 }
 
 function renderToolCardLabel(tc: ToolCard): string {
+  const featureLabel = chatFeature.renderLabel?.(tc, toolArgs(tc), escapeHtml);
+  if (featureLabel !== undefined) return featureLabel;
   if (tc.toolName === "update_todos") {
     const todos = todosFromCard(tc);
     const done = todos.filter(t => t.status === "completed").length;
@@ -2752,6 +2756,8 @@ function renderToolCardLabel(tc: ToolCard): string {
 }
 
 function renderToolApprovalLabel(tc: ToolCard): string {
+  const featureLabel = chatFeature.renderLabel?.(tc, toolArgs(tc), escapeHtml);
+  if (featureLabel !== undefined) return featureLabel;
   if (isWriteToolCard(tc)) {
     const stats = writeStats(tc);
     return stats ? `${renderToolPathLabel(tc)} ${diffStatHtml(stats)}` : renderToolPathLabel(tc);
@@ -3171,6 +3177,7 @@ function bindOnce(): void {
     syncShimmerAnimations();
   });
   document.fonts.addEventListener("loadingdone", syncToolHeaderScrollbars);
+  chatFeature.bind?.(root);
   root.addEventListener("pointerdown", e => {
     const target = e.target as HTMLElement;
     if (target.closest("#cancel")) {
@@ -3179,7 +3186,7 @@ function bindOnce(): void {
       return;
     }
     const workEl = target.closest("[data-work-toggle]") as HTMLElement | null;
-    if (workEl && !target.closest("button")) {
+    if (workEl && !target.closest("button, a")) {
       e.preventDefault();
       const groupId = workEl.dataset.workToggle!;
       const m = state.messages.find(x => findWorkUnit(resolveRenderUnits(x), groupId));
@@ -3207,7 +3214,7 @@ function bindOnce(): void {
       return;
     }
     const toolEl = target.closest("[data-tool-toggle]") as HTMLElement | null;
-    if (toolEl && !target.closest("button")) {
+    if (toolEl && !target.closest("button, a")) {
       e.preventDefault();
       const id = toolEl.dataset.toolToggle!;
       for (const m of state.messages) {
@@ -4150,7 +4157,7 @@ function loadFromRecord(rec: ChatRecord): void {
         category: malformedToolCall ? "unknown" : "read",
         status: restoredToolStatus(m.toolCall?.status, m.content, malformedToolCall),
         resultPreview: m.toolCall?.status === "failed" && m.toolCall.processOutput !== undefined
-          ? m.toolCall.processOutput : showsFullResult ? m.content : m.content.slice(0, 400),
+          ? m.toolCall.processOutput : m.toolCall?.displayResult ?? (showsFullResult ? m.content : m.content.slice(0, 400)),
         diffPreview: fileChange?.diffPreview,
         added: fileChange?.added,
         removed: fileChange?.removed,

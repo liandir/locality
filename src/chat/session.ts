@@ -15,7 +15,7 @@ import {
   type LlmMessage
 } from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
-import type { ChatContextActivity, ChatContextState, ChatMemoryCreations, ChatToolProcess, ChatTurnEnd, ChatTurnPreparation } from "../ui/messaging.js";
+import type { ChatContextActivity, ChatContextState, ChatMemoryCreations, ChatToolProcess, ChatToolResultDisplay, ChatTurnEnd, ChatTurnPreparation } from "../ui/messaging.js";
 import { createFeatures } from "../build/runtime.js";
 import type { FeatureRuntime, FeatureResultUpdate } from "../build/contracts.js";
 import { loadRootAgentsMd } from "../llm/agentsMd.js";
@@ -147,7 +147,7 @@ interface PendingApproval {
   resolve(v: { approved: boolean }): void;
 }
 
-interface ToolCompletion extends ChatToolProcess {
+interface ToolCompletion extends ChatToolProcess, ChatToolResultDisplay {
   toolId: string;
   toolName: string;
   argsJson: string;
@@ -918,6 +918,7 @@ export class ChatSession {
       callId,
       status,
       fullResult = false,
+      displayResult,
       diffPreview,
       added,
       removed,
@@ -941,7 +942,7 @@ export class ChatSession {
         kind: "toolCallResolved",
         toolId,
         status,
-        resultPreview: latest?.status === "failed" ? latest.processOutput : resultPreview,
+        resultPreview: latest?.status === "failed" ? latest.processOutput : displayResult ?? resultPreview,
         diffPreview: fileChange?.diffPreview ?? diffPreview,
         added,
         removed,
@@ -962,7 +963,7 @@ export class ChatSession {
       argsJson,
       content,
       callId,
-      { status, createsNewFile, processJobId, processCommand, processOutput, processExitCode, toolId, fileChange, attachments: completion.attachments }
+      { status, createsNewFile, displayResult, processJobId, processCommand, processOutput, processExitCode, toolId, fileChange, attachments: completion.attachments }
     );
     if (storedResult !== content) {
       this.emit(event(fullResult ? storedResult : previewOf(storedResult)));
@@ -1016,7 +1017,7 @@ export class ChatSession {
     argsJson: string,
     content: string,
     callId?: string,
-    outcome: { status: "executed" | "failed" | "rejected"; createsNewFile?: boolean; toolId?: string; fileChange?: FileChangeSummary; attachments?: ChatAttachment[] } & ChatToolProcess = { status: "executed" }
+    outcome: { status: "executed" | "failed" | "rejected"; createsNewFile?: boolean; toolId?: string; fileChange?: FileChangeSummary; attachments?: ChatAttachment[] } & ChatToolProcess & ChatToolResultDisplay = { status: "executed" }
   ): Promise<string> {
     const guardedContent = await this.prepareToolResultForContext(s, toolName, content);
     const message: ChatMessage = {
@@ -1029,6 +1030,7 @@ export class ChatSession {
         argsJson,
         status: outcome.status,
         createsNewFile: outcome.createsNewFile,
+        displayResult: outcome.displayResult,
         processCommand: outcome.processCommand,
         processOutput: outcome.processOutput,
         processExitCode: outcome.processExitCode,
@@ -1848,6 +1850,7 @@ export class ChatSession {
     // Execute.
     let result: string;
     let resultAttachments: ChatAttachment[] | undefined;
+    let displayResult: string | undefined;
     let executedCreatesNewFile = proposedCreatesNewFile;
     let added: number | undefined;
     let removed: number | undefined;
@@ -2020,7 +2023,7 @@ export class ChatSession {
         if (!approvalRequired && category !== "process" && feature.needsApproval(readSettings())) {
           throw new Error("Approval settings changed. Request the action again for approval.");
         }
-        ({ result, processJobId, processRunning, processOutput, processExitCode } = await feature.execute(e.name, args, toolId, this.abort?.signal));
+        ({ result, displayResult, processJobId, processRunning, processOutput, processExitCode } = await feature.execute(e.name, args, toolId, this.abort?.signal));
       } else {
         result = `[harness] unknown tool: ${e.name}`;
       }
@@ -2047,6 +2050,7 @@ export class ChatSession {
       callId: e.id,
       status: "executed",
       attachments: resultAttachments,
+      displayResult,
       fullResult: e.name === "list_dir" || e.name === "glob" || !!feature || isMemoryToolName(e.name),
       added,
       removed,

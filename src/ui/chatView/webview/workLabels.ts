@@ -136,6 +136,8 @@ export function workActivityType(activity: WorkActivity): string | undefined {
 export function workActivityIconType(activity: WorkActivity): string | undefined {
   const type = workActivityType(activity);
   if (!type || activity.kind === "thought") return type;
+  const featureIcon = chatFeature.icons?.[activity.toolName];
+  if (featureIcon) return featureIcon;
   if (chatFeature.recognizes?.(activity.toolName)) return "command";
   if (WRITE_TOOLS.has(activity.toolName)) return "write";
   if (activity.toolName === "view_image") return "view_image";
