@@ -20,8 +20,6 @@
   --code-fill: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
   --code-inline-fill: var(--code-fill);
   --hover-help-fill: color-mix(in srgb, var(--vscode-foreground) 18%, var(--vscode-sideBar-background, var(--vscode-editor-background)));
-  --tool-error-foreground: color-mix(in srgb, var(--vscode-errorForeground) 78%, #5c1111);
-  --tool-error-idle: color-mix(in srgb, var(--vscode-errorForeground) 56%, #3f0d0d);
   --accent-accept-fill: color-mix(in srgb, #2ea043 18%, transparent);
   --accent-reject-fill: color-mix(in srgb, var(--vscode-errorForeground) 16%, transparent);
   /* Live activity: a muted idle text colour with a shimmer that inverts per
@@ -153,8 +151,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   font-weight: 600;
 }
 .workspace-file-link { font-weight: 400; display: inline-block; color: var(--vscode-textLink-foreground); line-height: inherit; white-space: nowrap; text-decoration: none; vertical-align: baseline; }
-/* Keep code-formatted file names and their icons inside one shared highlight. */
-.workspace-file-link:has(code.inline-code) { background: var(--code-inline-fill); padding: 1px 5px; border-radius: var(--control-radius); }
+/* Paint the same inline font box as ordinary code, including the file icon.
+   An inline-block would also highlight the paragraph's taller line-height. */
+.workspace-file-link:has(code.inline-code) { display: inline; font-family: var(--vscode-editor-font-family); background: var(--code-inline-fill); padding: 1px 5px; border-radius: var(--control-radius); }
 .workspace-file-link code.inline-code { background: transparent; padding: 0; border-radius: 0; color: inherit; }
 .workspace-file-link :is(strong, b) { font-weight: 400; }
 .workspace-file-link:hover, .workspace-file-link:focus-visible { color: var(--vscode-textLink-activeForeground); text-decoration: none; outline: none; }
@@ -370,7 +369,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-card.streaming .tool-icon,
 .tool-card.pending .tool-icon,
 .tool-card.approved .tool-icon,
-.tool-card.process-running .tool-icon,
+
 .active-tool-head > .tool-icon,
 .work-type-icon.active,
 .work-section.live .work-icon,
@@ -407,20 +406,20 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
    label wobble horizontally. */
 .diff-stat { font-family: var(--vscode-editor-font-family); font-weight: 400; font-size: 0.95em; font-variant-numeric: tabular-nums; transition: color 0.12s; }
 .diff-stat.add { color: #3fb950; }
-.diff-stat.del { color: #ff7b72; }
+.diff-stat.del { color: var(--error-highlight-foreground); }
 /* Settled edit/create counts stay colored for an open diff or row hover.
    Active counts share the heading's shimmer. */
 .tool-head .diff-stat { color: inherit; }
-.tool-head:hover .diff-stat.add,
-.tool-card.open > .tool-head:not(.active-tool-head) .diff-stat.add { color: #3fb950; }
-.tool-head:hover .diff-stat.del,
-.tool-card.open > .tool-head:not(.active-tool-head) .diff-stat.del { color: #ff7b72; }
+.tool-card:not(.failed):not(.rejected) > .tool-head:hover .diff-stat.add,
+.tool-card.open:not(.failed):not(.rejected) > .tool-head:not(.active-tool-head) .diff-stat.add { color: #3fb950; }
+.tool-card:not(.failed):not(.rejected) > .tool-head:hover .diff-stat.del,
+.tool-card.open:not(.failed):not(.rejected) > .tool-head:not(.active-tool-head) .diff-stat.del { color: var(--error-highlight-foreground); }
 .tool-expanded { padding: 3px 0 1px 24px; margin-top: 0; font-size: inherit; font-weight: 400; line-height: 1.4; opacity: 0.94; }
 /* Expanded tool payloads inherit from the chat rather than the editor's font
    size setting. Code-oriented payloads step down slightly because the editor
    font's x-height otherwise reads larger than the surrounding tool row. */
-.tool-command, .tool-result, .tool-diff { font-family: var(--vscode-editor-font-family); font-size: inherit; background: transparent; padding: 2px 0; overflow: auto; margin: 0; max-height: 220px; line-height: 1.35; }
-.tool-expanded :is(.tool-command, .tool-result, .tool-diff, .copy-code-block) { font-size: 0.92em; }
+.tool-result, .tool-diff { font-family: var(--vscode-editor-font-family); font-size: inherit; background: transparent; padding: 2px 0; overflow: auto; margin: 0; max-height: 220px; line-height: 1.35; }
+.tool-expanded :is(.tool-result, .tool-diff, .copy-code-block) { font-size: 0.92em; }
 .tool-expanded .copy-code-block { margin: 2px 0 0; }
 .tool-expanded .copy-code-block pre { padding: 6px 36px 6px 8px; }
 .tool-card.output-surface-tool > .tool-expanded { padding-left: 0; }
@@ -442,7 +441,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-output-surface.error {
   background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent);
   border-color: transparent;
-  color: var(--tool-error-foreground);
+  color: var(--error-foreground);
 }
 /* Commands, process checks, and file diffs use one header layout. Keep text
    and actions in normal flow so both are centered within the same line box. */
@@ -471,8 +470,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-output-surface > .tool-output-header pre { flex: 1; min-width: 0; margin: 0; padding: 4px 0; line-height: inherit; scrollbar-gutter: auto; }
 .tool-output-surface > .tool-output-header pre code { line-height: max(20px, 1.35em); }
 .tool-output-surface > .tool-output-header .code-block-actions { position: static; flex: 0 0 auto; order: 1; }
-.tool-output-header.has-horizontal-scrollbar .code-block-actions { margin-bottom: var(--scrollbar-size); }
-.tool-output-header :is(.block-code-copy-btn, .code-block-stop) { height: 20px; }
+.tool-output-header.has-horizontal-scrollbar .code-block-actions { margin-bottom: var(--scrollbar-hover-size); }
+.tool-output-header .block-code-copy-btn { height: 20px; }
 .tool-output-surface .code-display-prefix { color: var(--vscode-descriptionForeground); }
 .tool-output-surface > .tool-question-section + .tool-question-section {
   margin-top: 5px;
@@ -480,7 +479,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   border-top: 1px solid var(--surface-stroke);
 }
 /* Separators are independent inset elements so diff rows stay full width. */
-.tool-output-surface > .card-separator + :is(.tool-result, .tool-error-result, .tool-diff, .tool-change-error, .tool-change-unavailable) {
+.tool-output-surface > .card-separator + :is(.tool-result, .tool-error-result, .tool-diff, .tool-change-error, .tool-change-unavailable, .tool-filelist) {
   margin: 0;
   padding: 5px 8px 6px;
 }
@@ -490,9 +489,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-question-section > :last-child { margin-bottom: 0; }
 .tool-question-options { list-style: none; margin: 0; padding: 0; }
 .tool-question-options li, .tool-question-answer { white-space: pre-wrap; overflow-wrap: anywhere; }
-.code-block-stop { width: 28px; height: 24px; background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--vscode-errorForeground); border-color: transparent; }
-.code-block-stop:hover, .code-block-stop:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 20%, transparent); color: var(--vscode-errorForeground); }
-.code-block-stop:disabled { opacity: 0.62; cursor: default; }
 /* list_dir / glob results: a plain vertical stack of names in the UI font,
    in the same muted --tool-idle as the thinking body and the other expanded
    tool output (not the high-contrast foreground). */
@@ -509,11 +505,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
    glyph, operation, target or command, range/stats, and disclosure affordance. */
 .tool-card:is(.failed, .rejected) .tool-head,
 .tool-card:is(.failed, .rejected) .tool-head * {
-  color: var(--tool-error-idle);
+  color: var(--error-foreground);
 }
 .tool-card:is(.failed, .rejected) .tool-head:is(:hover, :focus-within),
 .tool-card:is(.failed, .rejected) .tool-head:is(:hover, :focus-within) * {
-  color: var(--tool-error-foreground);
+  color: var(--error-highlight-foreground);
 }
 .tool-error-result {
   margin: 0;
@@ -530,6 +526,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-change-card { position: relative; }
 .tool-change-head > .tool-label-main { margin-left: 4px; }
 .tool-change-head .tool-path-link:is(:hover, :focus-visible) { color: var(--vscode-foreground); }
+/* Expanded failures use the same resting/highlight reds as their history row. */
+.tool-card:is(.failed, .rejected) > .tool-expanded { opacity: 1; }
+.tool-output-surface.error .tool-change-operation { opacity: 1; }
+.tool-output-surface.error .diff-stat { color: inherit; }
+.tool-output-surface.error .tool-path-link:is(:hover, :focus-visible) { color: var(--error-highlight-foreground); }
 .tool-change-head .diff-stat { font-size: inherit; }
 .tool-change-error { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.4; }
 .tool-change-operation { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.9em; opacity: 0.78; }
@@ -568,7 +569,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-diff .diff-line.neutral { color: var(--vscode-descriptionForeground); }
 .tool-diff .diff-no { color: var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground)); text-align: right; padding: 0 10px 0 5px; user-select: none; opacity: 0.82; }
 .tool-diff .diff-line.add .diff-no { color: color-mix(in srgb, #56d364 72%, var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground))); }
-.tool-diff .diff-line.del .diff-no { color: color-mix(in srgb, #ff7b72 72%, var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground))); }
+.tool-diff .diff-line.del .diff-no { color: var(--error-foreground); opacity: 1; }
 .tool-diff .diff-code { min-width: 0; padding-right: 9px; color: var(--vscode-editor-foreground, var(--vscode-foreground)); }
 
 .card { padding: 8px 10px; }
@@ -576,7 +577,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .msg.assistant .card.answer.abort {
   background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent);
   border-color: transparent;
-  color: var(--vscode-errorForeground);
+  color: var(--error-foreground);
   white-space: pre-wrap;
 }
 .notice { align-self: center; display: inline-flex; align-items: center; gap: 6px; max-width: 92%; padding: 6px 9px; color: var(--vscode-descriptionForeground); font-size: 0.86em; }
@@ -597,7 +598,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   background: var(--accent-accept-fill);
   border-color: transparent;
 }
-.card-actions .reject:hover {
+.card-actions .reject:hover, .card-actions .reject:focus-visible {
+  color: var(--error-highlight-foreground);
   background: var(--accent-reject-fill);
   border-color: transparent;
 }
@@ -634,7 +636,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .queued-message-input:focus { border-color: transparent; outline: none; }
 .queued-message-action { flex: 0 0 auto; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: var(--control-radius); font: inherit; font-size: 18px; line-height: 1; cursor: pointer; outline: none; }
 .queued-message-action:hover, .queued-message-action:focus-visible { background: var(--surface-fill-strong); color: var(--vscode-foreground); }
-.queued-message-action.remove:hover, .queued-message-action.remove:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); border-color: transparent; color: var(--vscode-errorForeground); }
+.queued-message-action.remove:hover, .queued-message-action.remove:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); border-color: transparent; color: var(--error-highlight-foreground); }
 .queued-message-action.save:hover, .queued-message-action.save:focus-visible { color: var(--vscode-testing-iconPassed, #3fb950); }
 .scroll-down {
   position: absolute;
@@ -681,7 +683,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
 .approval-actions .approve:hover { background: var(--accent-accept-fill); border-color: transparent; }
-.approval-actions .reject:hover { background: var(--accent-reject-fill); border-color: transparent; }
+.approval-actions .reject:hover, .approval-actions .reject:focus-visible { color: var(--error-highlight-foreground); background: var(--accent-reject-fill); border-color: transparent; }
 
 /* ask_user_question box: the question, a stack of suggestion buttons, and a
    free-text "other" answer with its own submit. Built on .approval-composer. */
@@ -725,7 +727,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .text-attachment-preview .workspace-file-link-icon { font-size: 22px; margin: 0; }
 .composer-attachment-name { min-width: 0; max-width: 145px; overflow: hidden; color: var(--vscode-descriptionForeground); font-size: 0.82em; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
 .composer-attachment-remove { width: 22px; height: 22px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: var(--control-radius); font: inherit; font-size: 17px; line-height: 1; cursor: pointer; }
-.composer-attachment-remove:hover, .composer-attachment-remove:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--vscode-errorForeground); }
+.composer-attachment-remove:hover, .composer-attachment-remove:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--error-highlight-foreground); }
 .image-attachments { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .image-attachment { display: flex; align-items: center; gap: 9px; min-width: 0; width: fit-content; max-width: 100%; padding: 6px 8px; background: var(--surface-fill); border: 1px solid transparent; border-radius: var(--control-radius); box-sizing: border-box; }
 .image-attachment-preview { width: 64px; height: 48px; flex: 0 0 auto; box-sizing: border-box; padding: 0; background: transparent; border: 1px solid transparent; border-radius: var(--control-radius); cursor: zoom-in; overflow: hidden; }
@@ -736,7 +738,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .image-attachment-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .image-attachment-meta small { color: var(--vscode-descriptionForeground); }
 .image-attachment-remove { width: 26px; height: 26px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: var(--control-radius); font: inherit; font-size: 18px; cursor: pointer; outline: none; }
-.image-attachment-remove:hover, .image-attachment-remove:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--vscode-errorForeground); }
+.image-attachment-remove:hover, .image-attachment-remove:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--error-highlight-foreground); }
 .msg.user .bubble .image-attachment { margin-bottom: 8px; background: color-mix(in srgb, var(--vscode-editor-background) 14%, transparent); }
 .image-preview { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; box-sizing: border-box; padding: 48px 18px 20px; background: color-mix(in srgb, var(--vscode-editor-background) 88%, transparent); }
 .image-preview[hidden] { display: none; }
@@ -764,8 +766,8 @@ body.image-preview-open .chat-body { overflow: hidden; }
 .question-submit { position: absolute; right: 10px; bottom: 10px; }
 .send-btn:hover, .send-btn:focus-visible, .question-submit:hover:not(:disabled), .question-submit:focus-visible:not(:disabled) { background: var(--surface-fill-strong); border-color: transparent; }
 .send-btn:disabled, .question-submit:disabled { opacity: 0.55; cursor: default; }
-.send-btn.cancel-btn { background: var(--accent-reject-fill); border-color: transparent; color: var(--vscode-errorForeground); }
-.send-btn.cancel-btn:hover, .send-btn.cancel-btn:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 26%, transparent); border-color: transparent; }
+.send-btn.cancel-btn { background: var(--accent-reject-fill); border-color: transparent; color: var(--error-foreground); }
+.send-btn.cancel-btn:hover, .send-btn.cancel-btn:focus-visible { color: var(--error-highlight-foreground); background: color-mix(in srgb, var(--vscode-errorForeground) 26%, transparent); border-color: transparent; }
 .composer-toggles { display: flex; gap: 8px; margin-top: 8px; font-size: 0.88em; color: var(--vscode-descriptionForeground); align-items: center; min-width: 0; }
 .mode-pill, .ctx-pill { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 26px; box-sizing: border-box; line-height: 1; white-space: nowrap; flex: 0 0 auto; background: transparent; color: var(--vscode-descriptionForeground); border: 0; padding: 2px 9px; border-radius: var(--control-radius); cursor: pointer; font: inherit; transition: background 0.12s, color 0.12s; }
 .mode-pill:hover, .ctx-pill:hover { background: var(--surface-fill); color: var(--vscode-foreground); }
@@ -825,7 +827,8 @@ body.image-preview-open .chat-body { overflow: hidden; }
 .ctx-pill { margin-left: 0; }
 .ctx-pill span { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 .ctx-pill svg { display: block; }
-.ctx-pill.danger { color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-errorForeground) 8%, transparent); }
+.ctx-pill.danger { color: var(--error-foreground); background: color-mix(in srgb, var(--vscode-errorForeground) 8%, transparent); }
+.ctx-pill.danger:is(:hover, :focus-visible, .active-menu) { color: var(--error-highlight-foreground); }
 .ctx-pill.active-menu { background: var(--surface-fill); color: var(--vscode-foreground); }
 .ctx-pill.nudge { animation: compact-wiggle 0.28s ease-in-out 0s 2; }
 .compact-menu {

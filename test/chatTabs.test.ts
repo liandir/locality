@@ -188,10 +188,10 @@ describe("independent chat tabs", () => {
 
   it("sanitizes transcript snapshots just like initial loads", async () => {
     const { provider, snapshot } = setup();
-    provider.openChat({ ...record("a"), contextMessages: [{ role: "system", content: "private model context", ts: 1 }], memorySelection: [] });
+    provider.openChat({ ...record("a"), contextMessages: [{ role: "system", content: "private model context", ts: 1 }], recalledMemories: [] });
     const event = snapshot().events.find(event => "kind" in event && event.kind === "chatLoaded") as Extract<UiEvent, { kind: "chatLoaded" }>;
     expect(event.record.contextMessages).toBeUndefined();
-    expect(event.record.memorySelection).toBeUndefined();
+    expect(event.record.recalledMemories).toBeUndefined();
     expect(event.contextMessageCount).toBe(1);
   });
 

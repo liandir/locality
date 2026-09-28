@@ -461,7 +461,7 @@ describe("OpenAI-compatible client", () => {
   it("sends canonical tools and disables parallel calls by default", async () => {
     const fetchMock = vi.fn(async () => sseResponse(["data: [DONE]"]));
     vi.stubGlobal("fetch", fetchMock);
-    const tools = asOpenAiTools(toolsForMode(true));
+    const tools = asOpenAiTools(toolsForMode("plan"));
 
     for await (const chunk of streamChat(
       "http://127.0.0.1:8080",
@@ -478,7 +478,7 @@ describe("OpenAI-compatible client", () => {
   });
 
   it("offers argv-based execution to native models instead of the legacy shell-string tool", () => {
-    const names = toolsForMode(false, "native").map(tool => tool.name);
+    const names = toolsForMode("act", "native").map(tool => tool.name);
     expect(names).toContain("run_process");
     expect(names).not.toContain("run_command");
     expect(names).toContain("create_file");
@@ -486,7 +486,7 @@ describe("OpenAI-compatible client", () => {
     expect(names).not.toContain("write_file");
     expect(names).toContain("insert_text");
     expect(names).toContain("replace_range");
-    const process = toolsForMode(false, "native").find(tool => tool.name === "run_process")!;
+    const process = toolsForMode("act", "native").find(tool => tool.name === "run_process")!;
     expect(process.parameters.properties.args.items).toEqual({ type: "string" });
     expect(process.description).not.toContain("safe-list");
     expect(process.description).not.toContain("approval");
@@ -513,7 +513,7 @@ describe("OpenAI-compatible client", () => {
       "tools param requires --jinja flag",
       { status: 400 }
     )));
-    const tools = asOpenAiTools(toolsForMode(false));
+    const tools = asOpenAiTools(toolsForMode("act"));
 
     await expect((async () => {
       for await (const chunk of streamChat(
@@ -529,7 +529,7 @@ describe("OpenAI-compatible client", () => {
       JSON.stringify({ error: { code: 500, message: "Failed to parse tool call arguments as JSON: json.exception.parse_error.101 unexpected end of input" } }),
       { status: 500 }
     )));
-    const tools = asOpenAiTools(toolsForMode(false));
+    const tools = asOpenAiTools(toolsForMode("act"));
 
     await expect((async () => {
       for await (const chunk of streamChat(

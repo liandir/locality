@@ -55,17 +55,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.registerWebviewViewProvider(SideViewProvider.viewType, sideProvider),
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, chatProvider),
 
-    vscode.commands.registerCommand("localLlmHarness.newChat", () => newChat(context)),
-    vscode.commands.registerCommand("localLlmHarness.openChat", (id?: string) => id ? openChatById(id) : undefined),
-    vscode.commands.registerCommand("localLlmHarness.renameChat", (id: string) => chatProvider.renameChat(id)),
-    vscode.commands.registerCommand("localLlmHarness.deleteChat", (id?: string) => deleteChat(id)),
-    vscode.commands.registerCommand("localLlmHarness.clearChats", () => clearChats()),
-    vscode.commands.registerCommand("localLlmHarness.openSettings", () => {
+    vscode.commands.registerCommand("locality.newChat", () => newChat(context)),
+    vscode.commands.registerCommand("locality.openChat", (id?: string) => id ? openChatById(id) : undefined),
+    vscode.commands.registerCommand("locality.renameChat", (id: string) => chatProvider.renameChat(id)),
+    vscode.commands.registerCommand("locality.deleteChat", (id?: string) => deleteChat(id)),
+    vscode.commands.registerCommand("locality.clearChats", () => clearChats()),
+    vscode.commands.registerCommand("locality.openSettings", () => {
       sideProvider.focusTab("settings");
-      return vscode.commands.executeCommand("workbench.view.extension.localLlmHarness");
+      return vscode.commands.executeCommand("workbench.view.extension.locality");
     }),
-    vscode.commands.registerCommand("localLlmHarness.togglePlanMode", () => chatProvider.togglePlanMode()),
-    vscode.commands.registerCommand("localLlmHarness.compactNow", () => chatProvider.compactNow()),
+    vscode.commands.registerCommand("locality.togglePlanMode", () => chatProvider.togglePlanMode()),
+    vscode.commands.registerCommand("locality.compactNow", () => chatProvider.compactNow()),
 
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       const r = currentWorkspaceRoot();
@@ -93,7 +93,7 @@ function currentWorkspaceRoot(): string | undefined {
 async function newChat(context: vscode.ExtensionContext): Promise<ChatRecord | undefined> {
   if (chatProvider.isClearingWorkspace()) return undefined;
   if (!storage) {
-    vscode.window.showWarningMessage("Local LLM Harness: open a folder first.");
+    vscode.window.showWarningMessage("Locality: open a folder first.");
     return undefined;
   }
   // If the chat view already shows an empty chat, reuse it instead of creating a duplicate.
@@ -105,7 +105,6 @@ async function newChat(context: vscode.ExtensionContext): Promise<ChatRecord | u
   const settings = readSettings();
   const reasoningEffort = availableReasoningEffort(normalizeReasoningEffort(
     context.workspaceState.get<unknown>(WORKSPACE_REASONING_EFFORT_KEY)
-      ?? context.workspaceState.get<unknown>("localLlmHarness.workspaceThinkingMode")
   ), settings.reasoningEfforts);
   const targetStorage = storage;
   const rec = targetStorage.newRecord(settings.toolCallingMode, reasoningEffort);

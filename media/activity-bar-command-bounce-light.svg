@@ -1,12 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#424242" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
   <style>
     .busy-icon { animation: icon-bounce 0.95s ease-in-out infinite; }
     @keyframes icon-bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
     @media (prefers-reduced-motion: reduce) { .busy-icon { animation: none; } }
   </style>
   <g class="busy-icon">
-    <path d="M6 5h12a2.25 2.25 0 0 1 2.25 2.25v7.5A2.25 2.25 0 0 1 18 17h-3.25L12 20v-3H6a2.25 2.25 0 0 1-2.25-2.25v-7.5A2.25 2.25 0 0 1 6 5Z"/>
-    <path d="m7.4 10 2.2 2-2.2 2"/>
-    <path d="M12 14h4.4"/>
+    <g stroke="#424242" stroke-width="3"><circle cx="24" cy="24" r="10"/><circle cx="24" cy="24" r="20" stroke-opacity=".5"/></g><circle cx="24" cy="24" r="3.5" fill="#424242"/>
   </g>
 </svg>

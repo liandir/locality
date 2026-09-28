@@ -3,7 +3,7 @@ import { captureHistoryView, restoreHistoryView, type HistoryViewState } from ".
 import type { MemoryCreation, MemorySnapshot } from "../../../chat/memory.js";
 import { installChatContextMenu } from "../../chatContextMenu.js";
 import type { ChatTab, ChatToolProcess, ChatTurnPreparation } from "../../messaging.js";
-import { toolCommandText } from "../../commandDisplay.js";
+import { chatFeature } from "../../../build/chat.js";
 import { cloudIcon } from "../../icons.js";
 import { renderMessageDate } from "../../memoryDate.js";
 import { renderMemoryContents, renderMemoryCreation, renderMemoryResult } from "./memoryResults.js";
@@ -72,19 +72,16 @@ import {
   serverPendingLabel,
   serverPendingVisibility
 } from "./serverPendingDelay.js";
-import { sanitizeTerminalText } from "../../../util/terminalText.js";
 import { isImageAttachment, isLargePaste, clipboardFileUris } from "../../../chat/attachments.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "../../../chat/attachmentLimits.js";
 import {
   activeToolLabel,
-  commandToolLabel,
   editOperationLabel,
   erroredToolLabel,
   finishedWorkSummary,
   liveWorkSummary,
   settledToolLabel,
   toolActivityIsActive,
-  toolOwnsRunningProcess,
   workSummaryIcons,
   type WorkActivity
 } from "./workLabels.js";
@@ -565,12 +562,13 @@ function renderCopyableCodeBlock(
   code: string,
   language: string | undefined,
   displayPrefix = "",
-  extraAction = ""
+  extraAction = "",
+  decoration = ""
 ): string {
   const languageClass = language ? ` language-${escapeHtml(language)}` : "";
   const renderedCode = highlightCode(code, language);
   const codeContent = displayPrefix
-    ? `<span class="code-display-prefix" aria-hidden="true">${escapeHtml(displayPrefix)}</span><span class="copy-code-source">${renderedCode}</span>`
+    ? `${decoration}<span class="code-display-prefix" aria-hidden="true">${escapeHtml(displayPrefix)}</span><span class="copy-code-source">${renderedCode}</span>`
     : renderedCode;
   const codeClass = `${displayPrefix ? "command-code-display" : "copy-code-source"}${languageClass}`;
   return `<div class="copy-code-block${displayPrefix ? " tool-output-header" : ""}${extraAction ? " has-extra-actions" : ""}">
@@ -2375,13 +2373,13 @@ function toolCardClass(tc: ToolCard): string {
       ? " update-todos"
       : "";
   const outputClass = usesOutputSurface(tc) ? " output-surface-tool" : "";
-  const processClass = ownsRunningProcess(tc) ? " process-running" : "";
+  const processClass = chatFeature.activityClass?.(tc) ?? "";
   return "tool-card " + tc.category + " " + tc.status + toolClass + outputClass + processClass + (toolBodyOpen(tc) ? " open" : "");
 }
 
 function usesOutputSurface(tc: ToolCard): boolean {
   return tc.toolName === "list_dir" || tc.toolName === "glob" || tc.toolName === "update_todos" ||
-    tc.toolName === "ask_user_question" || isWriteToolCard(tc) || isCommandTool(tc) || !!tc.resultPreview;
+    tc.toolName === "ask_user_question" || isWriteToolCard(tc) || isFeatureTool(tc) || !!tc.resultPreview;
 }
 
 function toolHeadClass(tc: ToolCard): string {
@@ -2437,6 +2435,8 @@ function renderToolExpandedHtml(tc: ToolCard): string {
   if (tc.toolName === "ask_user_question") return renderQuestionResult(tc, md);
   const resultIsError = tc.status === "failed" || tc.status === "rejected";
   if (resultIsError) return renderErroredToolExpandedHtml(tc);
+  const featureResult = chatFeature.renderResult?.(tc, escapeHtml, CARD_SEPARATOR_HTML);
+  if (featureResult !== undefined) return renderToolOutputSurface(featureResult, false);
   // Successful edits show their diff directly in the shared output card.
   if (isWriteToolCard(tc)) return renderChangeCard(tc);
 
@@ -2457,11 +2457,7 @@ function renderToolExpandedHtml(tc: ToolCard): string {
     const content = renderMemoryResult(tc.toolName, tc.resultPreview ?? "", md);
     if (content) return renderToolOutputSurface(content, false);
   }
-  const command = isCommandTool(tc) ? toolCommand(tc) : "";
-  const stopProcessAction = (tc.toolName === "run_command" || tc.toolName === "run_process" || tc.toolName === "wait_process") && tc.processJobId && tc.processRunning
-    ? `<button class="copy-btn code-block-stop" type="button" data-stop-process="${escapeHtml(tc.processJobId)}" data-tip="${tc.processStopping ? "Stopping process" : "Stop process"}" aria-label="${tc.processStopping ? "Stopping process" : "Stop process"}" ${tc.processStopping ? "disabled" : ""}>${stopIcon()}</button>`
-    : "";
-  const commandBlock = command ? renderCopyableCodeBlock(command, "bash", "$ ", stopProcessAction) : "";
+  const commandBlock = chatFeature.renderHeader?.(tc, toolArgs(tc), renderCopyableCodeBlock, escapeHtml, stopIcon()) ?? "";
   const result = tc.resultPreview ? renderToolResult(tc, false) : "";
   return renderToolOutputSurface([commandBlock, result].filter(Boolean).join(CARD_SEPARATOR_HTML), false);
 }
@@ -2471,10 +2467,9 @@ function renderToolExpandedHtml(tc: ToolCard): string {
  * attempted operation above the diagnostic, separated by the standard divider.
  */
 function renderErroredToolExpandedHtml(tc: ToolCard): string {
-  const command = isCommandTool(tc) ? toolCommand(tc) : "";
-  const commandBlock = command ? renderCopyableCodeBlock(command, "bash", "$ ") : "";
+  const commandBlock = chatFeature.renderHeader?.(tc, toolArgs(tc), renderCopyableCodeBlock, escapeHtml, stopIcon(), true) ?? "";
   const diagnostic = renderToolResult(tc, true);
-  if (isCommandTool(tc)) {
+  if (isFeatureTool(tc)) {
     return renderToolOutputSurface([commandBlock, diagnostic].filter(Boolean).join(CARD_SEPARATOR_HTML), true);
   }
   if (isWriteToolCard(tc)) {
@@ -2495,7 +2490,8 @@ function toolResultDetail(tc: ToolCard): string {
   const text = tc.resultPreview ?? "";
   // Older saved command results may predate output sanitization. Clean them at
   // render time as well so reopening a chat cannot expose ANSI control glyphs.
-  if (isCommandTool(tc)) return sanitizeTerminalText(text);
+  const formatted = chatFeature.formatResult?.(tc, text);
+  if (formatted !== undefined) return formatted;
   if (tc.toolName !== "tool_call") return text;
   // The first malformed-call line is represented compactly in the card head.
   // Keep the remaining diagnostic and raw arguments in the expanded surface.
@@ -2542,11 +2538,13 @@ function compactActivityOutput(activity: CompactActivity): string {
 }
 
 function toolIcon(tc: ToolCard): string {
+  const featureIcon = chatFeature.icons?.[tc.toolName];
+  if (featureIcon) return featureIcon;
   if (tc.toolName === "list_dir") return folderIcon();
   if (tc.toolName === "compact_context") return compactIcon();
   if (tc.toolName === "update_todos") return checklistIcon();
   if (tc.toolName === "ask_user_question") return questionIcon();
-  if (isCommandTool(tc)) return terminalIcon();
+  if (isFeatureTool(tc)) return chatFeature.icon?.() ?? searchIcon();
   if (isWriteToolCard(tc)) return pencilIcon();
   if (tc.toolName === "search_memories" || tc.toolName === "recall_memory") return cloudIcon();
   if (tc.toolName === "view_image") return viewImageIcon();
@@ -2554,10 +2552,8 @@ function toolIcon(tc: ToolCard): string {
   return searchIcon();
 }
 
-function isCommandTool(tc: ToolCard): boolean {
-  return tc.toolName === "run_command" || tc.toolName === "run_process" ||
-    tc.toolName === "wait_process" || tc.toolName === "stop_process" ||
-    tc.category === "command" || tc.category === "process";
+function isFeatureTool(tc: ToolCard): boolean {
+  return chatFeature.recognizes?.(tc.toolName) ?? false;
 }
 
 function isWriteToolCard(tc: ToolCard): boolean {
@@ -2646,10 +2642,8 @@ function parseDiffLine(line: string): { kind: "add" | "del" | "neutral"; oldLine
 
 /** Header name for a tool card. */
 function toolCardHeadName(tc: ToolCard): string {
-  if (tc.toolName === "run_command" || tc.toolName === "run_process") {
-    return tc.processRunning || (tc.status === "executed" && isActiveToolCard(tc))
-      ? "Running command" : commandToolLabel(tc.status);
-  }
+  const featureLabel = chatFeature.headerLabel?.(tc, isActiveToolCard(tc));
+  if (featureLabel) return featureLabel;
   const includeFileNoun = !isWriteToolCard(tc) && !["read_file", "view_image", "list_dir"].includes(tc.toolName);
   if (!isErrorToolCard(tc) && isActiveToolCard(tc)) {
     return activeToolLabel(tc.toolName, tc.createsNewFile, includeFileNoun);
@@ -2674,9 +2668,6 @@ function isActiveToolCard(tc: ToolCard): boolean {
   );
 }
 
-function ownsRunningProcess(tc: ToolCard): boolean {
-  return toolOwnsRunningProcess(tc.toolName, tc.processRunning);
-}
 
 function isErrorToolCard(tc: ToolCard): tc is ToolCard & { status: "failed" | "rejected" } {
   return tc.status === "failed" || tc.status === "rejected";
@@ -2695,15 +2686,11 @@ function toolDisplayName(toolName: string): string {
     insert_text: "Edit file",
     replace_range: "Edit file",
     glob: "Search for files",
-    run_command: "Run command",
-    run_process: "Run command",
-    wait_process: "Check process",
-    stop_process: "Stop process",
     update_todos: "Update todos",
     ask_user_question: "Ask question",
     compact_context: "Compact context"
   };
-  return aliases[toolName] ?? toolName;
+  return chatFeature.aliases?.[toolName] ?? aliases[toolName] ?? toolName;
 }
 
 function toolCardLabel(tc: ToolCard): string {
@@ -2717,11 +2704,11 @@ function toolCardLabel(tc: ToolCard): string {
   if (tc.toolName === "search_memories") return String(toolArgs(tc).query ?? "");
   if (tc.toolName === "recall_memory") return String(toolArgs(tc).name ?? "");
   if (tc.toolName === "glob") return String(toolArgs(tc).pattern ?? "");
-  if (isCommandTool(tc)) {
+  if (isFeatureTool(tc)) {
     // The expanded command surface shows the full, copyable command directly
     // below the heading. Keep the compact summary only while the card is
     // collapsed so the same command is not repeated on adjacent rows.
-    return toolBodyOpen(tc) ? "" : toolCommand(tc);
+    return toolBodyOpen(tc) ? "" : toolOperation(tc);
   }
   if (tc.toolName === "compact_context") return "";
   return "";
@@ -2743,6 +2730,8 @@ function diffStatHtml(stats: { added: number; removed: number }): string {
 }
 
 function renderToolCardLabel(tc: ToolCard): string {
+  const featureLabel = chatFeature.renderLabel?.(tc, toolArgs(tc), escapeHtml);
+  if (featureLabel !== undefined) return featureLabel;
   if (tc.toolName === "update_todos") {
     const todos = todosFromCard(tc);
     const done = todos.filter(t => t.status === "completed").length;
@@ -2767,6 +2756,8 @@ function renderToolCardLabel(tc: ToolCard): string {
 }
 
 function renderToolApprovalLabel(tc: ToolCard): string {
+  const featureLabel = chatFeature.renderLabel?.(tc, toolArgs(tc), escapeHtml);
+  if (featureLabel !== undefined) return featureLabel;
   if (isWriteToolCard(tc)) {
     const stats = writeStats(tc);
     return stats ? `${renderToolPathLabel(tc)} ${diffStatHtml(stats)}` : renderToolPathLabel(tc);
@@ -2834,8 +2825,8 @@ function findToolCard(toolId: string): ToolCard | undefined {
   return undefined;
 }
 
-function toolCommand(tc: ToolCard): string {
-  return tc.processCommand ?? toolCommandText(tc.toolName, toolArgs(tc));
+function toolOperation(tc: ToolCard): string {
+  return chatFeature.operation?.(tc, toolArgs(tc)) ?? "";
 }
 
 function toolArgs(tc: ToolCard): Record<string, unknown> {
@@ -3186,6 +3177,7 @@ function bindOnce(): void {
     syncShimmerAnimations();
   });
   document.fonts.addEventListener("loadingdone", syncToolHeaderScrollbars);
+  chatFeature.bind?.(root);
   root.addEventListener("pointerdown", e => {
     const target = e.target as HTMLElement;
     if (target.closest("#cancel")) {
@@ -3194,7 +3186,7 @@ function bindOnce(): void {
       return;
     }
     const workEl = target.closest("[data-work-toggle]") as HTMLElement | null;
-    if (workEl && !target.closest("button")) {
+    if (workEl && !target.closest("button, a")) {
       e.preventDefault();
       const groupId = workEl.dataset.workToggle!;
       const m = state.messages.find(x => findWorkUnit(resolveRenderUnits(x), groupId));
@@ -3222,7 +3214,7 @@ function bindOnce(): void {
       return;
     }
     const toolEl = target.closest("[data-tool-toggle]") as HTMLElement | null;
-    if (toolEl && !target.closest("button")) {
+    if (toolEl && !target.closest("button, a")) {
       e.preventDefault();
       const id = toolEl.dataset.toolToggle!;
       for (const m of state.messages) {
@@ -3242,18 +3234,9 @@ function bindOnce(): void {
         }
       }
     }
-    const stopProcess = target.closest("[data-stop-process]") as HTMLButtonElement | null;
-    if (stopProcess) {
+    if (chatFeature.click?.(target, state.messages.flatMap(message => message.toolCards), send)) {
       e.preventDefault();
-      const jobId = stopProcess.dataset.stopProcess!;
-      for (const message of state.messages) {
-        for (const card of message.toolCards) {
-          if (card.processJobId === jobId) card.processStopping = true;
-        }
-      }
-      send({ type: "stopProcess", jobId });
       render();
-      return;
     }
   });
   root.addEventListener("click", e => {
@@ -4018,13 +4001,7 @@ function forkIcon(): string {
   </svg>`;
 }
 
-function terminalIcon(): string {
-  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <rect x="3.5" y="5" width="17" height="14" rx="3"/>
-    <path d="m7.5 9.25 3 2.75-3 2.75"/>
-    <path d="M13.5 15h3.5"/>
-  </svg>`;
-}
+
 
 function compactIcon(): string {
   return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
@@ -4168,8 +4145,7 @@ function loadFromRecord(rec: ChatRecord): void {
       // Keep full output for detailed tool surfaces, including question answers,
       // when a saved chat is restored.
       const showsFullResult = restoredName === "list_dir" || restoredName === "glob" ||
-        restoredName === "run_command" || restoredName === "run_process" ||
-        restoredName === "wait_process" || restoredName === "stop_process" ||
+        chatFeature.recognizes?.(restoredName) || chatFeature.fullResult?.(restoredName) ||
         restoredName === "search_memories" || restoredName === "recall_memory" ||
         restoredName === "ask_user_question";
       const malformedToolCall = restoredName === "tool_call";
@@ -4180,13 +4156,16 @@ function loadFromRecord(rec: ChatRecord): void {
         argsJson: m.toolCall?.argsJson ?? "{}",
         category: malformedToolCall ? "unknown" : "read",
         status: restoredToolStatus(m.toolCall?.status, m.content, malformedToolCall),
-        resultPreview: showsFullResult ? m.content : m.content.slice(0, 400),
+        resultPreview: m.toolCall?.status === "failed" && m.toolCall.processOutput !== undefined
+          ? m.toolCall.processOutput : m.toolCall?.displayResult ?? (showsFullResult ? m.content : m.content.slice(0, 400)),
         diffPreview: fileChange?.diffPreview,
         added: fileChange?.added,
         removed: fileChange?.removed,
         diffUnavailable: !fileChange,
         createsNewFile: restoredCreatesNewFile(restoredName, m.toolCall?.createsNewFile),
         processCommand: m.toolCall?.processCommand,
+        processOutput: m.toolCall?.processOutput,
+        processExitCode: m.toolCall?.processExitCode,
         expanded: false
       };
       last.toolCards.push(tc);
@@ -4303,6 +4282,7 @@ function handleHostMessage(msg: ExtToChat): void {
     }
   }
   if (!("kind" in msg)) return;
+  if (chatFeature.event?.(msg, state.messages.flatMap(message => message.toolCards))) { render(); return; }
   switch (msg.kind) {
     case "visionCapability":
       state.supportsVision = msg.supported;
@@ -4517,6 +4497,8 @@ function handleHostMessage(msg: ExtToChat): void {
           processJobId: msg.processJobId,
           processCommand: msg.processCommand,
           processRunning: msg.processRunning,
+          processOutput: msg.processOutput,
+          processExitCode: msg.processExitCode,
           expanded: false
         };
         m.toolCards.push(card);
@@ -4536,6 +4518,8 @@ function handleHostMessage(msg: ExtToChat): void {
         card.processJobId = msg.processJobId;
         card.processCommand = msg.processCommand;
         card.processRunning = msg.processRunning;
+        card.processOutput = msg.processOutput;
+        card.processExitCode = msg.processExitCode;
       }
       render();
       break;
@@ -4545,6 +4529,7 @@ function handleHostMessage(msg: ExtToChat): void {
         const tc = m.toolCards.find(t => t.toolId === msg.toolId);
         if (tc && isActiveToolCard(tc)) {
           tc.resultPreview = msg.resultPreview;
+          if (msg.processOutput !== undefined) tc.processOutput = msg.processOutput;
           break;
         }
       }
@@ -4574,6 +4559,8 @@ function handleHostMessage(msg: ExtToChat): void {
           if (msg.processJobId) tc.processJobId = msg.processJobId;
           if (msg.processCommand !== undefined) tc.processCommand = msg.processCommand;
           if (typeof msg.processRunning === "boolean") tc.processRunning = msg.processRunning;
+          if (msg.processOutput !== undefined) tc.processOutput = msg.processOutput;
+          if (msg.processExitCode !== undefined) tc.processExitCode = msg.processExitCode;
           // A write resolving while its card is already open should show its
           // diff without another toggle — fetch it now.
           if (msg.status === "executed" && isWriteToolCard(tc) && !tc.diffPreview && !tc.diffRequested) {
@@ -4591,19 +4578,6 @@ function handleHostMessage(msg: ExtToChat): void {
       state.contextActivityIds = new Set(msg.activityIds);
       render();
       break;
-    case "processJobState": {
-      for (const message of state.messages) {
-        for (const card of message.toolCards) {
-          if (card.toolId !== msg.toolId && card.processJobId !== msg.jobId) continue;
-          card.processJobId = msg.jobId;
-          card.processRunning = msg.running;
-          card.processStopping = false;
-          if (msg.resultPreview) card.resultPreview = msg.resultPreview;
-        }
-      }
-      render();
-      break;
-    }
     case "fileChanges": {
       const m = getOrCreateMsg(msg.messageId, "assistant");
       m.fileChanges = msg.changes;

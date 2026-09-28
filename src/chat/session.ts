@@ -1,3 +1,4 @@
+import type { SecretStorage } from "vscode";
 import { beginForeground } from "../llm/activity.js";
 import { searchMemories, recallMemory, memoryMetadata, type MemorySnapshot } from "./memory.js";
 import { MAX_MEMORY_COUNT } from "./memoryLimits.js";
@@ -14,11 +15,12 @@ import {
   type LlmMessage
 } from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
-import type { ChatContextActivity, ChatContextState, ChatMemoryCreations, ChatToolProcess, ChatTurnEnd, ChatTurnPreparation } from "../ui/messaging.js";
-import { toolCommandText } from "../ui/commandDisplay.js";
+import type { ChatContextActivity, ChatContextState, ChatMemoryCreations, ChatToolProcess, ChatToolResultDisplay, ChatTurnEnd, ChatTurnPreparation } from "../ui/messaging.js";
+import { createFeatures } from "../build/runtime.js";
+import type { FeatureRuntime, FeatureResultUpdate } from "../build/contracts.js";
 import { loadRootAgentsMd } from "../llm/agentsMd.js";
 import { makeNativeTextRecoveryParser, makeParser, type ParsedEvent } from "../llm/parser/index.js";
-import { ALLOWED_TOOL_NAMES, classifyToolName } from "../tools/forbiddenTools.js";
+import { classifyToolName } from "../tools/forbiddenTools.js";
 import {
   readFile,
   formatFileForModel,
@@ -40,14 +42,6 @@ import {
   type ReplaceRangeArgs
 } from "../tools/fsTools.js";
 import { assertInsideWorkspace } from "../tools/workspaceGuard.js";
-import {
-  startCommand,
-  startProcess,
-  type CommandHandle,
-  type CommandProgress,
-  type CommandResult,
-  type CommandWaitResult
-} from "../tools/terminalTool.js";
 import { readSettings, type HarnessSettings } from "../config/settings.js";
 import { ChatStorage, VISION_TOKEN_RESERVE, modelMessages, appendChatMessage, type ChatAttachment, type ChatMessage, type ChatRecord } from "./storage.js";
 import { attachmentFileType, isImageAttachment, synthesizeAttachmentPrompt } from "./attachments.js";
@@ -86,9 +80,9 @@ export type UiEvent =
   | { kind: "thought"; messageId: string; delta: string }
   | { kind: "toolCallProgress"; toolId: string; messageId: string; toolName: string; path?: string; contentLines: number; added?: number; removed?: number; createsNewFile?: boolean; replacedLines?: number; startLine?: number; endLine?: number; line?: number }
   | ({ kind: "toolCallProposed"; toolId: string; messageId: string; toolName: string; argsJson: string; category: ToolCategory; approvalRequired: boolean; reason?: string; diffPreview?: string; createsNewFile?: boolean } & ChatToolProcess)
-  | { kind: "toolCallOutput"; toolId: string; resultPreview: string }
+  | ({ kind: "toolCallOutput"; toolId: string; resultPreview: string } & ChatToolProcess)
   | ({ kind: "toolCallResolved"; toolId: string; status: "approved" | "rejected" | "executed" | "failed"; resultPreview?: string; diffPreview?: string; added?: number; removed?: number; createsNewFile?: boolean } & ChatToolProcess)
-  | { kind: "processJobState"; toolId: string; jobId: string; running: boolean; resultPreview?: string }
+  | ({ kind: "processJobState"; toolId: string; jobId: string; running: boolean; resultPreview?: string; status?: "failed" } & ChatToolProcess)
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
   | { kind: "summary"; messageId: string; text: string }
   | { kind: "planFinal"; messageId: string; markdown: string }
@@ -112,6 +106,7 @@ export type ToolCategory =
   | "todos"     // gray, no approval — UI/state only, allowed in plan mode
   | "command"   // purple, auto-approve via setting in Act mode
   | "question"  // gray, interactive — asks the user and waits for an answer
+  | "search"    // external reference lookup
   | "process"   // gray, controls a previously approved chat-owned process
   | "forbidden" // red, abort
   | "unknown"   // red, abort
@@ -140,39 +135,8 @@ function isWriteToolName(name: string): boolean {
   return WRITE_TOOL_NAMES.has(name);
 }
 
-function isProcessStartToolName(name: string): boolean {
-  return name === "run_command" || name === "run_process";
-}
-
-function isProcessControlToolName(name: string): boolean {
-  return name === "wait_process" || name === "stop_process";
-}
-
-function isProcessToolName(name: string): boolean {
-  return isProcessStartToolName(name) || isProcessControlToolName(name);
-}
-
-interface ManagedProcessJob {
-  id: string;
-  command: string;
-  handle: CommandHandle;
-  originToolId: string;
-  running: boolean;
-  announced: boolean;
-  stoppedBy?: "model" | "user" | "cancel" | "turn";
-  stdoutOffset: number;
-  stderrOffset: number;
-}
-
-const INITIAL_PROCESS_WAIT_MS = 10_000;
-const DEFAULT_PROCESS_WAIT_MS = 10_000;
-const MAX_PROCESS_WAIT_MS = 30_000;
-const MAX_ACTIVE_PROCESS_JOBS = 4;
-const MAX_RETAINED_PROCESS_JOBS = 32;
-
 function toolNeedsApproval(category: ToolCategory, settings: HarnessSettings): boolean {
   switch (category) {
-    case "command": return !settings.autoapproveCommands;
     case "write": return !settings.autoapproveWrites;
     case "read": return !settings.autoapproveReads;
     default: return false;
@@ -183,7 +147,7 @@ interface PendingApproval {
   resolve(v: { approved: boolean }): void;
 }
 
-interface ToolCompletion extends ChatToolProcess {
+interface ToolCompletion extends ChatToolProcess, ChatToolResultDisplay {
   toolId: string;
   toolName: string;
   argsJson: string;
@@ -257,7 +221,9 @@ export class ChatSession {
   /** Native OpenAI-style tool calls are preferred; only an explicit server rejection enables legacy text parsing. */
   private toolProtocol: "native" | "legacy" = "native";
   private completedCallIds = new Map<string, { name: string; argsJson: string }>();
-  private processJobs = new Map<string, ManagedProcessJob>();
+  private features: FeatureRuntime[];
+  private featureDisplays = new Map<string, FeatureResultUpdate>();
+  private featureMessages = new Map<string, ChatMessage>();
   /** Only reopened history uses the standalone context-loading status. */
   private loadedChatContextPending: boolean;
   /** Tools and compaction own the wait while their results enter the next prompt. */
@@ -273,11 +239,29 @@ export class ChatSession {
     record: ChatRecord;
     emit: (e: UiEvent) => void;
     memory?: WorkspaceMemory;
+    secrets?: SecretStorage;
   }) {
     this.storage = args.storage;
     this.workspaceRoot = args.workspaceRoot;
     this.record = args.record;
     this.emit = args.emit;
+    this.features = createFeatures({
+      workspaceRoot: this.workspaceRoot,
+      secrets: args.secrets,
+      emit: event => this.emit(event),
+      appendResult: (name, argsJson, result, metadata) => this.appendToolResult(
+        readSettings(), name, argsJson, result, undefined, { status: "executed", ...metadata }
+      ),
+      updateResult: (toolId, metadata) => {
+        this.featureDisplays.set(toolId, metadata);
+        const message = this.featureMessages.get(toolId);
+        if (!message?.toolCall) return;
+        message.toolCall.processOutput = metadata.processOutput;
+        message.toolCall.processExitCode = metadata.processExitCode;
+        if (metadata.status) message.toolCall.status = metadata.status;
+        void this.saveRecord().catch(() => this.emit({ kind: "notice", text: "Could not save the latest tool output." }));
+      }
+    });
     this.memory = args.memory;
     this.loadedChatContextPending = args.record.messages.length > 0;
   }
@@ -331,6 +315,7 @@ export class ChatSession {
   private async systemPromptTokens(s: HarnessSettings): Promise<number> {
     const nativeTools = this.toolProtocol === "native";
     const text = buildSystemPrompt({
+      featureSettings: readSettings(),
       family: this.compatibilityFamily(),
       mode: this.turnMode(),
       workspaceRoot: this.workspaceRoot,
@@ -341,7 +326,7 @@ export class ChatSession {
       nativeTools
     });
     const catalog = nativeTools
-      ? `\n<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.turnMode(), "native", readSettings().memoryEnabled, this.supportsVision)))}</tools>`
+      ? `\n<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.turnMode(), "native", readSettings().memoryEnabled, this.supportsVision, readSettings())))}</tools>`
       : "";
     const countedText = text + catalog;
     if (this.systemPromptTokenCache?.text !== countedText) {
@@ -516,11 +501,7 @@ export class ChatSession {
     this.abort?.abort();
     this.completeContextIngestion();
     for (const controller of this.compactAborts) controller.abort();
-    for (const job of this.processJobs.values()) {
-      if (!job.running) continue;
-      job.stoppedBy = "cancel";
-      void job.handle.stop();
-    }
+    for (const feature of this.features) feature.cancel?.();
     this.cancelPendingTitle();
     for (const p of this.pending.values()) p.resolve({ approved: false });
     this.pending.clear();
@@ -528,159 +509,8 @@ export class ChatSession {
     this.pendingQuestions.clear();
   }
 
-  async stopProcessFromUser(jobId: string): Promise<void> {
-    const job = this.processJobs.get(jobId);
-    if (!job) {
-      this.emit({ kind: "notice", text: `Process ${jobId} is no longer available in this chat.` });
-      return;
-    }
-    const wasRunning = job.running;
-    let stoppedResult: CommandResult | undefined;
-    if (wasRunning) {
-      job.stoppedBy = "user";
-      stoppedResult = await job.handle.stop();
-    }
-    job.running = false;
-    const result = processJobResult(job.handle.snapshot(), wasRunning
-      ? `Process ${job.id} was stopped by the user${stoppedResult ? ` (exit ${stoppedResult.exitCode})` : ""}.`
-      : `Process ${job.id} had already finished when the user requested a stop.`);
-    this.emit({
-      kind: "processJobState",
-      toolId: job.originToolId,
-      jobId: job.id,
-      running: false,
-      resultPreview: result
-    });
-    await this.appendToolResult(
-      readSettings(),
-      "stop_process",
-      JSON.stringify({ job_id: job.id }),
-      result,
-      undefined,
-      { status: "executed", processCommand: job.command }
-    );
-  }
-
-  private registerProcessJob(handle: CommandHandle, originToolId: string, command: string): ManagedProcessJob {
-    const active = [...this.processJobs.values()].filter(job => job.running).length;
-    if (active >= MAX_ACTIVE_PROCESS_JOBS) {
-      void handle.stop();
-      throw new Error(`at most ${MAX_ACTIVE_PROCESS_JOBS} managed processes may run in one chat`);
-    }
-    if (this.processJobs.size >= MAX_RETAINED_PROCESS_JOBS) {
-      const completed = [...this.processJobs.values()].find(job => !job.running);
-      if (completed) this.processJobs.delete(completed.id);
-    }
-    const id = `job_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-    const job: ManagedProcessJob = {
-      id,
-      command,
-      handle,
-      originToolId,
-      running: true,
-      announced: false,
-      stdoutOffset: 0,
-      stderrOffset: 0
-    };
-    this.processJobs.set(id, job);
-    void handle.result.then(
-      result => {
-        job.running = false;
-        if (!job.announced || this.processJobs.get(job.id) !== job) return;
-        const lead = job.stoppedBy === "turn"
-          ? `Process ${job.id} stopped after the model response completed (exit ${result.exitCode}).`
-          : job.stoppedBy
-            ? `Process ${job.id} stopped (exit ${result.exitCode}).`
-          : `Process ${job.id} finished (exit ${result.exitCode}).`;
-        this.emit({
-          kind: "processJobState",
-          toolId: job.originToolId,
-          jobId: job.id,
-          running: false,
-          resultPreview: processJobResult(result, lead)
-        });
-      },
-      error => {
-        job.running = false;
-        if (!job.announced || this.processJobs.get(job.id) !== job) return;
-        this.emit({
-          kind: "processJobState",
-          toolId: job.originToolId,
-          jobId: job.id,
-          running: false,
-          resultPreview: `Process ${job.id} failed: ${(error as Error).message}`
-        });
-      }
-    );
-    return job;
-  }
-
-  private requireProcessJob(args: Record<string, unknown>): ManagedProcessJob {
-    const id = String(args.job_id ?? "").trim();
-    const job = this.processJobs.get(id);
-    if (!job) throw new Error(`managed process job ${id || "<missing>"} was not found in this chat`);
-    return job;
-  }
-
-  private consumeProcessOutput(job: ManagedProcessJob): CommandProgress {
-    const snapshot = job.handle.snapshot();
-    const output = {
-      stdout: snapshot.stdout.slice(job.stdoutOffset),
-      stderr: snapshot.stderr.slice(job.stderrOffset),
-      truncated: snapshot.truncated
-    };
-    job.stdoutOffset = snapshot.stdout.length;
-    job.stderrOffset = snapshot.stderr.length;
-    return output;
-  }
-
-  private async stopRunningProcessesAtTurnEnd(): Promise<void> {
-    const running = [...this.processJobs.values()].filter(job => job.running);
-    await Promise.all(running.map(async job => {
-      job.stoppedBy ??= "turn";
-      try {
-        await job.handle.stop();
-      } catch {
-        // The handle's result rejection updates the job and emits its failure.
-      } finally {
-        job.running = false;
-      }
-    }));
-  }
-
-  private processWaitResult(
-    job: ManagedProcessJob,
-    waited: CommandWaitResult,
-    waitMs: number
-  ): { result: string; processJobId?: string; processRunning?: boolean } {
-    if (!waited.running && !job.announced) {
-      job.running = false;
-      this.processJobs.delete(job.id);
-      return { result: commandOutputText(waited.result) };
-    }
-    const output = this.consumeProcessOutput(job);
-    if (waited.running) {
-      job.announced = true;
-      return {
-        result: processJobResult(
-          output,
-          `Process ${job.id} is still running after ${waitMs} ms. Call wait_process again to wait for more output, or stop_process when it is no longer needed.`
-        ),
-        processJobId: job.id,
-        processRunning: true
-      };
-    }
-    job.running = false;
-    const lead = job.stoppedBy === "user"
-      ? `Process ${job.id} was stopped by the user (exit ${waited.result.exitCode}).`
-      : job.stoppedBy
-        ? `Process ${job.id} was stopped (exit ${waited.result.exitCode}).`
-        : `Process ${job.id} finished (exit ${waited.result.exitCode}).`;
-    return {
-      result: processJobResult(output, lead),
-      processJobId: job.id,
-      processRunning: false
-    };
+  async handleFeatureAction(id: string): Promise<void> {
+    for (const feature of this.features) await feature.action?.(id);
   }
 
   private saveRecord(): Promise<void> {
@@ -1069,7 +899,7 @@ export class ChatSession {
       ...messages,
       {
         role: "system",
-        content: `<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.turnMode(), "native", readSettings().memoryEnabled, this.supportsVision)))}</tools>`
+        content: `<tools>${JSON.stringify(asOpenAiTools(toolsForMode(this.turnMode(), "native", readSettings().memoryEnabled, this.supportsVision, readSettings())))}</tools>`
       }
     ];
   }
@@ -1088,13 +918,16 @@ export class ChatSession {
       callId,
       status,
       fullResult = false,
+      displayResult,
       diffPreview,
       added,
       removed,
       createsNewFile,
       processJobId,
       processCommand,
-      processRunning
+      processRunning,
+      processOutput,
+      processExitCode
     } = completion;
     const change = status === "executed" ? this.toolDiffSources.get(toolId) : undefined;
     const fileChange = change ? {
@@ -1103,19 +936,25 @@ export class ChatSession {
       diffPreview: change.diffPreview ?? renderLineDiff(change.previous, change.next)
     } : undefined;
     if (change && fileChange) change.diffPreview = fileChange.diffPreview;
-    const event = (resultPreview: string): Extract<UiEvent, { kind: "toolCallResolved" }> => ({
-      kind: "toolCallResolved",
-      toolId,
-      status,
-      resultPreview,
-      diffPreview: fileChange?.diffPreview ?? diffPreview,
-      added,
-      removed,
-      createsNewFile,
-      processJobId,
-      processCommand,
-      processRunning
-    });
+    const event = (resultPreview: string): Extract<UiEvent, { kind: "toolCallResolved" }> => {
+      const latest = this.featureDisplays.get(toolId);
+      return {
+        kind: "toolCallResolved",
+        toolId,
+        status,
+        resultPreview: latest?.status === "failed" ? latest.processOutput : displayResult ?? resultPreview,
+        diffPreview: fileChange?.diffPreview ?? diffPreview,
+        added,
+        removed,
+        createsNewFile,
+        processJobId,
+        processCommand,
+        processRunning,
+        processOutput,
+        processExitCode,
+        ...latest
+      };
+    };
     if (!this.abort?.signal.aborted) this.trackContextActivity(toolId);
     this.emit(event(fullResult ? content : previewOf(content)));
     const storedResult = await this.appendToolResult(
@@ -1124,7 +963,7 @@ export class ChatSession {
       argsJson,
       content,
       callId,
-      { status, createsNewFile, processCommand, fileChange, attachments: completion.attachments }
+      { status, createsNewFile, displayResult, processJobId, processCommand, processOutput, processExitCode, toolId, fileChange, attachments: completion.attachments }
     );
     if (storedResult !== content) {
       this.emit(event(fullResult ? storedResult : previewOf(storedResult)));
@@ -1178,7 +1017,7 @@ export class ChatSession {
     argsJson: string,
     content: string,
     callId?: string,
-    outcome: { status: "executed" | "failed" | "rejected"; createsNewFile?: boolean; processCommand?: string; fileChange?: FileChangeSummary; attachments?: ChatAttachment[] } = { status: "executed" }
+    outcome: { status: "executed" | "failed" | "rejected"; createsNewFile?: boolean; toolId?: string; fileChange?: FileChangeSummary; attachments?: ChatAttachment[] } & ChatToolProcess & ChatToolResultDisplay = { status: "executed" }
   ): Promise<string> {
     const guardedContent = await this.prepareToolResultForContext(s, toolName, content);
     const message: ChatMessage = {
@@ -1191,11 +1030,23 @@ export class ChatSession {
         argsJson,
         status: outcome.status,
         createsNewFile: outcome.createsNewFile,
+        displayResult: outcome.displayResult,
         processCommand: outcome.processCommand,
+        processOutput: outcome.processOutput,
+        processExitCode: outcome.processExitCode,
         fileChange: outcome.fileChange
       },
       ts: Date.now()
     };
+    if (outcome.toolId && outcome.processJobId) {
+      this.featureMessages.set(outcome.toolId, message);
+      const display = this.featureDisplays.get(outcome.toolId);
+      if (display && message.toolCall) {
+        message.toolCall.processOutput = display.processOutput;
+        message.toolCall.processExitCode = display.processExitCode;
+        if (display.status) message.toolCall.status = display.status;
+      }
+    }
     // Exact count via /tokenize — a char/4 estimate here becomes the permanent
     // cached count (recomputeTokens skips already-counted messages), and tool
     // results are the largest messages, so under-counting them is what let the
@@ -1332,7 +1183,7 @@ export class ChatSession {
             top_p: s.topP,
             thinking_budget_tokens: s.reasoningBudget,
             ...reasoningOverrides,
-            tools: this.toolProtocol === "native" ? asOpenAiTools(toolsForMode(this.turnMode(), "native", readSettings().memoryEnabled, this.supportsVision)) : undefined,
+            tools: this.toolProtocol === "native" ? asOpenAiTools(toolsForMode(this.turnMode(), "native", readSettings().memoryEnabled, this.supportsVision, readSettings())) : undefined,
             tool_choice: "auto",
             parallel_tool_calls: false,
             return_progress: true,
@@ -1654,7 +1505,9 @@ export class ChatSession {
     }
 
     this.completeContextIngestion();
-    await this.stopRunningProcessesAtTurnEnd();
+    await Promise.all(this.features.map(feature => feature.endTurn?.()));
+    this.featureDisplays.clear();
+    this.featureMessages.clear();
     this.activeFileWrites = undefined;
     this.failUnfinishedStreamingTools();
     await this.saveRecord();
@@ -1752,8 +1605,9 @@ export class ChatSession {
     const toolId = streamingTool?.toolId ?? `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     this.streamingTools.delete(streamingToolKeyToDelete);
     const cls = classifyToolName(e.name);
+    const feature = this.features.find(candidate => candidate.tools.includes(e.name));
     const availableToolNames = new Set(
-      toolsForMode(this.turnMode(), this.toolProtocol, readSettings().memoryEnabled, this.supportsVision).map(tool => tool.name)
+      toolsForMode(this.turnMode(), this.toolProtocol, readSettings().memoryEnabled, this.supportsVision, readSettings()).map(tool => tool.name)
     );
     // Blank-name calls are parse failures (invalid tool-call body, or a block
     // cut off mid-stream); they carry the raw body in argsJson. Give them a
@@ -1801,15 +1655,12 @@ export class ChatSession {
       // back a second error for the same block.
       this.failUnfinishedStreamingTools();
       category = "unknown";
-      reason = malformedToolCallReason(e.parseError);
-    } else if (cls === "forbidden") {
-      category = "forbidden";
-      reason = `Tool "${e.name}" is forbidden in this harness (no internet/network tools).`;
+      reason = malformedToolCallReason(availableToolNames, e.parseError);
     } else if (cls === "unknown") {
       category = "unknown";
-      reason = unknownToolReason(e.name);
+      reason = unknownToolReason(e.name, availableToolNames);
     } else if (
-      (this.turnMode() === "plan" && (isWriteToolName(e.name) || isProcessToolName(e.name)))
+      (this.turnMode() === "plan" && (isWriteToolName(e.name) || (feature && feature.category(e.name) !== "search")))
       || (this.turnMode() === "review" && isWriteToolName(e.name))
     ) {
       category = "modeViolation";
@@ -1831,10 +1682,8 @@ export class ChatSession {
       } catch (err) {
         reason = (err as Error).message;
       }
-    } else if (isProcessStartToolName(e.name)) {
-      category = "command";
-    } else if (isProcessControlToolName(e.name)) {
-      category = "process";
+    } else if (feature) {
+      category = feature.category(e.name);
     } else if (isWriteToolName(e.name)) {
       category = "write";
       try {
@@ -1876,10 +1725,14 @@ export class ChatSession {
     // Include the decision in the first UI event. If the webview had to infer
     // it from a transient `pending` status, auto-approved tools would briefly
     // mount approval controls before their execution result arrived.
-    const approvalRequired = (category === "command" && this.turnMode() === "review")
-      || toolNeedsApproval(category, s);
-    const processJob = category === "process" ? this.processJobs.get(String(args.job_id ?? "").trim()) : undefined;
-    const processCommand = isProcessStartToolName(e.name) ? toolCommandText(e.name, args) : processJob?.command;
+    let featureMetadata: ChatToolProcess = {};
+    if (feature && !reason && !validationError && category !== "unknown" && category !== "modeViolation") {
+      try { featureMetadata = await feature.prepare(e.name, args, readSettings()); }
+      catch (error) { validationError = (error as Error).message; }
+    }
+    const approvalRequired = !validationError && ((category === "command" && this.turnMode() === "review")
+      || (feature && (category === "command" || category === "search") ? feature.needsApproval(readSettings()) : toolNeedsApproval(category, s)));
+    const processCommand = featureMetadata.processCommand;
     this.emit({
       kind: "toolCallProposed",
       toolId,
@@ -1891,9 +1744,7 @@ export class ChatSession {
       reason,
       diffPreview: proposedDiffPreview,
       createsNewFile: proposedCreatesNewFile,
-      processJobId: processJob?.id,
-      processCommand,
-      processRunning: processJob?.running
+      ...featureMetadata
     });
 
     if (validationError) {
@@ -1910,7 +1761,7 @@ export class ChatSession {
     if (
       multiArgsIssue &&
       (category === "read" || category === "write" ||
-        category === "command" || category === "process" || category === "question")
+        category === "command" || category === "process" || category === "search" || category === "question")
     ) {
       const result = `error: ${multiArgsIssue}`;
       await this.finishToolCall(s, {
@@ -1931,7 +1782,7 @@ export class ChatSession {
       return "executed";
     }
 
-    if (category === "forbidden" || category === "modeViolation") {
+    if (category === "modeViolation") {
       const blocked = blockedToolDetails(category, displayName, argsJson, reason);
       await this.finishToolCall(s, {
         toolId, toolName: displayName, argsJson, content: blocked, callId: e.id, status: "rejected", fullResult: true
@@ -1999,11 +1850,14 @@ export class ChatSession {
     // Execute.
     let result: string;
     let resultAttachments: ChatAttachment[] | undefined;
+    let displayResult: string | undefined;
     let executedCreatesNewFile = proposedCreatesNewFile;
     let added: number | undefined;
     let removed: number | undefined;
     let processJobId: string | undefined;
     let processRunning: boolean | undefined;
+    let processOutput: string | undefined;
+    let processExitCode: number | undefined;
     try {
       if (isMemoryToolName(e.name)) {
         if (!readSettings().memoryEnabled) throw new Error("Workspace memories are disabled.");
@@ -2163,53 +2017,13 @@ export class ChatSession {
       } else if (e.name === "glob") {
         const r = await glob({ workspaceRoot: this.workspaceRoot }, args as { pattern: string });
         result = JSON.stringify(r);
-      } else if (e.name === "run_command") {
-        const job = this.registerProcessJob(
-          startCommand(
-            String(args.command ?? ""),
-            this.workspaceRoot,
-            this.abort?.signal,
-            output => this.emit({ kind: "toolCallOutput", toolId, resultPreview: commandOutputText(output) })
-          ),
-          toolId,
-          processCommand ?? ""
-        );
-        const waited = await job.handle.wait(INITIAL_PROCESS_WAIT_MS);
-        ({ result, processJobId, processRunning } = this.processWaitResult(job, waited, INITIAL_PROCESS_WAIT_MS));
-      } else if (e.name === "run_process") {
-        const processArgs = normalizeProcessArgs(args);
-        const job = this.registerProcessJob(
-          startProcess(
-            processArgs.program,
-            processArgs.args,
-            this.workspaceRoot,
-            this.abort?.signal,
-            output => this.emit({ kind: "toolCallOutput", toolId, resultPreview: commandOutputText(output) })
-          ),
-          toolId,
-          processCommand ?? ""
-        );
-        const waited = await job.handle.wait(INITIAL_PROCESS_WAIT_MS);
-        ({ result, processJobId, processRunning } = this.processWaitResult(job, waited, INITIAL_PROCESS_WAIT_MS));
-      } else if (e.name === "wait_process") {
-        const job = this.requireProcessJob(args);
-        const waitMs = normalizeProcessWaitMs(args.wait_ms);
-        const waited = await job.handle.wait(waitMs);
-        ({ result, processJobId, processRunning } = this.processWaitResult(job, waited, waitMs));
-      } else if (e.name === "stop_process") {
-        const job = this.requireProcessJob(args);
-        const wasRunning = job.running;
-        if (wasRunning) {
-          job.stoppedBy = "model";
-          await job.handle.stop();
+      } else if (feature) {
+        if (this.abort?.signal.aborted || this.disposed) throw new Error("Action cancelled.");
+        await feature.prepare(e.name, args, readSettings());
+        if (!approvalRequired && category !== "process" && feature.needsApproval(readSettings())) {
+          throw new Error("Approval settings changed. Request the action again for approval.");
         }
-        job.running = false;
-        processJobId = job.id;
-        processRunning = false;
-        result = processJobResult(
-          this.consumeProcessOutput(job),
-          wasRunning ? `Process ${job.id} was stopped.` : `Process ${job.id} had already finished.`
-        );
+        ({ result, displayResult, processJobId, processRunning, processOutput, processExitCode } = await feature.execute(e.name, args, toolId, this.abort?.signal));
       } else {
         result = `[harness] unknown tool: ${e.name}`;
       }
@@ -2236,13 +2050,16 @@ export class ChatSession {
       callId: e.id,
       status: "executed",
       attachments: resultAttachments,
-      fullResult: e.name === "list_dir" || e.name === "glob" || isProcessToolName(e.name) || isMemoryToolName(e.name),
+      displayResult,
+      fullResult: e.name === "list_dir" || e.name === "glob" || !!feature || isMemoryToolName(e.name),
       added,
       removed,
       createsNewFile: executedCreatesNewFile,
       processJobId,
       processCommand,
-      processRunning
+      processRunning,
+      processOutput,
+      processExitCode
     });
     return "executed";
   }
@@ -2358,6 +2175,7 @@ export class ChatSession {
 
   private async buildPromptMessages(): Promise<PromptMessage[]> {
     const sys = buildSystemPrompt({
+      featureSettings: readSettings(),
       family: this.compatibilityFamily(),
       mode: this.turnMode(),
       workspaceRoot: this.workspaceRoot,
@@ -2582,24 +2400,6 @@ function previewOf(s: string): string {
   return oneLine.length <= 200 ? oneLine : oneLine.slice(0, 197) + "...";
 }
 
-function commandOutputText(output: CommandProgress | CommandResult): string {
-  const exit = "exitCode" in output ? `exit ${output.exitCode}\n` : "";
-  return `${exit}--- stdout ---\n${output.stdout}\n--- stderr ---\n${output.stderr}`
-    + (output.truncated ? "\n[output truncated]" : "");
-}
-
-function processJobResult(output: CommandProgress, lead: string): string {
-  const hasOutput = output.stdout.length > 0 || output.stderr.length > 0 || output.truncated;
-  return `${lead}${hasOutput ? `\n${commandOutputText(output)}` : "\n(no new output)"}`;
-}
-
-function normalizeProcessWaitMs(value: unknown): number {
-  if (value === undefined) return DEFAULT_PROCESS_WAIT_MS;
-  const number = Number(value);
-  if (!Number.isFinite(number)) return DEFAULT_PROCESS_WAIT_MS;
-  return Math.min(MAX_PROCESS_WAIT_MS, Math.max(0, Math.round(number)));
-}
-
 function streamingToolKey(messageId: string, name: string, id: string | undefined): string {
   return `${messageId}:${id ?? name}`;
 }
@@ -2696,17 +2496,6 @@ function normalizeToolArgs(value: unknown): Record<string, unknown> {
   return obj;
 }
 
-function normalizeProcessArgs(args: Record<string, unknown>): { program: string; args: string[] } {
-  const program = args.program;
-  const argv = args.args;
-  if (typeof program !== "string" || !/^[A-Za-z0-9_./+-]+$/.test(program)) {
-    throw new Error("run_process.program must be a non-empty executable name without whitespace.");
-  }
-  if (!Array.isArray(argv) || argv.some(value => typeof value !== "string" || /[\0\r\n]/.test(value))) {
-    throw new Error("run_process.args must be an array of strings without control characters.");
-  }
-  return { program, args: argv as string[] };
-}
 
 /**
  * Argument source for update_todos: a bare (multi-element) array of todos is a
@@ -3114,38 +2903,30 @@ function truncateRawArgs(raw: string): string {
   return raw.slice(0, MAX_MALFORMED_ARGS_CHARS) + "\n…[truncated]";
 }
 
-function malformedToolCallReason(parseError?: string): string {
+function malformedToolCallReason(names: Iterable<string>, parseError?: string): string {
   return [
     `Malformed tool call: the tool-call block could not be parsed, so nothing was executed.`,
     ...(parseError ? [`Parser detail: ${parseError}`] : []),
     `Its body was not a valid tool call, or the block was cut off before it was closed.`,
     `Re-emit the complete tool call as a single valid block in the tool-call format described in the system prompt, or answer directly if no tool is needed.`,
-    `Available tools: ${[...ALLOWED_TOOL_NAMES].join(", ")}.`
+    `Available tools: ${[...names].join(", ")}.`
   ].join("\n");
 }
 
-function unknownToolReason(name: string): string {
+function unknownToolReason(name: string, names: Iterable<string>): string {
   return [
     `Unknown tool "${name}". This harness has no tool by that name.`,
-    `Available tools: ${[...ALLOWED_TOOL_NAMES].join(", ")}.`,
+    `Available tools: ${[...names].join(", ")}.`,
     `Re-issue the request using one of these tools, or answer directly if no tool is needed.`,
     `Do not retry the same unknown tool name.`
   ].join("\n");
 }
 
 function modeViolationReason(mode: ChatMode, toolName: string, args: Record<string, unknown>): string {
-  const attempted = isProcessToolName(toolName)
-    ? `Attempted command: ${toolName === "run_process" ? toolCommandText(toolName, args) : String(args.command ?? "(empty command)")}`
-    : `Attempted edit path: ${String(args.path ?? args.file_path ?? args.filePath ?? "(missing path)")}`;
   return [
     `In ${mode} mode, "${toolName}" is not allowed.`,
-    attempted,
-    mode === "plan"
-      ? `Plan mode may still use read-only tools: read_file, list_dir, glob, and ask_user_question.`
-      : `Review mode may use read-only tools, ask_user_question, and explicitly approved commands.`,
-    mode === "plan"
-      ? `Accept the plan and switch to act mode before writing files or running commands.`
-      : `Switch to act mode before writing files.`
+    `Arguments: ${JSON.stringify(args)}`,
+    `Use a tool available in the current mode, or switch to act mode to perform the requested changes.`
   ].join("\n");
 }
 

@@ -1,3 +1,6 @@
+import { createSideHost } from "../../build/sideHost.js";
+import type { SideHost } from "../../build/sideHostContracts.js";
+import { seedFeatureSettings } from "../../build/settings.js";
 import type { WorkspaceMemory } from "../../chat/workspaceMemory.js";
 import * as vscode from "vscode";
 import {
@@ -14,8 +17,9 @@ import { ChatStorage } from "../../chat/storage.js";
 import type { ExtToSide, SideTab, SideToExt, ChatTab } from "../messaging.js";
 
 export class SideViewProvider implements vscode.WebviewViewProvider {
-  static readonly viewType = "localLlmHarness.side";
+  static readonly viewType = "locality.side";
   private view?: vscode.WebviewView;
+  private featureHost?: SideHost;
   private subs: vscode.Disposable[] = [];
   private activeTab: SideTab = "welcome";
   private memoryListGeneration = 0;
@@ -31,7 +35,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
     private onOpenTabs: () => ChatTab[],
     private memory?: WorkspaceMemory,
     private onEndpointConnected?: () => void
-  ) {}
+  ) { this.featureHost = createSideHost?.(context.secrets, message => this.post(message), context.globalState); }
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
@@ -59,6 +63,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
   pushSettings(): void {
     const s = readSettings();
     this.post({ type: "settings", settings: s as unknown as Record<string, unknown> });
+    void this.featureHost?.pushSettings();
   }
 
   async pushMemories(): Promise<void> {
@@ -92,7 +97,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
     if (!storage || !await storage.load(id) || storage !== this.getStorage()) return;
     this.pendingMemory = { id, storage };
     this.activeTab = "chats";
-    await vscode.commands.executeCommand("workbench.view.extension.localLlmHarness");
+    await vscode.commands.executeCommand("workbench.view.extension.locality");
     this.view?.show(false);
     await this.revealPendingMemory();
   }
@@ -113,6 +118,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async onMessage(m: SideToExt): Promise<void> {
+    if (await this.featureHost?.handle(m)) return;
     switch (m.type) {
       case "ready":
         this.webviewReady = true;
@@ -141,17 +147,17 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         } catch (error) { this.post({ type: "memoryError", error: (error as Error).message }); }
         break;
       case "openGithub":
-        await vscode.env.openExternal(vscode.Uri.parse("https://github.com/liandir/local-llm-harness"));
+        await vscode.env.openExternal(vscode.Uri.parse("https://github.com/liandir/locality"));
         break;
       case "newChat": this.onNewChat(); break;
       case "openChat": this.onOpenChat(m.id); break;
-      case "renameChat": await vscode.commands.executeCommand("localLlmHarness.renameChat", m.id); break;
+      case "renameChat": await vscode.commands.executeCommand("locality.renameChat", m.id); break;
       case "deleteChat": {
-        await vscode.commands.executeCommand("localLlmHarness.deleteChat", m.id);
+        await vscode.commands.executeCommand("locality.deleteChat", m.id);
         break;
       }
       case "clearChats":
-        await vscode.commands.executeCommand("localLlmHarness.clearChats");
+        await vscode.commands.executeCommand("locality.clearChats");
         break;
       case "openTab":
         this.activeTab = m.tab;
@@ -187,6 +193,10 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         break;
       }
       case "editUserSettingsJson":
+        await seedFeatureSettings();
+        await vscode.commands.executeCommand("workbench.action.openSettingsJson");
+        break;
+      case "editWorkspacePrompts":
         await seedGeneratedPromptsIfUnset();
         await vscode.commands.executeCommand("workbench.action.openWorkspaceSettingsFile");
         break;
@@ -204,12 +214,13 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
       }
       case "resetAllDefaults": {
         const choice = await vscode.window.showWarningMessage(
-          "Restore all Local LLM Harness settings to defaults? This also resets the server URL. This cannot be undone.",
+          "Restore all Locality settings to defaults? This also resets the server URL. This cannot be undone.",
           { modal: true },
           "Restore defaults"
         );
         if (choice === "Restore defaults") {
           await resetAllSettings();
+          await this.featureHost?.reset();
           this.pushSettings();
         }
         break;

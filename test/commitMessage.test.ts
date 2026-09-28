@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
-  execFileUtf8: vi.fn(),
+  gitDiff: vi.fn(),
   showErrorMessage: vi.fn(),
   showInformationMessage: vi.fn(),
   showQuickPick: vi.fn(),
@@ -47,18 +47,21 @@ vi.mock("vscode", () => ({
   env: { clipboard: { writeText: mocks.clipboardWriteText } }
 }));
 
-vi.mock("../src/util/exec.js", () => ({ execFileUtf8: mocks.execFileUtf8 }));
 vi.mock("../src/llm/client.js", () => ({ complete: mocks.complete }));
 vi.mock("../src/config/settings.js", () => ({ readSettings: mocks.readSettings }));
 
 beforeEach(() => {
   mocks.handlers.clear();
-  mocks.execFileUtf8.mockReset();
+  mocks.gitDiff.mockReset();
   mocks.showErrorMessage.mockReset();
   mocks.showInformationMessage.mockReset();
   mocks.showQuickPick.mockReset();
   mocks.executeCommand.mockReset();
   mocks.getExtension.mockReset();
+  mocks.gitDiff.mockResolvedValue("");
+  mocks.getExtension.mockReturnValue({ activate: async () => ({ getAPI: () => ({ repositories: [{
+    rootUri: { fsPath: "/workspace" }, diff: mocks.gitDiff, state: { indexChanges: [] }
+  }] }) }) });
   mocks.clipboardWriteText.mockReset();
   mocks.complete.mockReset();
   mocks.readSettings.mockReset();
@@ -78,42 +81,43 @@ beforeEach(() => {
 });
 
 describe("CommitMessageController", () => {
+  it("reports unavailable Git without a subprocess fallback", async () => {
+    mocks.getExtension.mockReturnValue(undefined);
+    const { CommitMessageController } = await import("../src/scm/commitMessage.js");
+    const controller = new CommitMessageController(() => "/workspace");
+    await mocks.handlers.get("locality.generateCommitMessage")?.();
+    expect(mocks.showErrorMessage).toHaveBeenCalledWith(expect.stringContaining("VS Code Git repository is unavailable"));
+    expect(mocks.complete).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
   it("explains that changes must be staged instead of only animating the icon", async () => {
     const { CommitMessageController } = await import("../src/scm/commitMessage.js");
     const controller = new CommitMessageController(() => undefined);
 
-    await mocks.handlers.get("localLlmHarness.generateCommitMessageNoStaged")?.();
+    await mocks.handlers.get("locality.generateCommitMessageNoStaged")?.();
 
     expect(mocks.showInformationMessage).toHaveBeenCalledWith(
-      "Local LLM Harness: stage the changes you want included, then generate the commit message again."
+      "Locality: stage the changes you want included, then generate the commit message again."
     );
     controller.dispose();
   });
 
   it("reports staged-diff failures instead of rejecting the command silently", async () => {
-    mocks.execFileUtf8.mockImplementation(async (_command: string, args: string[]) => {
-      if (args.includes("rev-parse")) return { stdout: "/workspace\n", stderr: "", exitCode: 0 };
-      if (args.includes("--quiet")) return { stdout: "", stderr: "", exitCode: 0 };
-      throw new Error("git diff failed");
-    });
+    mocks.gitDiff.mockRejectedValue(new Error("git diff failed"));
     const { CommitMessageController } = await import("../src/scm/commitMessage.js");
     const controller = new CommitMessageController(() => "/workspace");
 
-    await mocks.handlers.get("localLlmHarness.generateCommitMessage")?.();
+    await mocks.handlers.get("locality.generateCommitMessage")?.();
 
     expect(mocks.showErrorMessage).toHaveBeenCalledWith(
-      "Local LLM Harness: could not inspect staged changes: git diff failed"
+      "Locality: could not inspect staged changes: git diff failed"
     );
     controller.dispose();
   });
 
   it("rechecks Git from a stale no-staged button and writes the generated message", async () => {
-    mocks.execFileUtf8.mockImplementation(async (_command: string, args: string[]) => {
-      if (args.includes("rev-parse")) return { stdout: "/workspace\n", stderr: "", exitCode: 0 };
-      if (args.includes("--quiet")) return { stdout: "", stderr: "", exitCode: 1 };
-      if (args.includes("--cached")) return { stdout: "diff --git a/a.ts b/a.ts\n", stderr: "", exitCode: 0 };
-      throw new Error(`unexpected git arguments: ${args.join(" ")}`);
-    });
+    mocks.gitDiff.mockResolvedValue("diff --git a/a.ts b/a.ts\n");
     mocks.readSettings.mockReturnValue({
       endpoint: "http://127.0.0.1:8080/v1",
       toolCallingMode: "compat-qwen3",
@@ -134,13 +138,13 @@ describe("CommitMessageController", () => {
     });
     mocks.getExtension.mockReturnValue({
       activate: async () => ({
-        getAPI: () => ({ repositories: [{ rootUri: { fsPath: "/workspace" }, inputBox }] })
+        getAPI: () => ({ repositories: [{ rootUri: { fsPath: "/workspace" }, diff: mocks.gitDiff, inputBox }] })
       })
     });
 
     const { CommitMessageController } = await import("../src/scm/commitMessage.js");
     const controller = new CommitMessageController(() => "/workspace");
-    await mocks.handlers.get("localLlmHarness.generateCommitMessageNoStaged")?.();
+    await mocks.handlers.get("locality.generateCommitMessageNoStaged")?.();
 
     expect(inputValue).toBe("Fix restart behavior");
     expect(events).toEqual(["open", "write"]);
@@ -166,34 +170,26 @@ describe("CommitMessageController", () => {
     const repoAInput = { value: "" };
     const repoBInput = { value: "" };
     const repositories = [
-      { rootUri: { fsPath: "/workspace/repo-a" }, inputBox: repoAInput },
-      { rootUri: { fsPath: "/workspace/repo-b" }, inputBox: repoBInput }
+      { rootUri: { fsPath: "/workspace/repo-a" }, inputBox: repoAInput, diff: vi.fn() },
+      { rootUri: { fsPath: "/workspace/repo-b" }, inputBox: repoBInput, diff: mocks.gitDiff }
     ];
     mocks.getExtension.mockReturnValue({
       activate: async () => ({ getAPI: () => ({ repositories }) })
     });
-    mocks.execFileUtf8.mockImplementation(async (_command: string, args: string[]) => {
-      if (args.includes("--quiet")) return { stdout: "", stderr: "", exitCode: 1 };
-      if (args.includes("--cached")) {
-        expect(args.slice(0, 2)).toEqual(["-C", "/workspace/repo-b"]);
-        return { stdout: "diff --git a/b.ts b/b.ts\n", stderr: "", exitCode: 0 };
-      }
-      throw new Error(`unexpected git arguments: ${args.join(" ")}`);
-    });
+    mocks.gitDiff.mockResolvedValue("diff --git a/b.ts b/b.ts\n");
     mocks.complete.mockResolvedValue("Describe repo B changes");
 
     const { CommitMessageController } = await import("../src/scm/commitMessage.js");
     const controller = new CommitMessageController(() => "/workspace");
-    await mocks.handlers.get("localLlmHarness.generateCommitMessage")?.({
+    await mocks.handlers.get("locality.generateCommitMessage")?.({
       rootUri: { fsPath: "/workspace/repo-b" }
     });
 
     expect(repoAInput.value).toBe("");
     expect(repoBInput.value).toBe("Describe repo B changes");
     expect(mocks.showQuickPick).not.toHaveBeenCalled();
-    expect(mocks.execFileUtf8.mock.calls.some(([, args]) =>
-      (args as string[]).includes("rev-parse")
-    )).toBe(false);
+    expect(mocks.gitDiff).toHaveBeenCalledWith(true);
+    expect(repositories[0].diff).not.toHaveBeenCalled();
     controller.dispose();
   });
 });

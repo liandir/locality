@@ -1,9 +1,10 @@
+import { readFeatureSettings, featureSettingKeys } from "../build/settings.js";
 import * as vscode from "vscode";
 import { DEFAULT_MEMORY_MAX_COUNT, MAX_MEMORY_COUNT } from "../chat/memoryLimits.js";
 import { normalizeToolCallingProfile, type ToolCallingProfile } from "../llm/toolCallingProfile.js";
 import { normalizeReasoningEfforts, type ReasoningEfforts } from "../chat/reasoningEffort.js";
 
-const NS = "localLlmHarness";
+const NS = "locality";
 
 export const DEFAULT_TITLE_PROMPT =
   "Summarize the user message in 2-6 words. Output ONLY the summary.";
@@ -31,28 +32,26 @@ export interface HarnessSettings {
   templateOverheadTokensPerMessage: number;
   autoapproveReads: boolean;
   autoapproveWrites: boolean;
-  autoapproveCommands: boolean;
+  autoapproveCommands?: boolean;
+  autoapproveSafeCommands?: boolean;
+  safeCommandPatterns?: unknown;
+  webSearchEndpoint?: string;
+  /** Host-derived capability flag, never a configurable permission. */
+  webToolsEnabled?: boolean;
+  autoapproveWebSearch?: boolean;
 }
 
 export function readSettings(): HarnessSettings {
   const cfg = vscode.workspace.getConfiguration(NS);
-  const legacyFamily = cfg.get<string>("modelFamily");
-  const explicitProfile = explicitConfigurationValue(cfg, "toolCallingMode");
-  const explicitLegacyFamily = explicitConfigurationValue(cfg, "modelFamily");
-  const explicitReasoningBudget = explicitConfigurationValue(cfg, "reasoningBudget");
-  const legacyCappedTokens = explicitConfigurationValue(cfg, "cappedThinkingTokens");
   return {
     endpoint: cfg.get<string>("endpoint") ?? "http://localhost:8080/v1",
     model: cfg.get<string>("model")?.trim() || "local",
-    toolCallingMode: normalizeToolCallingProfile(
-      explicitProfile ?? (explicitLegacyFamily === undefined ? cfg.get<string>("toolCallingMode") : "auto"),
-      legacyFamily
-    ),
+    toolCallingMode: normalizeToolCallingProfile(cfg.get<unknown>("toolCallingMode")),
     temperature: clampNumber(cfg.get<number>("temperature") ?? 0.8, 0, 2, 0.8),
     topK: Math.round(clampNumber(cfg.get<number>("topK") ?? 40, 0, Number.MAX_SAFE_INTEGER, 40)),
     topP: clampNumber(cfg.get<number>("topP") ?? 0.95, 0, 1, 0.95),
     reasoningBudget: Math.round(clampNumber(
-      Number(explicitReasoningBudget ?? legacyCappedTokens ?? cfg.get<number>("reasoningBudget") ?? -1),
+      Number(cfg.get<number>("reasoningBudget") ?? -1),
       -1,
       Number.MAX_SAFE_INTEGER,
       -1
@@ -70,19 +69,8 @@ export function readSettings(): HarnessSettings {
     templateOverheadTokensPerMessage: clampNumber(Math.round(cfg.get<number>("templateOverheadTokensPerMessage") ?? 4), 0, 64, 4),
     autoapproveReads: cfg.get<boolean>("autoapproveReads") ?? true,
     autoapproveWrites: cfg.get<boolean>("autoapproveWrites") ?? false,
-    autoapproveCommands: cfg.get<boolean>("autoapproveCommands") ?? false
+    ...readFeatureSettings(cfg)
   };
-}
-
-function explicitConfigurationValue(cfg: vscode.WorkspaceConfiguration, key: string): unknown {
-  if (typeof cfg.inspect !== "function") return undefined;
-  const inspect = cfg.inspect<unknown>(key);
-  return inspect?.workspaceFolderLanguageValue
-    ?? inspect?.workspaceFolderValue
-    ?? inspect?.workspaceLanguageValue
-    ?? inspect?.workspaceValue
-    ?? inspect?.globalLanguageValue
-    ?? inspect?.globalValue;
 }
 
 function clampPercent(value: number): number {
@@ -99,12 +87,13 @@ export async function writeSetting<K extends keyof HarnessSettings>(
   key: K,
   value: HarnessSettings[K]
 ): Promise<void> {
+  if (!SETTING_KEYS.includes(key)) throw new Error("Setting is unavailable in this edition.");
   const cfg = vscode.workspace.getConfiguration(NS);
   await cfg.update(key, value, key === "memoryEnabled" || key === "memoryMaxCount" ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global);
 }
 
 /** Every harness setting key; maps 1:1 to the package.json configuration properties. */
-const SETTING_KEYS: (keyof HarnessSettings)[] = [
+export const SETTING_KEYS: (keyof HarnessSettings)[] = [
   "endpoint",
   "model",
   "toolCallingMode",
@@ -125,7 +114,7 @@ const SETTING_KEYS: (keyof HarnessSettings)[] = [
   "templateOverheadTokensPerMessage",
   "autoapproveReads",
   "autoapproveWrites",
-  "autoapproveCommands"
+  ...featureSettingKeys as (keyof HarnessSettings)[]
 ];
 
 /** Seed effective generated-text instructions into workspace JSON for editing. */
@@ -152,11 +141,6 @@ export async function resetAllSettings(): Promise<void> {
     await cfg.update(key, undefined, vscode.ConfigurationTarget.Global);
     await cfg.update(key, undefined, vscode.ConfigurationTarget.Workspace);
   }
-  // Removed in the unified-profile migration; clear stale overrides too.
-  await cfg.update("modelFamily", undefined, vscode.ConfigurationTarget.Global);
-  await cfg.update("modelFamily", undefined, vscode.ConfigurationTarget.Workspace);
-  await cfg.update("cappedThinkingTokens", undefined, vscode.ConfigurationTarget.Global);
-  await cfg.update("cappedThinkingTokens", undefined, vscode.ConfigurationTarget.Workspace);
 }
 
 export function onSettingsChange(handler: () => void): vscode.Disposable {

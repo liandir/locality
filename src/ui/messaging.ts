@@ -25,11 +25,19 @@ export interface ChatMemoryCreations {
   creations: MemoryCreation[];
 }
 
+/** Optional presentation payload, never sent to the model as tool content. */
+export interface ChatToolResultDisplay {
+  displayResult?: string;
+}
+
 /** Host-owned process identity, display command, and current Stop availability. */
 export interface ChatToolProcess {
   processJobId?: string;
   processCommand?: string;
   processRunning?: boolean;
+  /** Display-only output, kept separate from the model's stream-labeled result. */
+  processOutput?: string;
+  processExitCode?: number;
 }
 
 /** Authoritative list of activities whose results the model is still consuming. */
@@ -63,7 +71,9 @@ export type SideToExt =
   | { type: "openGithub" }
   | { type: "saveSetting"; key: string; value: unknown }
   | { type: "validateEndpoint"; url: string }
+  | { type: "validateWebSearch"; endpoint: string; apiKey: string }
   | { type: "editUserSettingsJson" }
+  | { type: "editWorkspacePrompts" }
   | { type: "restoreDefaultGeneratedPrompts" }
   | { type: "resetAllDefaults" }
   | { type: "listMemories" }
@@ -78,6 +88,8 @@ export type ExtToSide =
   | { type: "memories"; memories: MemoryListItem[] }
   | { type: "memoryError"; error: string }
   | { type: "settings"; settings: Record<string, unknown> }
+  | { type: "webSearchSettings"; endpoint: string; apiKey: string; verified: boolean; error?: string; reset?: boolean }
+  | { type: "webSearchValidation"; ok: boolean; error?: string; endpoint?: string }
   | { type: "appInfo"; version: string }
   | { type: "chats"; chats: { id: string; title: string; updatedAt: number }[] }
   | { type: "focusTab"; tab: SideTab }
@@ -108,7 +120,7 @@ export type ChatToExt = (
   | { type: "cancel" }
   | { type: "approveTool"; toolId: string; approved: boolean }
   | { type: "answerQuestion"; toolId: string; answer: string }
-  | { type: "stopProcess"; jobId: string }
+  | { type: "featureAction"; id: string }
   | { type: "setChatMode"; mode: ChatMode }
   | { type: "setReasoningEffort"; effort: ReasoningEffort }
   | { type: "compactNow" }

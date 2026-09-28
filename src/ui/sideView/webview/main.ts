@@ -1,3 +1,4 @@
+import { sideFeature } from "../../../build/side.js";
 import { installTooltips } from "../../tooltips.js";
 import type { MemoryListItem } from "../../../chat/memory.js";
 import { installChatContextMenu } from "../../chatContextMenu.js";
@@ -89,8 +90,9 @@ function renderWelcome(): string {
   return `
     <div class="panel welcome-panel">
       <section class="welcome-section welcome-hero">
-        <h2>Welcome to Local LLM Harness</h2>
-        <p class="welcome-copy">Vibe with your locally hosted language model.</p>
+        <span class="welcome-logo" aria-hidden="true"></span>
+        <h2>Welcome to Locality</h2>
+        <p class="welcome-copy">Your local AI coding assistant.</p>
       </section>
 
       <section class="welcome-actions">
@@ -158,15 +160,14 @@ function renderChats(): string {
 }
 
 function renderMemorySettings(): string {
-  return `<section class="panel-section">
-    <h3>Workspace memory</h3>
+  return `<div class="memory-settings">
     ${switchControl("memoryEnabled", "Use workspace memories", state.settings.memoryEnabled === true)}
     <p class="setting-help">Let the agent search and recall active memories from this workspace. Summaries are generated and managed in Recent Chats.</p>
     <label class="field-label" for="memoryMaxCount">Maximum search results</label>
     <input id="memoryMaxCount" type="number" min="1" max="${MAX_MEMORY_COUNT}" step="1" value="${esc(String(state.settings.memoryMaxCount ?? DEFAULT_MEMORY_MAX_COUNT))}" />
     <p class="setting-help">Return up to 10 matches per search by default. The agent chooses which memories to recall.</p>
     ${state.memorySettingError ? `<p class="memory-error" role="alert">${esc(state.memorySettingError)}</p>` : ""}
-  </section>`;
+  </div>`;
 }
 
 function renderChatEntry(chat: { id: string; title: string; updatedAt?: number }, memory: MemoryListItem | undefined, group: string): string {
@@ -215,11 +216,11 @@ function renderSettings(): string {
   const autoCompactPct = clampPercent(Number(s["autoCompactThresholdPercent"] ?? 80));
   const arReads = !!s["autoapproveReads"];
   const arWrites = !!s["autoapproveWrites"];
-  const arCommands = !!s["autoapproveCommands"];
   const validationCls = state.endpointMsg?.ok ? "ok" : state.endpointMsg ? "err" : "";
 
   return `
     <div class="panel">
+      <p class="setting-help">Edition: ${esc(sideFeature.label)}</p>
       <section class="panel-section">
         <h3>Model</h3>
         <label class="field-label" for="endpoint">Server URL</label>
@@ -272,9 +273,10 @@ function renderSettings(): string {
         <h3>Chat</h3>
         ${switchControl("showThinking", "Show thoughts", showThinking)}
         <p class="setting-help">When off, completed thoughts are hidden from tool history. Current thinking remains visible while it is active.</p>
+        ${renderMemorySettings()}
       </section>
 
-      ${renderMemorySettings()}
+      ${sideFeature.renderSection?.(s, switchControl, esc) ?? ""}
       <section class="panel-section">
         <h3>Automation</h3>
         ${switchControl("autoCompact", "Auto-compact context", autoCompact)}
@@ -288,13 +290,14 @@ function renderSettings(): string {
 
         ${switchControl("autoapproveReads", "Auto-approve reads", arReads)}
         ${switchControl("autoapproveWrites", "Auto-approve edits", arWrites)}
-        ${switchControl("autoapproveCommands", "Auto-approve commands", arCommands)}
+        ${sideFeature.render(s, switchControl, esc)}
       </section>
 
       <section class="panel-section">
         <h3>User settings</h3>
-        <p class="setting-help">Edit workspace settings.json to customize reasoning-effort choices, chat-title instructions, and commit-message formatting. User messages and staged diffs are appended to their prompts automatically.</p>
+        <p class="setting-help">Edit user settings for preferences. Edit workspace prompts for chat-title instructions and commit-message formatting.</p>
         <button id="editUserSettings" class="wide-button">Edit User Settings</button>
+        <button id="editWorkspacePrompts" class="wide-button">Edit workspace prompts</button>
         <button id="restorePrompts" class="wide-button">Restore default prompts</button>
       </section>
 
@@ -374,7 +377,8 @@ function bind(): void {
   bindRangeSetting("autoCompactThresholdPercent");
   bindSetting("autoapproveReads", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoapproveWrites", "change", (_v, el) => (el as HTMLInputElement).checked);
-  bindSetting("autoapproveCommands", "change", (_v, el) => (el as HTMLInputElement).checked);
+  sideFeature.bind(root, send, render);
+  root.querySelector("#editWorkspacePrompts")?.addEventListener("click", () => send({ type: "editWorkspacePrompts" }));
   root.querySelector("#editUserSettings")?.addEventListener("click", () => send({ type: "editUserSettingsJson" }));
   root.querySelector("#restorePrompts")?.addEventListener("click", () => send({ type: "restoreDefaultGeneratedPrompts" }));
   root.querySelector("#resetDefaults")?.addEventListener("click", () => send({ type: "resetAllDefaults" }));
@@ -474,6 +478,7 @@ function ago(ts: number): string {
 
 window.addEventListener("message", ev => {
   const msg = ev.data as ExtToSide;
+  if (sideFeature.receive?.(msg)) { render(); return; }
   switch (msg.type) {
     case "revealMemory": {
       state.tab = "chats";

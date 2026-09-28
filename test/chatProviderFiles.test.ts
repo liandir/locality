@@ -34,7 +34,7 @@ import { ChatViewProvider } from "../src/ui/chatView/provider.js";
 let workspace: string;
 beforeEach(async () => {
   vi.clearAllMocks();
-  workspace = await fs.mkdtemp(path.join(os.tmpdir(), "llh-file-links-"));
+  workspace = await fs.mkdtemp(path.join(os.tmpdir(), "locality-file-links-"));
 });
 afterEach(async () => { await fs.rm(workspace, { recursive: true, force: true }); });
 

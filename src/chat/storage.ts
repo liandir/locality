@@ -5,6 +5,7 @@ import { validMemory, validMemoryCreation, validSnapshot, type ChatMemory, type 
 import { MAX_MEMORY_COUNT } from "./memoryLimits.js";
 import { randomUUID } from "node:crypto";
 import { normalizeToolCallingProfile, type ToolCallingProfile } from "../llm/toolCallingProfile.js";
+import type { ChatToolResultDisplay } from "../ui/messaging.js";
 import type { FileChangeSummary } from "./fileChanges.js";
 import { attachmentFileType, isImageAttachment, MAX_TEXT_ATTACHMENT_BYTES } from "./attachments.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "./attachmentLimits.js";
@@ -15,7 +16,7 @@ import {
   type ReasoningEffort
 } from "./reasoningEffort.js";
 
-export const CHATS_DIR = ".local-llm-chats";
+export const CHATS_DIR = ".locality";
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 export const VISION_TOKEN_RESERVE = 4096;
 
@@ -51,9 +52,11 @@ export interface ChatMessage {
     createsNewFile?: boolean;
     /** Display command for process checks and stops, retained across reloads. */
     processCommand?: string;
+    processOutput?: string;
+    processExitCode?: number;
     /** Exact change made by this call, independent of later edits to the same file. */
     fileChange?: FileChangeSummary;
-  };
+  } & ChatToolResultDisplay;
   /** File changes made during this assistant turn. */
   fileChanges?: FileChangeSummary[];
   /** Chat-owned image or text assets supplied by the user or a view_image tool result. */
@@ -76,16 +79,12 @@ export interface ChatRecord {
   reasoningEffort: ReasoningEffort;
   /** Complete saved transcript; compaction never rewrites these messages. */
   messages: ChatMessage[];
-  /** Model-only history after compaction. Absent in uncompacted/legacy records. */
+  /** Model-only history after compaction. Absent in uncompacted records. */
   contextMessages?: ChatMessage[];
   memory?: ChatMemory;
   memoryCreations?: MemoryCreation[];
-  /** Legacy automatic selections, retained for compatibility but no longer injected. */
-  memorySelection?: MemorySnapshot[];
   /** Memories explicitly recalled by tools, for the UI disclosure only. */
   recalledMemories?: MemorySnapshot[];
-  /** Legacy automatic-selection usage; unused by memory tools. */
-  memoryUsage?: string[];
   /** Token count of the model context, not the full transcript. */
   totalTokens: number;
   /** Model whose tokenizer produced the cached per-message token counts. */
@@ -95,8 +94,6 @@ export interface ChatRecord {
 const recordWrites = new Map<string, Promise<unknown>>();
 
 export class ChatStorage {
-  private migrated = false;
-
   constructor(
     private workspaceRoot: string,
     private storageRoot = path.join(os.homedir(), CHATS_DIR)
@@ -194,7 +191,6 @@ export class ChatStorage {
 
   async ensureDir(): Promise<void> {
     await fs.mkdir(this.dir(), { recursive: true });
-    await this.migrateWorkspaceChats();
   }
 
   async list(): Promise<{ id: string; title: string; updatedAt: number }[]> {
@@ -407,18 +403,6 @@ export class ChatStorage {
   }
 
   private withWorkspace(rec: ChatRecord, id: string): ChatRecord {
-    const legacy = rec as ChatRecord & {
-      modelFamily?: unknown;
-      toolCallingMode?: unknown;
-      thinkingMode?: unknown;
-      reasoningEffort?: unknown;
-      mode?: unknown;
-      planMode?: unknown;
-    };
-    const current = { ...legacy };
-    delete (current as { modelFamily?: unknown }).modelFamily;
-    delete (current as { thinkingMode?: unknown }).thinkingMode;
-    delete (current as { planMode?: unknown }).planMode;
     const normalizeMessages = (messages: ChatMessage[]): ChatMessage[] => messages.map(message => {
       const attachments = Array.isArray(message.attachments)
         ? message.attachments.filter(isValidAttachment).slice(0, MAX_ATTACHMENTS_PER_MESSAGE)
@@ -427,49 +411,18 @@ export class ChatStorage {
     });
     const messages = normalizeMessages(Array.isArray(rec.messages) ? rec.messages : []);
     return {
-      ...current,
+      ...rec,
       id,
       workspaceRoot: normalizeWorkspaceRoot(rec.workspaceRoot ?? ""),
-      toolCallingMode: normalizeToolCallingProfile(legacy.toolCallingMode, legacy.modelFamily),
-      mode: normalizeChatMode(legacy.mode, legacy.planMode),
-      reasoningEffort: normalizeReasoningEffort(legacy.reasoningEffort ?? legacy.thinkingMode),
+      toolCallingMode: normalizeToolCallingProfile(rec.toolCallingMode),
+      mode: normalizeChatMode(rec.mode),
+      reasoningEffort: normalizeReasoningEffort(rec.reasoningEffort),
       messages,
       memory: validMemory(rec.memory) ? rec.memory : undefined,
       memoryCreations: Array.isArray(rec.memoryCreations) ? rec.memoryCreations.filter(validMemoryCreation) : undefined,
-      memoryUsage: Array.isArray(rec.memoryUsage) ? rec.memoryUsage.filter(isValidChatId).slice(0, MAX_MEMORY_COUNT) : undefined,
       recalledMemories: Array.isArray(rec.recalledMemories) ? rec.recalledMemories.filter(validSnapshot).slice(-MAX_MEMORY_COUNT) : undefined,
-      memorySelection: Array.isArray(rec.memorySelection) ? rec.memorySelection.filter(validSnapshot).slice(0, MAX_MEMORY_COUNT) : undefined,
       contextMessages: Array.isArray(rec.contextMessages) ? normalizeMessages(rec.contextMessages) : undefined
     } as ChatRecord;
-  }
-
-  private async migrateWorkspaceChats(): Promise<void> {
-    if (this.migrated) return;
-    this.migrated = true;
-    const legacyDir = path.join(this.workspaceRoot, CHATS_DIR);
-    if (samePath(legacyDir, this.dir())) return;
-
-    let entries: string[];
-    try { entries = await fs.readdir(legacyDir); } catch { return; }
-    for (const e of entries) {
-      if (!e.endsWith(".json")) continue;
-      const id = e.slice(0, -5);
-      if (!isValidChatId(id)) continue;
-      const src = path.join(legacyDir, e);
-      const dest = path.join(this.dir(), e);
-      try {
-        const raw = await fs.readFile(src, "utf-8");
-        const rec = this.withWorkspace(JSON.parse(raw) as ChatRecord, id);
-        const migrated: ChatRecord = {
-          ...rec,
-          id,
-          workspaceRoot: this.workspaceRoot
-        };
-        await fs.writeFile(dest, JSON.stringify(migrated, null, 2), "utf-8");
-        await fs.unlink(src);
-      } catch { /* leave problematic legacy files untouched */ }
-    }
-    try { await fs.rmdir(legacyDir); } catch { /* ignore non-empty legacy dirs */ }
   }
 }
 
@@ -541,10 +494,6 @@ function normalizeWorkspaceRoot(root: string): string {
   if (!root.trim()) return "";
   const resolved = path.resolve(root);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-
-function samePath(a: string, b: string): boolean {
-  return normalizeWorkspaceRoot(a) === normalizeWorkspaceRoot(b);
 }
 
 /** The transcript and model context share an array until the first compaction. */

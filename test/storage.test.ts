@@ -2,14 +2,14 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ChatStorage, CHATS_DIR, isValidAttachment, isValidChatId } from "../src/chat/storage.js";
+import { ChatStorage, isValidAttachment, isValidChatId } from "../src/chat/storage.js";
 
 let ws: string;
 let chatsRoot: string;
 
 beforeEach(async () => {
-  ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-storage-"));
-  chatsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llh-chats-"));
+  ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-storage-"));
+  chatsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "locality-chats-"));
 });
 
 afterEach(async () => {
@@ -191,7 +191,7 @@ describe("ChatStorage", () => {
     await storage.save(first);
     await storage.save(second);
 
-    const otherWorkspace = path.join(os.tmpdir(), "llh-other-workspace");
+    const otherWorkspace = path.join(os.tmpdir(), "locality-other-workspace");
     const otherStorage = new ChatStorage(otherWorkspace, chatsRoot);
     const other = otherStorage.newRecord("compat-gemma4");
     await otherStorage.save(other);
@@ -237,7 +237,7 @@ describe("ChatStorage", () => {
     });
   });
 
-  it("uses Default reasoning effort for new and legacy chats without a saved mode", async () => {
+  it("uses default values for new chats and missing saved preferences", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
     expect(storage.newRecord("compat-gemma4").reasoningEffort).toBe("default");
     expect(storage.newRecord("compat-gemma4").mode).toBe("act");
@@ -246,70 +246,25 @@ describe("ChatStorage", () => {
     await fs.writeFile(path.join(chatsRoot, `${id}.json`), JSON.stringify({
       id,
       workspaceRoot: ws,
-      title: "Legacy chat",
-      toolCallingMode: "compat-gemma4",
-      planMode: false,
+      title: "Chat without preferences",
       messages: [],
       totalTokens: 0
     }));
 
-    await expect(storage.load(id)).resolves.toMatchObject({ reasoningEffort: "default", mode: "act" });
+    await expect(storage.load(id)).resolves.toMatchObject({
+      reasoningEffort: "default", mode: "act", toolCallingMode: "compat-gemma4"
+    });
   });
 
-  it("migrates legacy plan-mode records and preserves review mode", async () => {
+  it.each(["act", "plan", "review"] as const)("preserves %s mode and current model preferences", async mode => {
     const storage = new ChatStorage(ws, chatsRoot);
-    const planId = "123e4567-e89b-42d3-a456-426614174006";
-    const reviewId = "123e4567-e89b-42d3-a456-426614174007";
-    const base = {
-      workspaceRoot: ws,
-      title: "Mode chat",
-      toolCallingMode: "native",
-      messages: [],
-      totalTokens: 0
-    };
-    await fs.writeFile(path.join(chatsRoot, `${planId}.json`), JSON.stringify({ ...base, id: planId, planMode: true }));
-    await fs.writeFile(path.join(chatsRoot, `${reviewId}.json`), JSON.stringify({ ...base, id: reviewId, mode: "review" }));
+    const record = storage.newRecord("compat-qwen3", "effort:high");
+    record.mode = mode;
+    await storage.save(record);
 
-    await expect(storage.load(planId)).resolves.toMatchObject({ mode: "plan" });
-    await expect(storage.load(reviewId)).resolves.toMatchObject({ mode: "review" });
-  });
-
-  it("migrates the previous thinking-mode names", async () => {
-    const storage = new ChatStorage(ws, chatsRoot);
-    const id = "123e4567-e89b-42d3-a456-426614174004";
-    await fs.writeFile(path.join(chatsRoot, `${id}.json`), JSON.stringify({
-      id,
-      workspaceRoot: ws,
-      title: "Development chat",
-      toolCallingMode: "compat-gemma4",
-      planMode: false,
-      thinkingMode: "expert",
-      messages: [],
-      totalTokens: 0
-    }));
-
-    await expect(storage.load(id)).resolves.toMatchObject({ reasoningEffort: "effort:high" });
-  });
-
-  it("normalizes legacy family records into unified compatibility profiles", async () => {
-    const storage = new ChatStorage(ws, chatsRoot);
-    const id = "123e4567-e89b-42d3-a456-426614174005";
-    await fs.writeFile(path.join(chatsRoot, `${id}.json`), JSON.stringify({
-      id,
-      workspaceRoot: ws,
-      title: "Legacy Qwen chat",
-      modelFamily: "qwen3",
-      planMode: false,
-      messages: [],
-      totalTokens: 0
-    }));
-
-    const loaded = await storage.load(id);
-    expect(loaded?.toolCallingMode).toBe("compat-qwen3");
-    expect(loaded).not.toHaveProperty("modelFamily");
-    if (loaded) await storage.save(loaded);
-    await expect(fs.readFile(path.join(chatsRoot, `${id}.json`), "utf8"))
-      .resolves.not.toContain("modelFamily");
+    await expect(storage.load(record.id)).resolves.toMatchObject({
+      mode, toolCallingMode: "compat-qwen3", reasoningEffort: "effort:high"
+    });
   });
 
   it("forks a chat through the selected assistant response", async () => {
@@ -334,23 +289,6 @@ describe("ChatStorage", () => {
     await expect(storage.load(forked.id)).resolves.toMatchObject({
       messages: [{ content: "first" }, { content: "first answer" }]
     });
-  });
-
-  it("migrates legacy workspace chats into the shared chats directory", async () => {
-    const storage = new ChatStorage(ws, chatsRoot);
-    const legacyDir = path.join(ws, CHATS_DIR);
-    const id = "123e4567-e89b-42d3-a456-426614174002";
-    await fs.mkdir(legacyDir, { recursive: true });
-    await fs.writeFile(path.join(legacyDir, `${id}.json`), JSON.stringify({
-      id,
-      title: "Legacy chat",
-      updatedAt: 30,
-      messages: []
-    }));
-
-    await expect(storage.list()).resolves.toEqual([{ id, title: "Legacy chat", updatedAt: 30 }]);
-    await expect(fs.readFile(path.join(chatsRoot, `${id}.json`), "utf-8")).resolves.toContain("workspaceRoot");
-    await expect(fs.stat(path.join(legacyDir, `${id}.json`))).rejects.toThrow();
   });
 });
 

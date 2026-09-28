@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as os from "node:os";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { runProcess, startProcess } from "../src/tools/terminalTool.js";
 import { sanitizeTerminalText } from "../src/util/terminalText.js";
 
@@ -51,8 +53,44 @@ describe("background command execution", () => {
     expect(progress.at(-1)).toEqual({
       stdout: result.stdout,
       stderr: result.stderr,
+      output: result.output,
       truncated: result.truncated
     });
+  });
+
+  it("keeps merged terminal output in arrival order and preserves a nonzero exit code", async () => {
+    const result = await runProcess(process.execPath, ["-e", `
+      const { writeSync } = require('node:fs');
+      writeSync(1, 'first\\n');
+      setTimeout(() => writeSync(2, 'second\\n'), 100);
+      setTimeout(() => { writeSync(1, 'third\\n'); process.exitCode = 2; }, 200);
+    `], os.tmpdir());
+    expect(result).toMatchObject({
+      exitCode: 2, stdout: "first\nthird\n", stderr: "second\n", output: "first\nsecond\nthird\n"
+    });
+  });
+
+  it("returns a missing executable as a command outcome rather than a tool error", async () => {
+    await expect(runProcess("locality-nonexistent-command-for-test", [], os.tmpdir())).resolves.toMatchObject({
+      exitCode: 127, stdout: "", stderr: "Command 'locality-nonexistent-command-for-test' not found.\n",
+      output: "Command 'locality-nonexistent-command-for-test' not found.\n"
+    });
+  });
+
+  it.skipIf(process.platform === "win32")("returns a non-executable file as exit 126", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "locality-command-"));
+    try {
+      const file = path.join(root, "not-executable");
+      await fs.writeFile(file, "#!/bin/sh\n", { mode: 0o600 });
+      await expect(runProcess(file, [], root)).resolves.toMatchObject({ exitCode: 126, stdout: "", stderr: expect.stringContaining("EACCES") });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an unavailable working directory as a tool error", async () => {
+    await expect(runProcess(process.execPath, ["-e", ""], path.join(os.tmpdir(), "locality-nonexistent-cwd-for-test")))
+      .rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("turns terminal formatting into clean UTF-8 plain text", () => {

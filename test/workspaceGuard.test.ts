@@ -8,8 +8,8 @@ let ws: string;
 let outside: string;
 
 beforeAll(async () => {
-  ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-ws-"));
-  outside = await fs.mkdtemp(path.join(os.tmpdir(), "llh-out-"));
+  ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-ws-"));
+  outside = await fs.mkdtemp(path.join(os.tmpdir(), "locality-out-"));
   await fs.writeFile(path.join(ws, "ok.txt"), "ok");
   await fs.writeFile(path.join(outside, "secret"), "x");
   // symlink inside ws pointing to outside file

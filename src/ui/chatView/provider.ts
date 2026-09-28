@@ -1,3 +1,4 @@
+import { featureStyles } from "../../build/assets.js";
 import { fetchServerMetadata } from "../../llm/client.js";
 import { fileURLToPath } from "node:url";
 import { MAX_TEXT_ATTACHMENT_BYTES } from "../../chat/attachments.js";
@@ -18,33 +19,10 @@ import {
   type ReasoningEffort
 } from "../../chat/reasoningEffort.js";
 import { assertInsideWorkspace } from "../../tools/workspaceGuard.js";
-import { execFileUtf8 } from "../../util/exec.js";
+import { readGitHeadContent, type GitExtensionApi } from "../../scm/gitApi.js";
 import type { ChatToExt, ExtToChat, SideTab, UiAttachment, ChatTab } from "../messaging.js";
 import { reorderItemsById, shouldDrainMessageQueue } from "./queuedMessages.js";
 import { classifyWorkspacePath } from "./workspacePathTypes.js";
-
-interface GitChangeState {
-  uri?: vscode.Uri;
-  resourceUri?: vscode.Uri;
-  originalUri?: vscode.Uri;
-}
-
-interface GitRepositoryApi {
-  rootUri: vscode.Uri;
-  state?: {
-    workingTreeChanges?: GitChangeState[];
-    indexChanges?: GitChangeState[];
-    mergeChanges?: GitChangeState[];
-  };
-}
-
-interface GitApi {
-  repositories?: GitRepositoryApi[];
-}
-
-interface GitExtensionApi {
-  getAPI(version: number): GitApi;
-}
 
 interface ChatRuntime {
   session?: ChatSession;
@@ -71,8 +49,8 @@ function newRuntime(): ChatRuntime {
 }
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
-  static readonly viewType = "localLlmHarness.chat";
-  private static readonly reviewScheme = "local-llm-harness-review";
+  static readonly viewType = "locality.chat";
+  private static readonly reviewScheme = "locality-review";
   private view?: vscode.WebviewView;
   private runtimes = new Map<string, ChatRuntime>();
   private navigationGeneration = 0;
@@ -146,13 +124,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private updateFocusContext(focused: boolean): void {
     if (this.chatFocusCtx !== focused) {
       this.chatFocusCtx = focused;
-      void vscode.commands.executeCommand("setContext", "localLlmHarness.chatFocus", focused);
+      void vscode.commands.executeCommand("setContext", "locality.chatFocus", focused);
     }
   }
 
   reveal(): void {
     this.view?.show?.(true);
-    void vscode.commands.executeCommand("localLlmHarness.chat.focus");
+    void vscode.commands.executeCommand("locality.chat.focus");
   }
 
   post(msg: UiEvent | ExtToChat): void {
@@ -167,8 +145,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     } else if ("kind" in msg && msg.kind === "chatLoaded") {
       const { contextMessages, ...transcript } = msg.record;
       delete transcript.memory;
-      delete transcript.memorySelection;
-      delete transcript.memoryUsage;
       delete transcript.recalledMemories;
       payload = {
         ...msg,
@@ -358,13 +334,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const storage = this.getStorage();
     const ws = this.getWorkspaceRoot();
     if (!storage || !ws) {
-      vscode.window.showErrorMessage("Local LLM Harness: open a folder to start a chat.");
+      vscode.window.showErrorMessage("Locality: open a folder to start a chat.");
       return;
     }
     const runtime = newRuntime();
     runtime.storage = storage;
     const session = new ChatSession({
-      storage, workspaceRoot: ws, record: rec, memory: this.memory,
+      storage, workspaceRoot: ws, record: rec, memory: this.memory, secrets: this.context.secrets,
       emit: event => {
         if (runtime.removed) return;
         if (event.kind === "visionCapability") {
@@ -478,8 +454,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private workspaceReasoningEffort(): ReasoningEffort {
     return normalizeReasoningEffort(
-      this.context.workspaceState.get<unknown>(WORKSPACE_REASONING_EFFORT_KEY)
-        ?? this.context.workspaceState.get<unknown>("localLlmHarness.workspaceThinkingMode", DEFAULT_REASONING_EFFORT)
+      this.context.workspaceState.get<unknown>(WORKSPACE_REASONING_EFFORT_KEY, DEFAULT_REASONING_EFFORT)
     );
   }
 
@@ -633,24 +608,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "cancel": this.session?.cancel(); break;
       case "approveTool": this.session?.approve(m.toolId, m.approved); break;
       case "answerQuestion": this.session?.answerQuestion(m.toolId, m.answer); break;
-      case "stopProcess": await this.session?.stopProcessFromUser(m.jobId); break;
+      case "featureAction": await this.session?.handleFeatureAction(m.id); break;
       case "setChatMode": await this.setChatMode(m.mode); break;
       case "setReasoningEffort": await this.setReasoningEffort(m.effort); break;
       case "compactNow": await this.compactNow(); break;
       case "compactInterruptAndRun": await this.compactAfterInterrupt(); break;
       case "newChat":
-        await vscode.commands.executeCommand("localLlmHarness.newChat");
+        await vscode.commands.executeCommand("locality.newChat");
         break;
       case "openChats":
         this.onOpenSideTab("chats");
-        await vscode.commands.executeCommand("workbench.view.extension.localLlmHarness");
+        await vscode.commands.executeCommand("workbench.view.extension.locality");
         break;
       case "deleteCurrent":
-        await vscode.commands.executeCommand("localLlmHarness.deleteChat");
+        await vscode.commands.executeCommand("locality.deleteChat");
         break;
       case "openSettings":
         this.onOpenSideTab("settings");
-        await vscode.commands.executeCommand("workbench.view.extension.localLlmHarness");
+        await vscode.commands.executeCommand("workbench.view.extension.locality");
         break;
       case "acceptPlan": {
         const runtime = this.active;
@@ -905,7 +880,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async openWorkspaceFile(filePath: string, line?: number): Promise<void> {
     const workspaceRoot = this.getWorkspaceRoot();
     if (!workspaceRoot) {
-      vscode.window.showErrorMessage("Local LLM Harness: open a folder to open files.");
+      vscode.window.showErrorMessage("Locality: open a folder to open files.");
       return;
     }
 
@@ -931,7 +906,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
       }
     } catch (err) {
-      vscode.window.showErrorMessage(`Local LLM Harness: could not open file: ${(err as Error).message}`);
+      vscode.window.showErrorMessage(`Locality: could not open file: ${(err as Error).message}`);
     }
   }
 
@@ -948,7 +923,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         { preview: false }
       );
     } catch (err) {
-      vscode.window.showErrorMessage(`Local LLM Harness: could not open review diff: ${(err as Error).message}`);
+      vscode.window.showErrorMessage(`Locality: could not open review diff: ${(err as Error).message}`);
     }
   }
 
@@ -971,7 +946,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         { preview: false }
       );
     } catch (err) {
-      vscode.window.showErrorMessage(`Local LLM Harness: could not open proposed diff: ${(err as Error).message}`);
+      vscode.window.showErrorMessage(`Locality: could not open proposed diff: ${(err as Error).message}`);
     }
   }
 
@@ -1007,15 +982,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           return { originalUri: change.originalUri, modifiedUri: change.uri ?? change.resourceUri ?? fileUri };
         }
       } catch {
-        // Fall back to a direct git: URI below.
+        // Read HEAD through the same fixed Git API below.
       }
     }
 
     try {
-      const original = await this.readGitHeadContent(workspaceRoot, absolute);
+      const original = await readGitHeadContent(absolute);
       return { originalUri: this.snapshotReviewUri(`${path.relative(workspaceRoot, absolute)} (HEAD)`, original), modifiedUri: fileUri };
     } catch {
-      return { originalUri: this.snapshotReviewUri(`${path.relative(workspaceRoot, absolute)} (empty)`, ""), modifiedUri: fileUri };
+      throw new Error("The Git baseline is unavailable. Enable the built-in Git extension or review the captured edit diff.");
     }
   }
 
@@ -1027,12 +1002,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
     this.reviewDocuments.set(uri.toString(), content);
     return uri;
-  }
-
-  private async readGitHeadContent(workspaceRoot: string, absolute: string): Promise<string> {
-    const relative = path.relative(workspaceRoot, absolute).replace(/\\/g, "/");
-    const { stdout } = await execFileUtf8("git", ["-C", workspaceRoot, "show", `HEAD:${relative}`]);
-    return stdout;
   }
 
   private html(webview: vscode.Webview): string {
@@ -1057,6 +1026,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       <link rel="stylesheet" href="${katexCss}">
       <link rel="stylesheet" href="${cssUri}">
       <link rel="stylesheet" href="${webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media/chatControls.css"))}">
+      ${featureStyles.map(file => `<link rel="stylesheet" href="${webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", file))}">`).join("\n")}
     </head><body>
       <div id="app"></div>
       <script nonce="${nonce}" src="${scriptUri}"></script>

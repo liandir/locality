@@ -39,14 +39,29 @@ jobs:
       - name: Package VSIX
         run: npm run package:vsix
 
+      - name: Prepare stable release filenames
+        run: |
+          node --input-type=module <<'NODE'
+          import { copyFile, mkdir, readFile, rm } from "node:fs/promises";
+          import { profiles } from "./scripts/build-profiles.mjs";
+
+          const { name, version } = JSON.parse(await readFile("package.json", "utf8"));
+          const output = ".build/release-assets";
+          await rm(output, { recursive: true, force: true });
+          await mkdir(output, { recursive: true });
+          for (const profile of profiles) {
+            await copyFile(`artifacts/${name}-${version}-${profile}.vsix`, `${output}/${name}-${profile}.vsix`);
+          }
+          NODE
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" ./*.vsix --clobber
+            gh release upload "${GITHUB_REF_NAME}" .build/release-assets/*.vsix --clobber
           else
-            gh release create "${GITHUB_REF_NAME}" ./*.vsix \
+            gh release create "${GITHUB_REF_NAME}" .build/release-assets/*.vsix \
               --title "${GITHUB_REF_NAME}" \
-              --notes "VS Code extension package for Local LLM Harness."
+              --notes "VS Code extension package for Locality."
           fi

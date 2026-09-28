@@ -120,7 +120,7 @@ function contextActivityIds(events: UiEvent[]): string[] {
 
 function mockCommandHandle(result: Promise<{ exitCode: number; stdout: string; stderr: string; truncated: boolean }>) {
   let output = { stdout: "", stderr: "", truncated: false };
-  void result.then(value => { output = value; });
+  void result.then(value => { output = value; }, () => undefined);
   return {
     result,
     snapshot: () => output,
@@ -286,7 +286,7 @@ describe("ChatSession", () => {
   });
 
   it.each(["progress", "partial-progress", "output"])("keeps successful reads active through result ingestion using %s", async completionSignal => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "file A\n", "utf8");
     await fs.writeFile(path.join(ws, "b.txt"), "file B\n", "utf8");
     mocks.settings.toolCallingMode = "native";
@@ -346,7 +346,7 @@ describe("ChatSession", () => {
     ["run_command", { command: "echo hello" }],
     ["update_todos", { todos: [{ content: "Check the result", status: "in_progress" }] }]
   ])("keeps %s results usable while attributing prompt ingestion to the tool", async (name, args) => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     const legacy = name === "write_file" || name === "run_command";
     mocks.settings.toolCallingMode = legacy ? "compat-qwen3" : "native";
@@ -394,7 +394,7 @@ describe("ChatSession", () => {
   });
 
   it("finishes only the reads included in the current prompt", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "native";
     const events: UiEvent[] = [];
@@ -424,7 +424,7 @@ describe("ChatSession", () => {
   });
 
   it.each(["cancel", "error", "empty"])("settles pending reads when the next request ends with %s", async outcome => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "native";
     const events: UiEvent[] = [];
@@ -454,7 +454,7 @@ describe("ChatSession", () => {
   });
 
   it("shows failed reads immediately and attributes ingestion of their errors to the tool", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     mocks.settings.toolCallingMode = "native";
     const events: UiEvent[] = [];
     let pass = 0;
@@ -549,7 +549,7 @@ describe("ChatSession", () => {
   });
 
   it.each([true, false])("keeps title waits visible after HTTP acceptance with tool ingestion pending (progress: %s)", async withProgress => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "native";
     let resolveTitle: (title: string) => void = () => undefined;
@@ -613,7 +613,7 @@ describe("ChatSession", () => {
   });
 
   it("uses native tool schemas and replays calls/results with their protocol id", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "native";
     const requests: Array<Record<string, unknown>> = [];
@@ -671,7 +671,7 @@ describe("ChatSession", () => {
   });
 
   it("applies mode changes made during a turn only to the next user message", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "native";
     const requests: Array<{
@@ -724,7 +724,7 @@ describe("ChatSession", () => {
   });
 
   it("persists successful file-creation metadata for restored tool labels", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     mocks.settings.toolCallingMode = "native";
     mocks.settings.autoapproveWrites = true;
     let pass = 0;
@@ -962,7 +962,7 @@ describe("ChatSession", () => {
   });
 
   it("falls back to legacy syntax only after an explicit native-tools rejection", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "compat-gemma4";
     const requests: Array<Record<string, unknown>> = [];
@@ -991,7 +991,7 @@ describe("ChatSession", () => {
   });
 
   it("keeps GPT-OSS on structured native calls when the server supports them", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "compat-gpt-oss";
     const requests: Array<Record<string, unknown>> = [];
@@ -1024,7 +1024,7 @@ describe("ChatSession", () => {
   });
 
   it("recovers leaked GPT-OSS Harmony calls without leaving native transport", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "compat-gpt-oss";
     const requests: Array<Record<string, unknown>> = [];
@@ -1061,7 +1061,7 @@ describe("ChatSession", () => {
   });
 
   it("uses the GPT-OSS Harmony fallback only after native tools are rejected", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "compat-gpt-oss";
     const requests: Array<Record<string, unknown>> = [];
@@ -1098,7 +1098,7 @@ describe("ChatSession", () => {
   });
 
   it("recovers Muse reasoning and ATEM calls in Muse compatibility mode", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "compat-muse-glimmer";
     let pass = 0;
@@ -1208,7 +1208,7 @@ describe("ChatSession", () => {
     });
     const { ChatStorage } = await import("../src/chat/storage.js");
     const { ChatSession } = await import("../src/chat/session.js");
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "llh-text-attachments-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "locality-text-attachments-"));
     try {
       const storage = new ChatStorage(dir, path.join(dir, "chats"));
       const record = storage.newRecord(profile);
@@ -1242,7 +1242,7 @@ describe("ChatSession", () => {
   it("combines text and image files in native content without turning text into an image", async () => {
     const { ChatStorage } = await import("../src/chat/storage.js");
     const { ChatSession } = await import("../src/chat/session.js");
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "llh-mixed-attachments-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "locality-mixed-attachments-"));
     mocks.streamChat.mockImplementation(async function* () { yield { kind: "text", text: "Done." }; });
     try {
       const storage = new ChatStorage(dir, path.join(dir, "chats"));
@@ -1261,7 +1261,7 @@ describe("ChatSession", () => {
   it("counts attachment contents before sending and preserves files when context is too small", async () => {
     const { ChatStorage } = await import("../src/chat/storage.js");
     const { ChatSession } = await import("../src/chat/session.js");
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "llh-attachment-budget-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "locality-attachment-budget-"));
     mocks.fetchServerContextSize.mockResolvedValue(8192);
     mocks.tokenize.mockImplementation(async (_endpoint, text) => text.includes("OVERFLOW_ATTACHMENT") ? 9000 : 1);
     try {
@@ -1472,7 +1472,7 @@ describe("ChatSession", () => {
   });
 
   it("recovers Qwen3-Coder function XML leaked through native content", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.mkdir(path.join(ws, "src"));
     mocks.settings.toolCallingMode = "compat-qwen3";
     let pass = 0;
@@ -1516,7 +1516,7 @@ describe("ChatSession", () => {
     { description: "suggested answer", answer: "Review all files" },
     { description: "long custom answer", answer: `Review these files:\n${'Keep "all" details.  '.repeat(40)}\nFinal detail.` }
   ])("preserves the $description and recovers native function XML after a question in Qwen mode", async ({ answer }) => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.mkdir(path.join(ws, "src"));
     mocks.settings.toolCallingMode = "compat-qwen3";
     let pass = 0;
@@ -1610,7 +1610,7 @@ describe("ChatSession", () => {
   });
 
   it("does not execute the same structured call id twice", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "native";
     mocks.streamChat.mockImplementation(async function* () {
@@ -1669,12 +1669,49 @@ describe("ChatSession", () => {
     }));
   });
 
+  it.each([0, 1, 127, "runner-error"])("separates command outcome %s from tool status and persists display data", async outcome => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-command-history-"));
+    try {
+      mocks.settings.toolCallingMode = "native";
+      mocks.settings.autoapproveCommands = true;
+      if (outcome === "runner-error") mocks.runProcess.mockRejectedValue(new Error("runner unavailable"));
+      else mocks.runProcess.mockResolvedValue({ exitCode: outcome, stdout: "out\n", stderr: "err\n", output: "err\nout\n", truncated: false });
+      let pass = 0;
+      mocks.streamChat.mockImplementation(async function* () {
+        if (pass++ === 0) yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["test"]}', id: "command_outcome" };
+        else yield { kind: "text", text: "done" };
+      });
+      const { ChatStorage } = await import("../src/chat/storage.js");
+      const { ChatSession } = await import("../src/chat/session.js");
+      const storage = new ChatStorage(ws, path.join(ws, "chats"));
+      const record = storage.newRecord("native");
+      const events: UiEvent[] = [];
+      const session = new ChatSession({ storage, workspaceRoot: ws, record, emit: event => events.push(event) });
+      await session.sendUserMessage("Run the command");
+      await session.shutdown();
+      const reloaded = await storage.load(record.id);
+      const message = reloaded?.messages.find(item => item.toolCall?.id === "command_outcome");
+      const status = outcome === "runner-error" ? "failed" : "executed";
+      expect(message?.toolCall?.status).toBe(status);
+      expect(events).toContainEqual(expect.objectContaining({ kind: "toolCallResolved", status }));
+      if (outcome === "runner-error") {
+        expect(message?.content).toContain("runner unavailable");
+        expect(message?.toolCall?.processExitCode).toBeUndefined();
+      } else {
+        expect(message?.toolCall).toMatchObject({ processOutput: "err\nout\n", processExitCode: outcome });
+        expect(message?.content).toBe(`exit ${outcome}\n--- stdout ---\nout\n\n--- stderr ---\nerr\n`);
+      }
+    } finally {
+      await fs.rm(ws, { recursive: true, force: true });
+    }
+  });
+
   it.each(["run_command", "run_process"])("shows the command when checking a long-running %s", async toolName => {
     const legacy = toolName === "run_command";
     mocks.settings.toolCallingMode = legacy ? "compat-qwen3" : "native";
     mocks.settings.autoapproveCommands = true;
-    const finalResult = { exitCode: 0, stdout: "started\ndone\n", stderr: "", truncated: false };
-    let output = { stdout: "started\n", stderr: "", truncated: false };
+    const finalResult = { exitCode: 0, stdout: "started\ndone\n", stderr: "", output: "started\ndone\n", truncated: false };
+    let output = { stdout: "started\n", stderr: "", output: "started\n", truncated: false };
     let resolveResult = (_value: typeof finalResult): void => undefined;
     const result = new Promise<typeof finalResult>(resolve => { resolveResult = resolve; });
     let waits = 0;
@@ -1733,6 +1770,39 @@ describe("ChatSession", () => {
     });
     expect(record.messages.filter(message => message.role === "tool").map(message => message.toolCall?.processCommand))
       .toEqual(["npm test", "npm test"]);
+    expect(record.messages.filter(message => message.role === "tool").map(message => ({
+      output: message.toolCall?.processOutput, exitCode: message.toolCall?.processExitCode
+    }))).toEqual([{ output: "started\ndone\n", exitCode: 0 }, { output: "done\n", exitCode: 0 }]);
+  });
+
+  it("persists a runner failure after the initial command has yielded", async () => {
+    mocks.settings.toolCallingMode = "native";
+    mocks.settings.autoapproveCommands = true;
+    let fail!: (error: Error) => void;
+    const result = new Promise<never>((_resolve, reject) => { fail = reject; });
+    mocks.startProcess.mockReturnValue({
+      result,
+      snapshot: () => ({ stdout: "started\n", stderr: "", output: "started\n", truncated: false }),
+      wait: vi.fn(async () => ({ running: true as const })),
+      stop: vi.fn(async () => result)
+    });
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (pass++ === 0) yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["test"]}', id: "yield_then_fail" };
+      else {
+        fail(new Error("runner connection lost"));
+        await Promise.resolve();
+        yield { kind: "text", text: "done" };
+      }
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const session = new ChatSession({ storage: { save: vi.fn() } as never, workspaceRoot: "/tmp/workspace", record, emit: event => events.push(event) });
+    await session.sendUserMessage("Run the command");
+    expect(events).toContainEqual(expect.objectContaining({ kind: "processJobState", status: "failed", resultPreview: "error: runner connection lost" }));
+    expect(record.messages.find(message => message.toolCall?.id === "yield_then_fail")?.toolCall)
+      .toMatchObject({ status: "failed", processOutput: "error: runner connection lost" });
   });
 
   it("lets the user stop a process during an active check and records the update for the model", async () => {
@@ -1793,7 +1863,7 @@ describe("ChatSession", () => {
     expect(events.some(event => event.kind === "toolCallResolved" && event.toolId === check.toolId)).toBe(false);
     const jobId = check.processJobId!;
 
-    await session.stopProcessFromUser(jobId);
+    await session.handleFeatureAction(jobId);
     releaseFinal();
     await turn;
 
@@ -1858,7 +1928,7 @@ describe("ChatSession", () => {
   });
 
   it("persists individual edit diffs through a real chat reload and later file changes", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     try {
       await fs.writeFile(path.join(ws, "a.txt"), "original\n", "utf8");
       mocks.settings.toolCallingMode = "native";
@@ -1908,7 +1978,7 @@ describe("ChatSession", () => {
   });
 
   it("uses the read revision for a native atomic edit", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\n", "utf8");
     mocks.settings.toolCallingMode = "native";
     mocks.settings.autoapproveWrites = true;
@@ -1955,7 +2025,7 @@ describe("ChatSession", () => {
   });
 
   it("executes native replace_range and insert_text edits with approval diffs", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\n", "utf8");
     mocks.settings.toolCallingMode = "native";
     mocks.settings.autoapproveWrites = true;
@@ -2088,7 +2158,7 @@ describe("ChatSession", () => {
   });
 
   it("keeps consecutive edits to the same file as separate items with per-call stats", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
     mocks.settings.autoapproveWrites = true;
 
@@ -2130,7 +2200,7 @@ describe("ChatSession", () => {
   });
 
   it("keeps a re-edit's streaming progress on its own item", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
     mocks.settings.autoapproveWrites = true;
 
@@ -2159,7 +2229,7 @@ describe("ChatSession", () => {
   });
 
   it("keeps same-file edits separate when another tool runs between them", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\n", "utf8");
     mocks.settings.autoapproveWrites = true;
 
@@ -2246,6 +2316,23 @@ describe("ChatSession", () => {
       .toContain("streamed\nok");
   });
 
+  it("does not launch when command auto-approval is disabled before execution", async () => {
+    mocks.settings.autoapproveCommands = true;
+    mockLegacyFallback([gemmaCall("run_command", "command:<|\"|>npm test<|\"|>"), "done"]);
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace", record,
+      emit: event => {
+        if (event.kind === "toolCallProposed") mocks.settings.autoapproveCommands = false;
+      }
+    });
+    await session.sendUserMessage("run tests");
+    expect(mocks.startCommand).not.toHaveBeenCalled();
+    expect(record.messages.find(message => message.role === "tool")?.content).toContain("Approval settings changed");
+  });
+
   it.each(["native", "compat-gemma4"] as const)("requires explicit approval for review-mode commands with %s", async profile => {
     mocks.settings.toolCallingMode = profile;
     mocks.settings.autoapproveCommands = true;
@@ -2299,7 +2386,7 @@ describe("ChatSession", () => {
   });
 
   it("rejects write calls in review mode even when write auto-approval is enabled", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-review-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-review-"));
     mocks.settings.toolCallingMode = "native";
     mocks.settings.autoapproveWrites = true;
     mocks.streamChat.mockImplementation(async function* () {
@@ -2483,7 +2570,7 @@ describe("ChatSession", () => {
   });
 
   it("labels an orphaned malformed Qwen edit with its actual streamed tool name", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "old\n", "utf8");
     mocks.settings.toolCallingMode = "compat-qwen3";
     mocks.settings.autoapproveWrites = true;
@@ -2520,7 +2607,7 @@ describe("ChatSession", () => {
   });
 
   it("rejects an edit that omits its required old-content precondition", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\n", "utf8");
     mocks.settings.autoapproveWrites = true;
     const responses = [
@@ -2577,7 +2664,7 @@ describe("ChatSession", () => {
   });
 
   it("executes an unclosed tool call whose body is complete JSON (qwen3)", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "hello\n", "utf8");
     mocks.settings.toolCallingMode = "compat-qwen3";
     // Only the closing </tool_call> tag was cut off; the call itself is whole.
@@ -2729,7 +2816,7 @@ describe("ChatSession", () => {
   });
 
   it("warns about shifted line numbers when an edit changes the line count", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
     mocks.settings.autoapproveWrites = true;
 
@@ -2766,7 +2853,7 @@ describe("ChatSession", () => {
   });
 
   it("rejects a same-reply line edit after an earlier edit shifted the file's line count", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
     mocks.settings.autoapproveWrites = true;
 
@@ -2798,7 +2885,7 @@ describe("ChatSession", () => {
   });
 
   it("defers a same-reply follow-up line edit even when the first kept the same line count", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
     mocks.settings.autoapproveWrites = true;
 
@@ -2828,7 +2915,7 @@ describe("ChatSession", () => {
   });
 
   it("refuses edit content that pastes read_file's line-number prefixes back", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\n", "utf8");
     mocks.settings.autoapproveWrites = true;
 
@@ -2860,7 +2947,7 @@ describe("ChatSession", () => {
   });
 
   it("returns real line numbers and a range header for ranged read_file calls", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "a.txt"), "one\ntwo\nthree\nfour\n", "utf8");
     mocks.settings.toolCallingMode = "compat-qwen3";
     // snake_case range keys, as local models commonly emit them.
@@ -2957,7 +3044,7 @@ describe("ChatSession", () => {
   });
 
   it.each([true, false])("keeps auto compaction active until its new prompt is processed (%s)", async reportProgress => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-session-"));
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     await fs.writeFile(path.join(ws, "large.txt"), "TRIGGER_COMPACTION\n", "utf8");
     mocks.settings.autoCompact = true;
     mocks.settings.autoCompactThresholdPercent = 50;
@@ -3244,7 +3331,7 @@ describe("workspace memory tools", () => {
     const { ChatStorage } = await import("../src/chat/storage.js");
     const { transcriptRevision, searchMemories } = await import("../src/chat/memory.js");
     const { ChatSession } = await import("../src/chat/session.js");
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "llh-memory-tools-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "locality-memory-tools-"));
     try {
       const storage = new ChatStorage(path.join(dir, "workspace"), path.join(dir, "chats"));
       const neighbor = new ChatStorage(path.join(dir, "workspace-other"), path.join(dir, "chats"));
@@ -3260,8 +3347,6 @@ describe("workspace memory tools", () => {
       await neighbor.save(outside);
       const record = storage.newRecord(profile);
       record.mode = mode;
-      // Historical automatic selections must never be injected by the new flow.
-      record.memorySelection = [{ sourceId: source.id, title: source.title, ...source.memory }];
       const events: UiEvent[] = [];
       let step = 0;
       let selected: { name: string; id: string };
@@ -3360,7 +3445,7 @@ describe("workspace image viewing", () => {
   ])("lists and views %s, retaining pixels after the original file is removed and the chat reloads", async (name, mime, bytes) => {
     const { ChatSession } = await import("../src/chat/session.js");
     const { ChatStorage, VISION_TOKEN_RESERVE } = await import("../src/chat/storage.js");
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "llh-view-image-"));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "locality-view-image-"));
     try {
       const storage = new ChatStorage(root, path.join(root, "chats"));
       const record = storage.newRecord("native");
@@ -3425,7 +3510,7 @@ describe("workspace image viewing", () => {
 
   it.each(["../outside.png", "escape.png"])("refuses a workspace escape via %s", async imagePath => {
     const { ChatSession } = await import("../src/chat/session.js");
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "llh-image-guard-"));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "locality-image-guard-"));
     try {
       const workspace = path.join(root, "workspace");
       await fs.mkdir(workspace);
@@ -3443,5 +3528,34 @@ describe("workspace image viewing", () => {
       expect(storage.importAttachment).not.toHaveBeenCalled();
       expect(record.messages.find(message => message.toolCall?.name === "view_image")).toMatchObject({ toolCall: { status: "failed" }, content: expect.stringContaining("outside the workspace") });
     } finally { await fs.rm(root, { recursive: true, force: true }); }
+  });
+});
+
+
+describe("tool presentation data", () => {
+  it("persists a separate display result without sending it to the model", async () => {
+    mocks.settings.toolCallingMode = "native";
+    let turn = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (turn++ === 0) yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"echo","args":["ok"]}', id: "display_test" };
+      else yield { kind: "text", text: "done" };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const session = new ChatSession({ storage: { save: vi.fn(async () => undefined) } as never, workspaceRoot: "/tmp/workspace", record, emit: event => events.push(event) });
+    const result = "Complete result for the model";
+    const displayResult = "Separate UI-only payload";
+    (session as unknown as { features: import("../src/build/contracts.js").FeatureRuntime[] }).features = [{
+      tools: ["run_process"], category: () => "command", needsApproval: () => false,
+      prepare: async () => ({}), execute: async () => ({ result, displayResult })
+    }];
+    await session.sendUserMessage("show result");
+    expect(record.messages.find(message => message.role === "tool")).toMatchObject({ content: result, toolCall: { displayResult } });
+    expect(events).toContainEqual(expect.objectContaining({ kind: "toolCallResolved", status: "executed", resultPreview: displayResult }));
+    expect(mocks.streamChat).toHaveBeenCalledTimes(2);
+    const prompt = JSON.stringify(mocks.streamChat.mock.calls[1][1].messages);
+    expect(prompt).toContain(result);
+    expect(prompt).not.toContain(displayResult);
   });
 });

@@ -1,524 +1,143 @@
-# Local LLM Harness
+<p align="center">
+  <img src="media/locality-mark.svg" alt="Locality mark" width="112" height="112">
+</p>
+<h1 align="center">Locality Harness</h1>
+<p align="center"><strong>A coding assistant in VS Code, powered by your local model.</strong></p>
 
-Local LLM Harness is a VS Code extension that turns a locally hosted
-`llama.cpp` server into a coding assistant inside your editor. Its built-in
-model requests are restricted to the configured localhost or private-network
-endpoint.
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3-blue" alt="License: GPLv3"></a>
+  <a href="https://github.com/liandir/locality/releases/latest"><img src="https://img.shields.io/github/v/release/liandir/locality?label=release&amp;color=green" alt="Latest release"></a>
+</p>
 
-**You decide what the assistant is allowed to do.** Its file tools can only
-read and write inside the open workspace, and it has no direct network tool.
-Commands run with your normal permissions and may access the internet or files
-outside the workspace. Read-only file tools are auto-approved by default;
-auto-approval for edits or commands is opt-in, off by default, and yours to toggle.
+<p align="center">
+  <a href="#features">Features</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#four-levels-of-locality">Compare editions</a> ·
+  <a href="docs/tools.md">Tools</a> ·
+  <a href="docs/user-guide.md">User guide</a>
+</p>
+
+Locality connects VS Code to a **llama.cpp server on your computer or local
+network**. Chat about your code, plan changes, review diffs, and let the assistant
+edit workspace files with your approval. Choose from four editions to control
+whether it can also run commands or search the web.
+
+## Features
+
+- **[Local model connection](docs/user-guide.md#first-time-setup)** — Use a llama.cpp server on your computer or local network, with model-specific tool-calling profiles.
+- **[Act, Plan, and Review modes](docs/user-guide.md#chat-modes)** — Make changes, prepare an implementation plan, or inspect your code.
+- **[Saved chats and parallel conversations](docs/user-guide.md#starting-a-chat)** — Switch between chat tabs while work continues and reopen conversations later.
+- **[File and image attachments](docs/user-guide.md#file-attachments)** — Add code, pasted text, or images to your messages; image input requires a vision model.
+- **[Workspace editing](docs/tools.md#edit-tools)** — Create and edit files with approval controls and diff previews.
+- **[Project instructions](docs/user-guide.md#project-instructions-agentsmd)** — Apply your project's conventions through AGENTS.md.
+- **[Workspace memory](docs/user-guide.md#workspace-memory)** — Optionally search and recall useful summaries from earlier chats in the same project.
+- **[Context management](docs/user-guide.md#managing-context)** — Track context usage and compact longer conversations automatically or on demand.
+- **[Git commit messages](docs/user-guide.md#commit-message-generation)** — Draft a commit message from your staged changes using your local model.
+
+Command execution and web research are available in selected editions; see the
+[edition comparison](#four-levels-of-locality) and [tools overview](#tools-at-a-glance).
 
 ## Install
 
-1. Open this repository on GitHub and go to **Releases**.
-2. Download the latest `.vsix` asset (`local-llm-harness-<version>.vsix`).
-3. Install it using either method:
+You need **VS Code 1.90 or newer** and a running **llama.cpp server** with a
+model that supports tool calling. The server can run on the same computer or
+another machine on your local network. Installing the extension does not install
+a model or server, and does not require Node.js.
 
-   **From the terminal** (substitute the version you downloaded):
+1. Choose an edition from the table below and download its `.vsix` file from the
+   [latest release](https://github.com/liandir/locality/releases/latest).
+2. In VS Code, open the Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`) and run
+   **Extensions: Install from VSIX…**. Select the downloaded file.
+3. Reload VS Code if prompted, then open **Locality** from the Activity Bar.
 
-   ```bash
-   code --install-extension local-llm-harness-<version>.vsix
-   ```
-
-   **From inside VS Code:** open the Command Palette (`Ctrl/Cmd+Shift+P`) and
-   run **Extensions: Install from VSIX…**, then pick the file you downloaded.
-
-4. Reload VS Code when prompted.
-
-The **Local LLM Harness** icon will appear in the Activity Bar on the left. The
-welcome screen and the chat window both open initially; you can drag the chat
-window to a location that is more comfortable for you.
-
-## First-time setup
-
-Click the harness icon in the Activity Bar, then switch to the **Settings**
-tab in the side panel. Configure the server and tool calling before chatting:
-
-- **Server URL** — the address of your `llama.cpp` server, e.g.
-  `http://127.0.0.1:8080/v1` or `http://192.168.1.50:8080/v1`. It must be
-  `localhost` or a private IP literal; DNS hostnames such as `nas.local` are
-  refused. Click **Set** to validate the endpoint, list `/v1/models`, and read
-  `/props` metadata. Choose the model below the URL; its reported alias and
-  context length are shown alongside it.
-- **Tool calling** — choose **Native server only** when the server reliably
-  returns OpenAI-compatible structured calls. The Gemma 4, Qwen 3, Muse
-  Glimmer, and GPT-OSS compatibility profiles still prefer structured calls,
-  but can recover that family's exact syntax when it leaks into text. Gemma,
-  Qwen, and GPT-OSS can also fall back to their legacy adapters when the server
-  rejects native tools.
-  Start `llama-server` with `--jinja` and a tool-aware chat template.
-
-The other settings (sampling, auto-approve toggles, safe
-commands) have sensible defaults and can be revisited later.
-
-### Muse Glimmer server requirements
-
-Muse Glimmer requires llama.cpp build `b10353` or newer and `--jinja`. Its
-template emits `to=self` reasoning, `to=user` answers, and ATEM tool calls;
-current llama.cpp converts those into `reasoning_content`, `content`, and
-structured `tool_calls` before the harness receives them. Do not add `<|eom|>`
-as a stop string: it ends one message within a turn, while `<|eot|>` ends the
-turn. The model's trained context is 131,072 tokens, and llama.cpp divides `-c`
-across `-np` slots, so size `-c` accordingly. Muse always opens a reasoning
-channel; the harness can cap it, but the template does not fully disable it.
-
-For Muse image input, also load the matching perception projector:
+You can also install from the terminal, using your downloaded filename:
 
 ```bash
-llama-server \
-  -m Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf \
-  --mmproj mmproj-Muse-Glimmer-30B-Q4_K_M.gguf \
-  --jinja -c 131072
+code --install-extension locality-safe-list.vsix
 ```
 
-The text GGUF is text-only without `--mmproj`. The projector must match the
-loaded model build.
+Downloads use stable names such as `locality-safe-list.vsix`. The links below
+always follow the release marked **Latest** on GitHub; the release tag and the
+extension's version identify the version you are installing.
 
-## Starting a chat
+## Four levels of Locality
 
-Open the harness panel and either:
+All four editions use the same local/LAN model connection and include workspace
+file reading and editing. The level determines the assistant's additional tools.
 
-- Click **+ New chat** on the Welcome page, or
-- Click any past chat in the list to reopen it.
+| Edition | Command execution | Built-in web tools | Latest download |
+| --- | --- | --- | --- |
+| **No commands** | None; work through workspace file tools | None | [Download VSIX](https://github.com/liandir/locality/releases/latest/download/locality-no-commands.vsix) |
+| **Safe list** | Only commands matching your configured rules, with workspace checks for built-ins | None | [Download VSIX](https://github.com/liandir/locality/releases/latest/download/locality-safe-list.vsix) |
+| **Commands** | General command execution for builds, tests, and other programs | None | [Download VSIX](https://github.com/liandir/locality/releases/latest/download/locality-commands.vsix) |
+| **Advanced** | Same as Commands | Brave Search or SearXNG, plus public webpage reading | [Download VSIX](https://github.com/liandir/locality/releases/latest/download/locality-advanced.vsix) |
 
-Type your question in the composer at the bottom of the chat panel and press
-**Enter** to send. Use **Shift+Enter** for a newline. While the assistant is
-responding, the send button turns into a stop button — click it (or the
-cancel icon) to interrupt the current turn.
+File edits and commands require approval by default; file reads are auto-approved.
+General commands and custom safe-list programs run with your OS permissions and
+may access files or the network beyond the workspace. Safe list is a command
+policy, not an OS sandbox. See the [tools reference](docs/tools.md) for approval
+settings and edition limits.
 
-Chats open in tabs at the top of the chat panel. Switching tabs or reopening the
-current chat preserves its running response, tool approvals, queued messages,
-and attachments. Multiple chats can run at once; the local server determines
-how their requests are scheduled. A blue dot marks running chats in the tabs
-and Recent Chats.
+To switch editions, install the other `.vsix`. Editions share the same extension
+ID, so the new one replaces the installed edition while keeping chats and shared
+settings. The installed edition is shown in Locality's Settings tab.
 
-Right-click a tab or a Recent Chats entry and choose **Rename** to change its
-title. The **×** closes a tab without stopping its chat: reopen it from Recent
-Chats to see its progress or use Stop. Closing VS Code or changing workspaces
-stops running chats.
+## Connect your model
 
-The brain button selects reasoning behavior per chat. **None** sends
-`chat_template_kwargs.enable_thinking: false`; **Default** sends no
-`reasoning_effort` or thinking override. Additional choices come from the
-`reasoningEfforts` setting and send its configured value as llama.cpp
-`reasoning_effort`. This is independent of the numeric reasoning budget.
+1. Start `llama-server` with your model, `--jinja`, and a tool-aware chat template.
+2. Open **Locality → Settings**. Set **Server URL** to an address such as
+   `http://127.0.0.1:8080/v1` or `http://192.168.1.50:8080/v1`, then click **Set**
+   and select the model. Use `localhost` or a private IP address; other DNS names
+   such as `nas.local` are not accepted.
+3. Under **Tool calling**, choose your model family's compatibility profile, or
+   **Native server only** when the server returns structured tool calls reliably.
+4. Open a project folder, click **+ New chat**, and describe what you want to do.
 
-For example, the default `settings.json` mapping is:
+Use **Act** to make changes, **Plan** to explore a solution before editing, and
+**Review** to inspect code and answer questions. Plan cannot edit files or run
+commands. Review disables file edits and always asks before running commands.
 
-```json
-"localLlmHarness.reasoningEfforts": {
-  "Low": "low",
-  "Medium": "medium",
-  "High": "high"
-}
-```
+See the [user guide](docs/user-guide.md#first-time-setup) for model compatibility,
+image attachments, context management, and settings. Advanced users can configure
+[web search](docs/tools.md#advanced-web-search) in Settings.
 
-### File attachments
+## Tools at a glance
 
-Click **Attach files** (the paperclip) to choose images or text/code files.
-You can attach up to eight files, mix images with code, send files with or
-without a message, remove them before sending, and queue them while another
-turn is running. Click an image thumbnail to enlarge it or a text-file icon
-to open the stored copy in the editor.
+The assistant selects tools as it works. You can expand a tool card to inspect
+its arguments, output, or proposed file diff before approving a change.
 
-**Ctrl+V** attaches files supplied by the clipboard, including explicit local
-file URI lists. File names and suffixes are preserved; a clipboard MIME label
-is not trusted to identify code (for example, a `.ts` file is TypeScript text).
-Ordinary short text pastes into the composer. Text of at least **10,000
-characters or 200 lines** becomes a **Pasted text** attachment with no filename
-suffix or claimed programming language. Copying a path as plain text does not
-read the file automatically; copy the file itself or use the picker.
-
-Text/code files support UTF-8 and UTF-16 with a byte-order mark, up to **1 MiB**
-each. Binary documents such as PDF, Word, and ZIP are not supported. The harness
-synthesizes a model-only prompt containing your message plus each file's name,
-optional suffix, and exact decoded contents. This works in native and legacy
-tool modes. The visible chat retains your original message and attachment cards.
-Text contents count toward context limits and normal compaction; the original
-stored files are preserved when model context is shortened.
-
-JPEG, PNG, and WebP images support up to **10 MiB** each. Images are copied into
-chat-owned local storage and replayed as native OpenAI-compatible `image_url`
-parts, with their names and file types included as text metadata. The loaded
-model must support vision and `llama-server` must use its matching `--mmproj`.
-Each retained image conservatively reserves 4,096 context tokens. If a
-compatibility chat switches to a legacy tool adapter, image messages require
-restarting the server with `--jinja` and native tool support, then retrying in a
-new chat. Text-only attachments do not require a vision model.
-
-The assistant streams its response as it goes. If the model supports a
-"thinking" mode, you'll see a collapsible **Thinking…** row above the
-response — click it to read the reasoning. When the thought is done, the
-label becomes **Thought for N seconds**.
-
-Workspace files mentioned by the assistant can appear as clickable file links.
-Click one to open it in the editor, or hover it to see the full workspace path.
-
-## Chat modes
-
-The mode menu in the chat composer offers three ways to work:
-
-- **Act mode** is the normal coding mode. The assistant can inspect the workspace,
-  propose commands, and request approval for file changes.
-- **Plan mode** restricts the assistant to read-only tools. It can browse and read
-  files but cannot write or run commands, and it finishes with an implementation
-  plan.
-- **Review mode** is read-only but answer-oriented. It can inspect files and
-  answer questions about the workspace without producing an implementation plan.
-  It may propose commands when they help validate a review, but every command
-  requires explicit approval even when command auto-approval is enabled.
-
-Once a Plan-mode response is rendered, you'll see two buttons:
-
-- **Accept plan and execute** — turns plan mode off and asks the assistant
-  to carry out what it just proposed.
-- **Reject plan and suggest changes** — keeps plan mode on and lets you
-  type feedback so the assistant can revise.
-
-Use plan mode for anything non-trivial. It gives you a chance to redirect
-before files are touched.
-
-## Commit message generation
-
-Open VS Code's **Source Control** view after staging changes. The Local LLM
-Harness button in the Source Control title bar can generate a commit message
-from the staged diff.
-
-- If staged changes exist, hover text reads **Generate commit message with
-  local-llm**. Click the button to send the staged diff to your configured
-  local `llama.cpp` endpoint and write the generated message into Git's commit
-  input box.
-- If nothing is staged, hover text reads **Please stage changes before
-  generating a commit message.** Clicking the button briefly wiggles the icon.
-- While the model is working, the icon gently jumps like an active tool. The extension only drafts the
-  message; it does not commit anything.
-
-By default, the prompt asks for an imperative, concise subject line and a short
-body only when it adds useful context. You can replace those instructions under
-**Settings → User settings → Edit User Settings**—for example, to require
-Conventional Commits, scopes, issue identifiers, or a particular body format.
-The staged diff is always appended automatically.
-
-## How tool calls work
-
-When the assistant wants to interact with your workspace, it emits a tool
-call which appears as a small card in the chat. Cards are color-coded:
-
-- **Read tools** (`read_file`, `list_dir`, `glob`) — gray. Auto-approved by
-  default; flip off **Auto-approve reads** in settings if you'd rather
-  confirm each one.
-- **File edit tools** (`create_file`, revision-checked atomic `edit_file`, and
-  line-addressed `insert_text` / `replace_range` in native mode; line-addressed
-  tools in legacy mode) — gray, with
-  a unified diff preview when expanded. Requires your approval by default.
-  Click **Accept changes** to apply, or **Reject changes and suggest
-  changes** to refuse and leave feedback in the composer.
-- **Commands** (`run_process` in native mode, `run_command` in legacy mode) —
-  purple. Each approved command runs as an isolated background child process;
-  no VS Code terminal is opened, and bounded stdout/stderr appear in the
-  expanded tool card. Native commands use a program and argument vector without
-  a shell. The assistant can decide when a command would help and propose it
-  directly. Every command requires manual approval by default. Turning on
-  **Auto-approve commands** lets all commands run without a prompt in Act mode.
-  Review mode always requires explicit approval.
-  **Checking process** cards show the original command and offer the same Stop
-  control as **Running command** while the process is running. The command also
-  remains visible in saved **Checked process** cards.
-- **Errors** — if a tool fails (e.g. file not found, write permission
-  denied), the card turns red and the error is fed back to the assistant so
-  it can self-correct without ending the chat. Click any card to expand it
-  and inspect arguments, raw output, or the diff.
-
-## Project instructions (`AGENTS.md`)
-
-If a file named `AGENTS.md` exists at the root of your workspace, its contents
-are loaded into the assistant's system prompt as standing instructions for that
-project — a place to record build/test commands, code-style conventions, or any
-context the model should keep in mind on every turn.
-
-- **Root only.** Only the workspace-root `AGENTS.md` is read; nested
-  `AGENTS.md` files in sub-directories are not (yet) supported.
-- **Always on, no setup.** It is picked up automatically whenever the file is
-  present — there is no setting to enable. Remove the file to turn it off.
-- **Live.** The file is re-read each turn, so edits take effect on your next
-  message without reloading. An empty file is ignored, and very large files are
-  truncated to keep the context window usable.
-- **Authority.** Project instructions rank *below* the harness's own safety
-  rules and your live chat messages: if they conflict, the harness rules and
-  your request win. Treat `AGENTS.md` as guidance, not a way to lift the
-  network isolation or tool restrictions.
-
-This follows the same [AGENTS.md](https://agents.md) convention used by other
-coding agents, so a file you already maintain for them works here too.
-
-## Command approval
-
-The **Auto-approve commands** switch in Settings controls approval for all
-command tool calls (`run_process` and `run_command`) in Act mode. It is off by
-default, so each command waits for you to approve or reject it. Turning it on
-lets commands run without an approval prompt. Review mode always requires
-explicit command approval, and Plan mode cannot run commands.
-
-Commands run with the permissions and environment of the VS Code extension
-host. They may access the network, start other programs, or reach files outside
-the workspace; the file tools' workspace restrictions do not sandbox commands.
-
-## Managing context
-
-A small ring on the composer toggle bar shows how full the model's context
-window is. When it gets close to full:
-
-- **Auto-compact** (on by default) summarizes older parts of the
-  conversation when context reaches the configured threshold (80% by
-  default).
-- If auto-compact is off, the context ring turns red at that threshold so
-  you can compact manually before the next request gets too large.
-- You can also click the context ring at any time to compact immediately.
-
-Compaction summarizes older details in the model's context so it has room to
-keep working. The saved chat and visible history retain the original messages
-and file attachments. The model receives the summary and recent context;
-if an older detail matters, quote it in a new message. Editing an earlier
-message rebuilds context from the retained transcript. Messages already removed
-by compaction in older versions cannot be recovered automatically.
-
-## Settings reference
-
-| Setting | Default | What it does |
+| Capability | What it provides | Availability |
 | --- | --- | --- |
-| `endpoint` | `http://localhost:8080/v1` | URL of your llama.cpp server. Use `localhost` or a private IP literal such as `http://127.0.0.1:8080/v1` or `http://192.168.1.50:8080/v1`. |
-| `model` | `local` | Model id sent with requests. The Settings view replaces this fallback with a selection from llama.cpp's `/v1/models` response. |
-| `toolCallingMode` | `compat-gemma4` | Select `native`, `compat-gemma4`, `compat-qwen3`, `compat-muse-glimmer`, or `compat-gpt-oss`. Compatibility profiles are native-first and add only the selected family's recovery behavior. |
-| `temperature` | `0.8` | Sampling temperature for chat requests. Lower is more deterministic, higher more varied. |
-| `topK` | `40` | Top-k sampling: keep only the K most likely tokens at each step (`0` disables). |
-| `topP` | `0.95` | Top-p (nucleus) sampling: keep the smallest token set whose cumulative probability reaches p (`1` disables). |
-| `reasoningBudget` | `-1` | Per-request reasoning budget: `-1` is unlimited, `0` ends reasoning immediately, and a positive number is the token threshold. |
-| `reasoningEfforts` | `{ "Low": "low", "Medium": "medium", "High": "high" }` | Additional chat-menu choices. Keys are display labels and values are sent as `reasoning_effort`; built-in None and Default remain available. |
-| `titlePrompt` | `Summarize the user message…` | Instructions for generating chat titles. The first user message is appended automatically. |
-| `commitMessagePrompt` | `Write a concise Git commit message…` | Instructions for generated commit messages. The staged diff is appended automatically, so this can enforce formats such as Conventional Commits. |
-| `autoCompact` | `true` | Summarize old turns automatically near the context limit. |
-| `autoCompactThresholdPercent` | `80` | Context usage percentage that triggers auto-compaction. |
-| `autoapproveReads` | `true` | Skip approval for read-only file tools. |
-| `autoapproveWrites` | `false` | Skip approval for file-edit tool calls. Off by default. |
-| `autoapproveCommands` | `false` | Skip approval for all commands in Act mode. Review mode always requires explicit approval. Off by default. |
+| Workspace files | List and find files, read code, create files, and apply edits with diff previews | All editions |
+| Images | Inspect workspace images with `view_image` | All editions, with a vision model and native tool calling |
+| Questions and task progress | Ask for a decision and track a task checklist | All editions; checklists in Act mode |
+| Workspace memory | Search and recall summaries from earlier chats in the same workspace | All editions, when enabled in workspace settings |
+| Commands | Start a process, read its output, and stop it | Safe list, Commands, and Advanced; Act and Review modes |
+| Web research | Search through Brave or SearXNG and read public webpages | Advanced, after configuring and verifying a search connection |
 
-The generated-text settings are instruction strings, not templates, so they do
-not need variables. The harness constructs the requests as follows:
+The [tools reference](docs/tools.md) lists individual tools, mode availability,
+approval behavior, safe-list configuration, and web-search setup.
 
-```text
-<titlePrompt>
+## Your data
 
-User message: "<first user message>"
-```
+Model requests go to your configured local/LAN endpoint. Workspace file tools
+stay inside the open project. Chats and attachments are saved locally under
+`~/.locality/`, with conversations separated by workspace.
 
-```text
-<commitMessagePrompt>
+Advanced web requests send queries to your configured search provider and read
+pages from public websites; they require approval by default. Commands use the
+permissions of the VS Code extension host. See [privacy and isolation](docs/user-guide.md#privacy--isolation)
+for details.
 
-<staged_diff>
-<staged Git diff>
-</staged_diff>
-```
+## Documentation
 
-The **Reset** section at the bottom of the Settings tab has a **Restore all
-defaults** button that returns every setting above — including the server URL —
-to its default. It asks for confirmation first.
+- [User guide](docs/user-guide.md) — setup, chat modes, attachments, settings, and memory.
+- [Tools reference](docs/tools.md) — available tools and how to configure them.
+- [Build editions](docs/build-editions.md) — package from source and understand edition isolation.
+- [Developer guide](docs/developer-guide.md) — set up a development environment, build, and run checks.
+- [Issues](https://github.com/liandir/locality/issues) — report a bug or request a feature.
 
-The sampling settings (`temperature`, `topK`, `topP`) are sent with every chat
-request, so they override whatever `--temp`, `--top-k`, or `--top-p` flags the
-`llama.cpp` server was started with. Commit-message generation also uses the
-configured temperature. Titles, memories, and context compaction keep their own
-fixed low-temperature settings.
+## License
 
-## Where chats are stored
-
-Chats are saved in your home folder under `.local-llm-chats/`, not inside the
-workspace. Each chat record stores the workspace folder it belongs to, and the
-Recent Chats list only shows records whose folder matches the currently open
-workspace. This keeps chat transcripts out of recursive workspace commands such
-as `grep`. Image attachments are stored beside the chat records in a restricted
-attachment directory and are removed when their chat or source message is
-deleted, including when editing an earlier message discards later turns.
-Compaction alone does not delete saved attachments.
-
-You can delete a chat by hovering its row in the Welcome list and clicking the
-trash icon. Deleting cannot be undone.
-
-## Keyboard shortcuts
-
-| Shortcut | Action |
-| --- | --- |
-| `Enter` | Send message |
-| `Shift+Enter` | Newline in composer |
-
-## Privacy & isolation
-
-- The endpoint validator refuses DNS hostnames other than exact `localhost`;
-  use loopback, link-local, CGNAT, or RFC 1918 private IP literals.
-- File tools cannot read or write outside the workspace root.
-- Commit-message generation reads only staged changes (`git diff --cached`)
-  and sends that diff to the configured local/LAN endpoint.
-- The assistant has no direct network tool. Commands run with your normal
-  permissions and can fetch URLs, call APIs, install packages, or access files
-  outside the workspace. Command approval is required by default; enabling
-  **Auto-approve commands** permits these actions without a prompt in Act mode.
-
----
-
-## Development
-
-The sections below are only relevant if you are building, testing, or modifying
-the extension from source. Installing a released `.vsix` (see **Install** above)
-does not require any of this.
-
-### Build a `.vsix` from source
-
-If you'd rather build the extension yourself than download a release, package a
-`.vsix` from this repository and install it.
-
-1. Make sure dependencies are installed (see **Development setup** below):
-
-   ```bash
-   npm install
-   ```
-
-2. Build and package the `.vsix`:
-
-   ```bash
-   npm run package:vsix
-   ```
-
-   This bundles the extension (via `npm run build`) and writes
-   `local-llm-harness-<version>.vsix` to the repository root, where `<version>`
-   matches the `version` in `package.json`.
-
-3. Install the freshly built file the same way as a released one:
-
-   ```bash
-   code --install-extension local-llm-harness-<version>.vsix
-   ```
-
-   Or, from inside VS Code, run **Extensions: Install from VSIX…** from the
-   Command Palette (`Ctrl/Cmd+Shift+P`) and pick the file. Reload VS Code when
-   prompted.
-
-To rebuild after changing the source, re-run `npm run package:vsix` and install
-the new file again (add `--force` to `code --install-extension` to overwrite the
-previous install of the same version).
-
-### Development setup
-
-You only need Node.js if you are building, testing, packaging, or modifying
-the extension from source. Installing a released `.vsix` in VS Code does not
-require Node.js.
-
-Use Node.js `20.19.0` or newer. Node `22.x` is recommended. The current
-development toolchain includes Vite, Vitest, Rolldown, and Shiki packages that
-declare Node `20+` requirements; running `npm install` with Node `18` may print
-`EBADENGINE` warnings, and tests can fail before they start with missing
-runtime APIs such as `node:util.styleText`.
-
-If your system Node is too old, install a project-local Node with `nvm`:
-
-```bash
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash
-
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-
-nvm install 22
-nvm use 22
-node -v
-```
-
-Then install dependencies and run the checks:
-
-```bash
-npm install
-npm run typecheck
-npm test
-```
-
-If `nvm` is still not found after installation, close and reopen the terminal,
-or source `~/.nvm/nvm.sh` as shown above.
-
-## Workspace memory
-
-Enable **Settings → Workspace memory → Use workspace memories** to let the
-agent search and recall active summaries from other chats in the same workspace. It is off by
-default and is stored in workspace settings (`localLlmHarness.memoryEnabled`);
-user-level activation is ignored. This switch controls whether memory tools are available. Generation and editing remain available when it is off.
-
-After a response finishes, the harness queues a short memory summary using the
-configured local model. New generated memories are active automatically; existing
-individual exclusions are preserved. The workspace switch still controls whether
-the agent can search and recall them.
-
-A **Creating memory** card appears after the answer and becomes **Created memory**
-when finished. If the chat already has a memory, the card shows **Updating memory**
-and then **Updated memory**. Expand it to see the same full contents and date shown by recall.
-Completed cards remain available when reopening the chat. A new message sent
-during generation appears immediately beneath the active memory card;
-the model request proceeds once that summary finishes. Compaction and commit-message
-inference can interrupt generation; interrupted work resumes when idle.
-In **Recent Chats** (the Chats tab), **Re-generate all memories** sits below
-**Start new chat** and processes existing chats on request.
-Use **Cancel generation** to clear queued work and cancel the current summary.
-
-Select the **cloud icon** beside a chat’s delete button to inspect, edit, include/exclude, and
-regenerate its summary. Saving an edit makes the summary manually maintained, so background
-updates cannot overwrite it. **Regenerate** replaces it with an automatically
-maintained summary. Failed generation can be retried without affecting the chat.
-Summaries are limited to 384 tokens. Raw tool messages, hidden reasoning, and
-imported memories are excluded from summarization input; common credential
-formats are redacted, and the model is instructed to omit secrets.
-
-Memories are retrieved only when the agent calls a tool; no summaries are
-inserted automatically into the system prompt. When enabled, the system prompt
-suggests considering memory retrieval at the beginning of a request:
-
-- **`search_memories`** takes a `query` and returns matching `name`, `id`, and
-  `date` fields, plus the total match count and whether results were truncated.
-  Local BM25 keyword ranking includes title and phrase boosts, recognizes paths
-  and camelCase/snake_case symbols, and breaks ties by date and source ID.
-  It uses no embeddings, network requests, or retrieval model. Search covers all
-  active, usable memories in the current workspace, excluding the current chat.
-- **`recall_memory`** takes the exact `name` and `id` from search and returns
-  those fields, the full UTC `date`, and `contents`. IDs are 16 hexadecimal
-  characters from SHA-256 of the source chat ID, name, and contents. Identical
-  names are disambiguated; renaming or editing a memory changes its ID. Recall
-  checks the current source again, so stale IDs and inactive or deleted sources
-  fail with a request to search again.
-
-Both tools return full UTC dates with minute precision, such as
-`2026-09-11T14:05Z`. **Maximum search results** sets the per-search limit from
-1 to 100, defaulting to 10 (`localLlmHarness.memoryMaxCount`). The agent chooses
-which matches to recall. The tools work in Act, Plan, and Review modes and follow
-the read-approval setting. When workspace memories are off, both tools and their
-system-prompt guidance are omitted, and attempted calls cannot retrieve content.
-
-**Recalled memories** shows the sources read through the tool, with links to
-their editors in Recent Chats. Recalled contents are ordinary tool results in
-chat history and are subject to normal context limits and compaction. Turning
-memories off prevents new retrieval; it does not erase existing tool results.
-Legacy automatic selections are no longer injected. Summary generation excludes
-raw tool results and asks the model to omit facts merely copied from memories.
-Current instructions and inspected code take precedence over historical memory.
-
-Chat-card timestamps adapt to when you view them: time only today, day and short
-month on other days in the same year, and the year for dates in another year.
-They use local time without seconds; hover retains the full local date and time.
-The latest saved user-message timestamp remains in system context only to place
-the request relative to memory dates. Assistant timestamps are display-only.
-
-For a reproducible, synthetic memory-on/off probe against a running local server:
-
-```bash
-npm run eval:memory -- http://localhost:8080 your-model-id /tmp/memory-eval.json
-```
-
-This records summary size, retrieval selections, recall/override checks, server
-prompt/completion tokens, and elapsed response time. It is a small functional
-probe, not a coding benchmark or a statistically reliable speed comparison.
+[GNU General Public License v3](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md)
+for bundled dependencies.

@@ -34,7 +34,7 @@ describe("memory provenance", () => {
     rec.messages[0].tokens = 900;
     rec.messages[0].reasoningContent = "hidden reasoning";
     rec.contextMessages = [{ role: "system", content: "compacted", ts: 3 }];
-    rec.memorySelection = rankMemories("parser", [remembered("Other parser", "Parser layout")], rec.id);
+    rec.recalledMemories = rankMemories("parser", [remembered("Other parser", "Parser layout")], rec.id);
     expect(transcriptRevision(rec)).toBe(revision);
     expect(usableMemory(rec)).toBe(true);
     rec.messages[0].content = "New decision";

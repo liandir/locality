@@ -7,7 +7,7 @@ import { loadRootAgentsMd, MAX_AGENTS_MD_BYTES } from "../src/llm/agentsMd.js";
 let ws: string;
 
 beforeEach(async () => {
-  ws = await fs.mkdtemp(path.join(os.tmpdir(), "llh-agents-"));
+  ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-agents-"));
 });
 
 afterEach(async () => {

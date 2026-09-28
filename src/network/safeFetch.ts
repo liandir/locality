@@ -1,3 +1,5 @@
+import type { AdditionalFetchPolicy } from "./policy.js";
+import { additionalPolicy } from "../build/networkPolicy.js";
 import { validateEndpoint } from "./endpointValidator.js";
 
 export class NetworkPolicyError extends Error {
@@ -12,6 +14,8 @@ export interface SafeFetchOptions {
   headers?: Record<string, string>;
   body?: string;
   signal?: AbortSignal;
+  additional?: boolean | "webpage";
+  maxResponseBytes?: number;
 }
 
 /**
@@ -42,22 +46,34 @@ export async function safeFetch(
       `Refusing to fetch ${target.origin}; only the configured endpoint origin ${endpoint.origin} is allowed.`
     );
   }
-  const v = await validateEndpoint(endpoint.toString());
-  if (!v.ok) {
-    throw new NetworkPolicyError(`Endpoint policy violation: ${v.error}`);
+  let policy: AdditionalFetchPolicy | void = undefined;
+  if (init.additional) {
+    if (!additionalPolicy) throw new NetworkPolicyError("Additional network requests are unavailable in this edition.");
+    try { policy = await additionalPolicy(endpoint, target, init.additional, init.signal); }
+    catch (error) { throw new NetworkPolicyError((error as Error).message); }
+  } else {
+    const v = await validateEndpoint(endpoint.toString());
+    if (!v.ok) throw new NetworkPolicyError(`Endpoint policy violation: ${v.error}`);
   }
-  // Node 18+ has a global fetch. Endpoint validation rejects DNS hostnames,
-  // so the actual connection cannot be redirected by DNS rebinding.
-  // This is the only file allowed to call fetch (the ESLint config enforces it).
-  // eslint-disable-next-line no-restricted-globals
-  // redirect: "error" — a compromised endpoint must not be able to 307/308 the
-  // request body to another origin; the origin check above only covers the
-  // initial request.
-  return fetch(target.toString(), {
-    method: init.method ?? "GET",
-    headers: init.headers,
-    body: init.body,
-    signal: init.signal,
-    redirect: "error"
-  });
+  try {
+    const options: RequestInit & { dispatcher?: unknown } = {
+      method: init.method ?? "GET", headers: init.headers, body: init.body, signal: init.signal,
+      // Additional policies may allow manual redirects; callers must validate every hop.
+      redirect: policy?.redirect ?? "error", dispatcher: policy?.dispatcher
+    };
+    // This is the only outbound HTTP primitive (enforced by ESLint).
+    const response = await fetch(target.toString(), options);
+    if (!init.maxResponseBytes || !response.body) return response;
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      for (let next = await reader.read(); !next.done; next = await reader.read()) {
+        size += next.value.byteLength;
+        if (size > init.maxResponseBytes) throw new NetworkPolicyError("Response exceeds the size limit.");
+        chunks.push(next.value);
+      }
+    } finally { await reader.cancel().catch(() => undefined); }
+    return new Response(Buffer.concat(chunks), { status: response.status, statusText: response.statusText, headers: response.headers });
+  } finally { await policy?.dispose?.(); }
 }
