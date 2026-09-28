@@ -90,11 +90,11 @@ spaces; arguments needing quoting use shell-style single quotes. Patterns have n
 flags. An empty array denies all commands; invalid patterns fail closed. The
 list is included in the model's prompt. Workspace overrides are ignored.
 
-Defaults include workspace searches, directory creation, file deletion,
-empty-directory removal, and selected read-only Git forms. Recursive/force
-removal requires a matching user-added pattern. Built-in path checks still
-protect the workspace boundary, root, and Git metadata. Shell operators,
-redirection, expansion, and compound commands are unsupported. Safe list runs
+Defaults include workspace searches, directory creation, and selected read-only
+Git forms. `rm` and `rmdir` require a matching user-added pattern; neither is
+included by default. Existing saved lists retain their configured entries.
+Built-in path checks still protect the workspace boundary, root, and Git
+metadata. Shell operators, redirection, expansion, and compound commands are unsupported. Safe list runs
 executables outside the workspace from absolute PATH entries; on Windows, only
 native executables are supported. The named Unix commands must be installed.
 Safe Git currently requires a `.git` directory inside the workspace; linked

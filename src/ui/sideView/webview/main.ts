@@ -90,7 +90,8 @@ function renderWelcome(): string {
   return `
     <div class="panel welcome-panel">
       <section class="welcome-section welcome-hero">
-        <h2>Welcome to Locality</h2>
+        <span class="welcome-logo" aria-hidden="true"></span>
+        <h2>Welcome to Locality Harness</h2>
         <p class="welcome-copy">Vibe with your locally hosted language model.</p>
       </section>
 

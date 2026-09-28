@@ -40,7 +40,7 @@ button.primary:hover, button.primary:focus-visible { background: color-mix(in sr
 .chat-entry { min-width: 0; }
 .chat-list li > .chat-row time { color: var(--vscode-descriptionForeground); font-size: 0.85em; }
 .chat-list button.delete, .chat-list button.memory-reveal { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; flex: 0 0 auto; background: transparent; border: 1px solid transparent; border-radius: var(--control-radius); padding: 0; color: var(--vscode-descriptionForeground); }
-.chat-list li button.delete:hover, .chat-list li button.delete:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); border-color: transparent; color: var(--vscode-errorForeground); }
+.chat-list li button.delete:hover, .chat-list li button.delete:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); border-color: transparent; color: var(--error-highlight-foreground); }
 .chat-list button.memory-reveal.memory-usable { color: var(--vscode-textLink-foreground); }
 .chat-list button.memory-reveal[aria-expanded=true] { background: var(--surface-fill-strong); }
 .chat-list button.memory-reveal:hover, .chat-list button.memory-reveal:focus-visible, button.memory-generate:hover, button.memory-generate:focus-visible { background: color-mix(in srgb, var(--vscode-textLink-foreground) 12%, transparent); color: var(--vscode-textLink-foreground); }
@@ -53,6 +53,7 @@ button.primary:hover, button.primary:focus-visible { background: color-mix(in sr
 .intro-section .muted { margin: 0; line-height: 1.45; }
 .welcome-panel { display: flex; flex-direction: column; min-height: 100%; padding: 16px 2px 12px; text-align: center; }
 .welcome-section { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 34px 0 28px; }
+.welcome-logo { display: block; width: 64px; height: 64px; flex-shrink: 0; background: currentColor; mask: url("./activity-bar.svg") center / contain no-repeat; }
 .welcome-hero h2 { margin: 0; font-size: 1.18em; line-height: 1.35; }
 .welcome-copy { max-width: 240px; margin: 0; color: var(--vscode-descriptionForeground); line-height: 1.45; }
 .welcome-actions { display: flex; flex-direction: column; gap: 22px; margin-top: 26px; }
@@ -81,7 +82,7 @@ button.primary:hover, button.primary:focus-visible { background: color-mix(in sr
 .setting-action-row { display: flex; gap: 8px; align-items: stretch; }
 .setting-action-row input { min-width: 0; flex: 1; }
 .panel-section .wide-button + .wide-button { margin-top: 8px; }
-button.danger:hover, button.danger:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); border-color: transparent; color: var(--vscode-errorForeground); }
+button.danger:hover, button.danger:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); border-color: transparent; color: var(--error-highlight-foreground); }
 .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; margin: 12px 0; color: var(--vscode-foreground); cursor: pointer; }
 .switch-row input { position: absolute; opacity: 0; pointer-events: none; }
 .switch { width: 38px; height: 20px; flex: 0 0 auto; border-radius: var(--control-radius); background: var(--surface-fill); border: 1px solid transparent; position: relative; transition: background 0.15s; }
@@ -104,7 +105,7 @@ button.danger:hover, button.danger:focus-visible { background: color-mix(in srgb
 .range-setting input[type=range]:focus-visible::-webkit-slider-thumb { background: var(--vscode-foreground); box-shadow: none; }
 .validation { font-size: 0.85em; padding: 7px 0 0; min-height: 1em; color: var(--vscode-descriptionForeground); }
 .validation.ok { color: var(--vscode-testing-iconPassed, #3fb950); }
-.validation.err { color: var(--vscode-errorForeground); }
+.validation.err { color: var(--error-foreground); }
 .endpoint-metadata { margin-top: 8px; padding: 9px 10px; border: 1px solid transparent; border-radius: var(--control-radius); background: var(--surface-fill); }
 .endpoint-metadata div { display: flex; justify-content: space-between; gap: 12px; line-height: 1.6; }
 .endpoint-metadata span { color: var(--vscode-descriptionForeground); }
@@ -115,7 +116,7 @@ button.danger:hover, button.danger:focus-visible { background: color-mix(in srgb
 .memory-editor { width: 100%; min-height: 120px; margin-top: 8px; resize: vertical; box-sizing: border-box; padding: 10px; border: 1px solid transparent; border-radius: var(--control-radius); background: var(--surface-fill); color: var(--vscode-input-foreground); font: inherit; outline: none; }
 .memory-editor:focus { background: var(--surface-fill-strong); }
 .memory-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.memory-error { color: var(--vscode-errorForeground); }
+.memory-error { color: var(--error-foreground); }
 
 .chats-panel { gap: 0; }
 .chats-panel .panel-section { padding: 6px 0 8px; }

@@ -2,8 +2,6 @@
 export const DEFAULT_SAFE_PATTERNS = [
   "(?:grep|rg)(?: -(?:n|i|v|l|c|E|F|r|H)| --(?:line-number|ignore-case|files|hidden))* .+",
   "mkdir(?: -p)?(?: --)? (?!-)(?:\\S+|'[^']*')(?: (?!-)(?:\\S+|'[^']*'))*",
-  "rmdir(?: --)? (?!-)(?:\\S+|'[^']*')(?: (?!-)(?:\\S+|'[^']*'))*",
-  "rm(?: --)? (?!-)(?:\\S+|'[^']*')(?: (?!-)(?:\\S+|'[^']*'))*",
   "git status(?: --short| --porcelain| -sb)?",
   "git diff(?: --(?:cached|staged|stat|name-only|name-status))*(?: -- .+)?",
   "git log(?: --oneline)?(?: -[0-9]+)?",

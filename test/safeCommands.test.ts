@@ -46,14 +46,24 @@ describe("safe command syntax and policy", () => {
     await expect(matchesSafeList(["(a+)+"], "a".repeat(100) + "!")).rejects.toThrow("timed out");
   });
 
-  it("permits creation and deletion inside the workspace", async () => {
-    for (const command of ["mkdir 'a folder'", "rmdir 'a folder'"]) {
-      const prepared = await authorizeCommand("run_command", { command }, root, settings());
+  it.each(["rm", "rmdir"])("excludes %s from the default safe list in both tool protocols", async program => {
+    await expect(authorizeCommand("run_command", { command: `${program} 'a path'` }, root, settings()))
+      .rejects.toThrow("does not match");
+    await expect(authorizeCommand("run_process", { program, args: ["a path"] }, root, settings()))
+      .rejects.toThrow("does not match");
+  });
+
+  it("permits workspace creation by default and deletion with user-added patterns", async () => {
+    for (const [command, patterns] of [
+      ["mkdir 'a folder'", DEFAULT_SAFE_PATTERNS],
+      ["rmdir 'a folder'", ["rmdir .+"]]
+    ] as const) {
+      const prepared = await authorizeCommand("run_command", { command }, root, settings(patterns));
       const result = await startProcess(prepared.executable, prepared.args, root, undefined, undefined, prepared.env).result;
       expect(result.exitCode).toBe(0);
     }
     await fs.writeFile(path.join(root, "a.txt"), "fixture");
-    const prepared = await authorizeCommand("run_process", { program: "rm", args: ["a.txt"] }, root, settings());
+    const prepared = await authorizeCommand("run_process", { program: "rm", args: ["a.txt"] }, root, settings(["rm .+"]));
     expect((await startProcess(prepared.executable, prepared.args, root).result).exitCode).toBe(0);
     await expect(fs.stat(path.join(root, "a.txt"))).rejects.toThrow();
   });
@@ -64,7 +74,7 @@ describe("safe command syntax and policy", () => {
 
   it("rejects symlink escapes and recursive deletion containing Git metadata", async () => {
     await fs.symlink(os.tmpdir(), path.join(root, "outside"));
-    await expect(authorizeCommand("run_command", { command: "rm outside" }, root, settings())).rejects.toThrow("outside the workspace");
+    await expect(authorizeCommand("run_command", { command: "rm outside" }, root, settings(["rm .+"]))).rejects.toThrow("outside the workspace");
     await fs.mkdir(path.join(root, "nested/.git"), { recursive: true });
     await expect(authorizeCommand("run_process", { program: "rm", args: ["-r", "nested"] }, root, settings(["rm .*"]))).rejects.toThrow("Git metadata");
   });
