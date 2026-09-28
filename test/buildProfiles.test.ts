@@ -11,14 +11,17 @@ import type { buildSystemPrompt as promptBuilder } from "../src/llm/prompt.js";
 import type { SideFeature } from "../src/build/sideContracts.js";
 import type { FeatureContext, FeatureRuntime } from "../src/build/contracts.js";
 import type { HarnessSettings } from "../src/config/settings.js";
+import type { SideHostFactory } from "../src/build/sideHostContracts.js";
 
 interface Probe {
   toolsForMode: typeof toolSelector;
   buildSystemPrompt: typeof promptBuilder;
   sideFeature: SideFeature;
+  createSideHost?: SideHostFactory;
   createFeatures(context: FeatureContext): FeatureRuntime[];
   readSettings(): HarnessSettings;
   writeSetting(key: string, value: unknown): Promise<void>;
+  seedFeatureSettings(): Promise<void>;
 }
 const require = createRequire(import.meta.url);
 const scriptsPath = pathToFileURL(path.resolve("scripts/build-profiles.mjs")).href;
@@ -27,21 +30,23 @@ const { profilePlugin, auditMetadata } = await import(scriptsPath) as {
   auditMetadata(profile: string, metadata: esbuild.Metafile): void;
 };
 
-async function probe(profile: string, values: Record<string, unknown> = {}) {
+async function probe(profile: string, values: Record<string, unknown> = {}, workspaceValues: Record<string, unknown> = { safeCommandPatterns: [".*"] }) {
   const result = await esbuild.build({
     stdin: { contents: `
       export { toolsForMode } from './src/tools/toolDefinitions.ts';
       export { buildSystemPrompt } from './src/llm/prompt.ts';
       export { createFeatures } from './src/build/runtime.js';
       export { sideFeature } from './src/build/side.js';
+      export { createSideHost } from './src/build/sideHost.js';
       export { readSettings, writeSetting } from './src/config/settings.ts';
+      export { seedFeatureSettings } from './src/build/settings.js';
     `, resolveDir: process.cwd(), loader: "ts" },
     bundle: true, platform: "node", format: "cjs", write: false, metafile: true,
     external: ["vscode"], plugins: [profilePlugin(profile)]
   });
   auditMetadata(profile, result.metafile!);
   const module = { exports: {} };
-  const cfg = { get: (key: string) => values[key], inspect: (key: string) => ({ globalValue: values[key], workspaceValue: key === "safeCommandPatterns" ? [".*"] : undefined }), update: async (key: string, value: unknown) => { values[key] = value; } };
+  const cfg = { get: (key: string) => values[key], inspect: (key: string) => ({ globalValue: values[key], workspaceValue: workspaceValues[key] }), update: async (key: string, value: unknown) => { values[key] = value; } };
   vm.runInNewContext(result.outputFiles[0].text, {
     module, exports: module.exports, require: (name: string) => name === "vscode" ? { workspace: { getConfiguration: () => cfg }, ConfigurationTarget: { Global: 1, Workspace: 2 } } : require(name),
     process, URL, AbortController, Buffer, setTimeout, clearTimeout, queueMicrotask, console
@@ -73,6 +78,18 @@ describe("edition composition", () => {
     expect(registered.includes("web_search")).toBe(profile === "advanced");
     const html = api.sideFeature.render(settings as unknown as Record<string, unknown>, (key, label) => `${key}:${label}`, value => value);
     expect(html.includes("Auto-approve safe commands")).toBe(profile === "safe-list");
+    expect(html.includes("Auto-approve web searches")).toBe(profile === "advanced");
+    expect(html.includes('id="webSearchEndpoint"')).toBe(profile === "advanced");
+    expect(html.includes('id="webSearchApiKey"')).toBe(profile === "advanced");
+    expect(typeof api.createSideHost === "function").toBe(profile === "advanced");
+    if (profile !== "advanced") {
+      expect(text).not.toContain("autoapproveWebSearch");
+      expect(text).not.toMatch(/webSearchApiKey|validateWebSearch|webSearchSettings|Bearer/);
+      expect(settings).not.toHaveProperty("webSearchEndpoint");
+      expect(settings).not.toHaveProperty("autoapproveWebSearch");
+      await expect(api.writeSetting("autoapproveWebSearch", true)).rejects.toThrow("unavailable");
+      await expect(api.writeSetting("webSearchEndpoint", "https://search.example")).rejects.toThrow("unavailable");
+    }
     if (profile === "no-commands") {
       expect(text).not.toMatch(/run_command|run_process|wait_process|stop_process|child_process|web_search|safeCommandPatterns/);
       expect(html).toBe("");
@@ -95,12 +112,73 @@ describe("edition composition", () => {
     expect(invalid.readSettings().safeCommandPatterns).toBeNull();
   });
 
-  it("omits unconfigured search and refuses stale search tools without a destination", async () => {
-    const { api } = await probe("advanced");
+  it("omits explicitly disabled search and refuses stale search tools without a destination", async () => {
+    const { api } = await probe("advanced", { webSearchEndpoint: "" });
     expect(api.toolsForMode("act", "native", false, false, api.readSettings()).map(tool => tool.name)).not.toContain("web_search");
     const feature = api.createFeatures({ workspaceRoot: "/tmp", emit() {}, async appendResult() {} }).find(item => item.tools.includes("web_search"))!;
     expect(feature.needsApproval(api.readSettings())).toBe(true);
     await expect(feature.prepare("web_search", { query: "docs" }, api.readSettings())).rejects.toThrow("Configure");
+  });
+
+  it("keeps search unconfigured by default and ignores workspace overrides", async () => {
+    const { api } = await probe("advanced", {}, { webSearchEndpoint: "https://workspace.example", autoapproveWebSearch: true });
+    const settings = api.readSettings();
+    expect(settings.webSearchEndpoint).toBe("");
+    expect(settings.autoapproveWebSearch).toBe(false);
+    const feature = api.createFeatures({ workspaceRoot: "/tmp", emit() {}, async appendResult() {} }).find(item => item.tools.includes("web_search"))!;
+    expect(feature.needsApproval(settings)).toBe(true);
+    expect(api.toolsForMode("act", "native", false, false, settings).map(tool => tool.name)).not.toContain("web_search");
+    await api.writeSetting("webSearchEndpoint", "https://search.example");
+    const configured = api.readSettings();
+    for (const mode of ["act", "plan", "review"] as const) {
+      expect(api.toolsForMode(mode, "native", false, false, configured).map(tool => tool.name)).toContain("web_search");
+      expect(api.buildSystemPrompt({ family: "gemma4", mode, nativeTools: true, workspaceRoot: "/tmp", featureSettings: configured })).toContain("The user approves each query");
+    }
+  });
+
+  it("saves search auto-approval from the Advanced switch and updates prompts in all modes", async () => {
+    const { api } = await probe("advanced", { webSearchEndpoint: "https://search.example" });
+    const listeners = new Map<string, (event: Event) => void>();
+    const root = { querySelector: (selector: string) => ({ addEventListener: (_event: string, listener: (event: Event) => void) => listeners.set(selector, listener) }) } as unknown as HTMLElement;
+    const messages: unknown[] = [];
+    api.sideFeature.bind(root, message => messages.push(message));
+    expect(listeners.has("#webSearchEndpoint")).toBe(true);
+    listeners.get("#autoapproveWebSearch")!({ target: { checked: true } } as unknown as Event);
+    expect(messages).toEqual([{ type: "saveSetting", key: "autoapproveWebSearch", value: true }]);
+    await api.writeSetting("autoapproveWebSearch", true);
+    const settings = api.readSettings();
+    expect(settings.autoapproveWebSearch).toBe(true);
+    const feature = api.createFeatures({ workspaceRoot: "/tmp", emit() {}, async appendResult() {} }).find(item => item.tools.includes("web_search"))!;
+    expect(feature.needsApproval(settings)).toBe(false);
+    const html = api.sideFeature.render(settings as unknown as Record<string, unknown>, (key, _label, checked) => `${key}:${checked}`, value => value);
+    expect(html).toContain("autoapproveWebSearch:true");
+    for (const mode of ["act", "plan", "review"] as const) {
+      const prompt = api.buildSystemPrompt({ family: "gemma4", mode, nativeTools: true, workspaceRoot: "/tmp", featureSettings: settings });
+      expect(prompt).toContain("The user has enabled automatic web-search approval.");
+      expect(prompt).not.toContain("The user approves each query");
+    }
+    await api.writeSetting("autoapproveWebSearch", false);
+    expect(feature.needsApproval(api.readSettings())).toBe(true);
+  });
+
+  it("does not seed a public URL and preserves configured endpoints", async () => {
+    const values: Record<string, unknown> = {};
+    const { api } = await probe("advanced", values);
+    await api.seedFeatureSettings();
+    expect(values.webSearchEndpoint).toBeUndefined();
+    for (const endpoint of ["https://custom.example", ""]) {
+      await api.writeSetting("webSearchEndpoint", endpoint);
+      await api.seedFeatureSettings();
+      expect(values.webSearchEndpoint).toBe(endpoint);
+      expect(api.readSettings().webSearchEndpoint).toBe(endpoint);
+    }
+  });
+
+  it("ignores workspace search overrides and accepts only explicit boolean auto-approval", async () => {
+    const { api } = await probe("advanced", { webSearchEndpoint: " https://user.example/ ", autoapproveWebSearch: false }, { webSearchEndpoint: "https://workspace.example", autoapproveWebSearch: true });
+    expect(api.readSettings()).toMatchObject({ webSearchEndpoint: "https://user.example/", autoapproveWebSearch: false });
+    const { api: invalid } = await probe("advanced", { webSearchEndpoint: 123, autoapproveWebSearch: "true" });
+    expect(invalid.readSettings()).toMatchObject({ webSearchEndpoint: "", autoapproveWebSearch: false });
   });
 
   it("rechecks safe policy, command identity and workspace identity after approval", async () => {

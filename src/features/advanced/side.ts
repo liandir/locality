@@ -1,10 +1,83 @@
 import { sideFeature as commands } from "../commands/full/side.js";
 import type { SideFeature } from "../../build/sideContracts.js";
+
+// Drafts stay in this webview only; never persist the key in getState/setState.
+let endpoint: string | undefined;
+let apiKey = "";
+let loaded = false;
+let dirty = false;
+let testing = false;
+let status: { ok?: boolean; text: string } | undefined;
+
 export const sideFeature: SideFeature = {
   label: "Advanced",
-  render: (settings, toggle, escape) => commands.render(settings, toggle, escape) + `<label class="field-label" for="webSearchEndpoint">SearXNG URL</label><input id="webSearchEndpoint" type="url" value="${escape(String(settings.webSearchEndpoint ?? ""))}" placeholder="http://localhost:8888" /><p class="setting-help">Use a SearXNG instance with JSON search enabled. Each query requires approval and is sent to external search engines. Leave blank to disable search.</p>`,
-  bind(root, send) {
+  render(settings, toggle, escape) {
+    const disabled = testing || !loaded ? "disabled" : "";
+    return commands.render(settings, toggle, escape) + `
+      <div class="connection-settings" aria-label="Web search settings">
+        <label class="field-label" for="webSearchEndpoint">Endpoint</label>
+        <div class="setting-action-row">
+          <input id="webSearchEndpoint" type="text" value="${escape(endpoint ?? String(settings.webSearchEndpoint ?? ""))}" placeholder="https://search.example.org" ${disabled} />
+          <button id="setWebSearch" class="primary" aria-label="Test and save web search settings" ${disabled}>${testing ? "Testing…" : "Set"}</button>
+        </div>
+        <label class="field-label" for="webSearchApiKey">API-key</label>
+        <input id="webSearchApiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Optional" ${disabled} />
+        <p class="setting-help">SearXNG base URL. Set tests a search. An optional key uses Bearer authentication. Leave the endpoint blank to disable search.</p>
+        ${status ? `<div class="validation ${status.ok === false ? "err" : status.ok ? "ok" : ""}" role="${status.ok === false ? "alert" : "status"}">${escape(status.text)}</div>` : ""}
+      </div>` + toggle("autoapproveWebSearch", "Auto-approve web searches", settings.autoapproveWebSearch === true);
+  },
+  bind(root, send, render) {
     commands.bind(root, send);
-    root.querySelector<HTMLInputElement>("#webSearchEndpoint")?.addEventListener("change", event => send({ type: "saveSetting", key: "webSearchEndpoint", value: (event.target as HTMLInputElement).value.trim() }));
+    const endpointInput = root.querySelector<HTMLInputElement>("#webSearchEndpoint");
+    const keyInput = root.querySelector<HTMLInputElement>("#webSearchApiKey");
+    // Assign as an input property, keeping credentials out of generated markup.
+    if (keyInput) keyInput.value = apiKey;
+    endpointInput?.addEventListener("input", () => {
+      endpoint = endpointInput.value; dirty = true; status = undefined;
+    });
+    keyInput?.addEventListener("input", () => {
+      apiKey = keyInput.value; dirty = true; status = undefined;
+    });
+    const submit = (): void => {
+      if (!loaded || testing) return;
+      endpoint = endpointInput?.value.trim() ?? "";
+      apiKey = keyInput?.value.trim() ?? "";
+      dirty = true;
+      testing = true;
+      status = { text: endpoint ? "Testing search connection…" : "Disabling search…" };
+      send({ type: "validateWebSearch", endpoint, apiKey });
+      render?.();
+    };
+    root.querySelector("#setWebSearch")?.addEventListener("click", submit);
+    for (const input of [endpointInput, keyInput]) input?.addEventListener("keydown", event => {
+      if (event.key === "Enter") { event.preventDefault(); submit(); }
+    });
+    root.querySelector<HTMLInputElement>("#autoapproveWebSearch")?.addEventListener("change", event => {
+      send({ type: "saveSetting", key: "autoapproveWebSearch", value: (event.target as HTMLInputElement).checked });
+    });
+  },
+  receive(message) {
+    if (message.type === "webSearchSettings") {
+      if (message.reset) { dirty = false; testing = false; status = undefined; }
+      if (!dirty) {
+        if (endpoint !== message.endpoint) status = undefined;
+        endpoint = message.endpoint;
+        apiKey = message.apiKey;
+        if (message.error) status = { ok: false, text: message.error };
+      }
+      loaded = true;
+      return true;
+    }
+    if (message.type === "webSearchValidation") {
+      testing = false;
+      if (message.ok) {
+        endpoint = message.endpoint ?? "";
+        if (!endpoint) apiKey = "";
+        dirty = false;
+      }
+      status = { ok: message.ok, text: message.ok ? (endpoint ? "Connected — search settings saved." : "Web search disabled.") : message.error ?? "Search connection failed." };
+      return true;
+    }
+    return false;
   }
 };

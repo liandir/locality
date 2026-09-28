@@ -68,8 +68,8 @@ button.primary:hover, button.primary:focus-visible { background: color-mix(in sr
 .icon-label svg { flex: 0 0 auto; }
 .empty-state { margin: 0; color: var(--vscode-descriptionForeground); line-height: 1.45; }
 .field-label { display: block; margin: 12px 0 6px; color: var(--vscode-descriptionForeground); font-size: 0.86em; }
-.panel-section input[type=text], .panel-section input[type=number], .panel-section select { display: block; width: 100%; min-height: 30px; padding: 4px 12px; background: var(--surface-fill); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: var(--control-radius); box-sizing: border-box; font: inherit; outline: none; transition: background 0.12s; }
-.panel-section input[type=text]:focus, .panel-section input[type=number]:focus, .panel-section select:focus { background: var(--surface-fill-strong); border-color: transparent; outline: none; }
+.panel-section input[type=text], .panel-section input[type=password], .panel-section input[type=number], .panel-section select { display: block; width: 100%; min-height: 30px; padding: 4px 12px; background: var(--surface-fill); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: var(--control-radius); box-sizing: border-box; font: inherit; outline: none; transition: background 0.12s; }
+.panel-section input[type=text]:focus, .panel-section input[type=password]:focus, .panel-section input[type=number]:focus, .panel-section select:focus { background: var(--surface-fill-strong); border-color: transparent; outline: none; }
 .panel-section input[type=number] { appearance: textfield; }
 .panel-section input[type=number]::-webkit-inner-spin-button,
 .panel-section input[type=number]::-webkit-outer-spin-button { margin: 0; -webkit-appearance: none; appearance: none; }
@@ -106,6 +106,8 @@ button.danger:hover, button.danger:focus-visible { background: color-mix(in srgb
 .validation { font-size: 0.85em; padding: 7px 0 0; min-height: 1em; color: var(--vscode-descriptionForeground); }
 .validation.ok { color: var(--vscode-testing-iconPassed, #3fb950); }
 .validation.err { color: var(--error-foreground); }
+.validation.err:not(:empty) { margin-top: 7px; padding: 9px 10px; border: 1px solid transparent; border-radius: var(--control-radius); background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); overflow-wrap: anywhere; }
+.connection-settings { margin-bottom: 14px; }
 .endpoint-metadata { margin-top: 8px; padding: 9px 10px; border: 1px solid transparent; border-radius: var(--control-radius); background: var(--surface-fill); }
 .endpoint-metadata div { display: flex; justify-content: space-between; gap: 12px; line-height: 1.6; }
 .endpoint-metadata span { color: var(--vscode-descriptionForeground); }

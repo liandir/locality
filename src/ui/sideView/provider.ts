@@ -1,3 +1,5 @@
+import { createSideHost } from "../../build/sideHost.js";
+import type { SideHost } from "../../build/sideHostContracts.js";
 import { seedFeatureSettings } from "../../build/settings.js";
 import type { WorkspaceMemory } from "../../chat/workspaceMemory.js";
 import * as vscode from "vscode";
@@ -17,6 +19,7 @@ import type { ExtToSide, SideTab, SideToExt, ChatTab } from "../messaging.js";
 export class SideViewProvider implements vscode.WebviewViewProvider {
   static readonly viewType = "locality.side";
   private view?: vscode.WebviewView;
+  private featureHost?: SideHost;
   private subs: vscode.Disposable[] = [];
   private activeTab: SideTab = "welcome";
   private memoryListGeneration = 0;
@@ -32,7 +35,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
     private onOpenTabs: () => ChatTab[],
     private memory?: WorkspaceMemory,
     private onEndpointConnected?: () => void
-  ) {}
+  ) { this.featureHost = createSideHost?.(context.secrets, message => this.post(message)); }
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
@@ -60,6 +63,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
   pushSettings(): void {
     const s = readSettings();
     this.post({ type: "settings", settings: s as unknown as Record<string, unknown> });
+    void this.featureHost?.pushSettings();
   }
 
   async pushMemories(): Promise<void> {
@@ -114,6 +118,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async onMessage(m: SideToExt): Promise<void> {
+    if (await this.featureHost?.handle(m)) return;
     switch (m.type) {
       case "ready":
         this.webviewReady = true;
@@ -215,6 +220,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         );
         if (choice === "Restore defaults") {
           await resetAllSettings();
+          await this.featureHost?.reset();
           this.pushSettings();
         }
         break;

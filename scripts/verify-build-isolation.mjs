@@ -8,7 +8,7 @@ const yauzl = require("yauzl");
 const optionalNames = {
   commands: ["run_command", "run_process", "wait_process", "stop_process", "autoapproveCommands", "CommandRuntime", "startManagedProcess"],
   safe: ["safeCommandPatterns", "autoapproveSafeCommands", "authorizeCommand", "matchesSafeList"],
-  search: ["web_search", "webSearchEndpoint", "searchSearxng"]
+  search: ["web_search", "webSearchEndpoint", "autoapproveWebSearch", "searchSearxng", "webSearchApiKey", "validateWebSearch"]
 };
 
 function auditText(profile, name, text) {

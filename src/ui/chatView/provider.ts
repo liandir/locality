@@ -342,7 +342,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const runtime = newRuntime();
     runtime.storage = storage;
     const session = new ChatSession({
-      storage, workspaceRoot: ws, record: rec, memory: this.memory,
+      storage, workspaceRoot: ws, record: rec, memory: this.memory, secrets: this.context.secrets,
       emit: event => {
         if (runtime.removed) return;
         if (event.kind === "visionCapability") {

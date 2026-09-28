@@ -377,7 +377,7 @@ function bind(): void {
   bindRangeSetting("autoCompactThresholdPercent");
   bindSetting("autoapproveReads", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoapproveWrites", "change", (_v, el) => (el as HTMLInputElement).checked);
-  sideFeature.bind(root, send);
+  sideFeature.bind(root, send, render);
   root.querySelector("#editWorkspacePrompts")?.addEventListener("click", () => send({ type: "editWorkspacePrompts" }));
   root.querySelector("#editUserSettings")?.addEventListener("click", () => send({ type: "editUserSettingsJson" }));
   root.querySelector("#restorePrompts")?.addEventListener("click", () => send({ type: "restoreDefaultGeneratedPrompts" }));
@@ -478,6 +478,7 @@ function ago(ts: number): string {
 
 window.addEventListener("message", ev => {
   const msg = ev.data as ExtToSide;
+  if (sideFeature.receive?.(msg)) { render(); return; }
   switch (msg.type) {
     case "revealMemory": {
       state.tab = "chats";

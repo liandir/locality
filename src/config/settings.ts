@@ -36,6 +36,7 @@ export interface HarnessSettings {
   autoapproveSafeCommands?: boolean;
   safeCommandPatterns?: unknown;
   webSearchEndpoint?: string;
+  autoapproveWebSearch?: boolean;
 }
 
 export function readSettings(): HarnessSettings {

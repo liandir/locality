@@ -114,10 +114,28 @@ Safe Git currently requires a `.git` directory inside the workspace; linked
 worktrees and parent-repository discovery are not supported. Narrow recursive
 searches if the checked tree exceeds 10,000 entries.
 
-**Advanced search:** enter your SearXNG base URL in Settings, for example
-`http://localhost:8888`. Enable JSON in that instance's `search.formats` setting.
-Public endpoints require HTTPS. Leave the URL blank to omit the search tool.
-Each query requires approval and goes to the configured service and its external
+**Advanced search:** enter a SearXNG **Endpoint** (base URL) and optional
+**API-key** in Settings, above **Auto-approve web searches**. Click **Set** to
+run a test JSON search for `SearXNG` and save the connection if successful.
+A blank endpoint disables search; there is no public default. Connection,
+authentication, rate-limit, and response-format errors appear in red.
+
+A blank key sends no authentication header. When supplied, the key uses
+`Authorization: Bearer …` (supported by PrivAU). Keys are kept in VS Code secret
+storage, bound to the saved endpoint, and are never included in prompts, chat
+history, or settings JSON. Clearing the key and pressing Set removes it after
+a successful connection test. Changing the endpoint in user JSON does not send
+an existing key to the new destination; use Set to configure its credentials.
+This integration expects the SearXNG JSON API, not arbitrary search-provider APIs.
+
+Each search requires approval unless you enable **Auto-approve web searches**.
+This switch applies in Act, Plan, and Review modes and is off by default.
+`locality.webSearchEndpoint` and the approval switch are user settings;
+workspace overrides are ignored. These features are available only in Advanced.
+
+The search service must support JSON responses. Public endpoints require HTTPS;
+HTTP is allowed for localhost/private IP addresses. Public instances may reject
+or rate-limit API requests. Queries go to the configured service and its upstream
 search engines. Results provide URLs and snippets, not full-page browsing.
 
 **Build and package:** `npm run build` develops the Commands edition. Use
@@ -385,7 +403,8 @@ by compaction in older versions cannot be recovered automatically.
 | `autoapproveCommands` | `false` | Commands and Advanced: skip command approval in Act mode. Review always asks. |
 | `autoapproveSafeCommands` | `false` | Safe list: skip approval for every matching command in Act mode. Review always asks. |
 | `safeCommandPatterns` | Built-in regex list | Safe list: whole-command patterns in user settings; empty means deny all. |
-| `webSearchEndpoint` | Empty | Advanced: user-configured SearXNG base URL. Empty omits search. |
+| `webSearchEndpoint` | `""` | Advanced: SearXNG base URL, configured and tested in Settings. Empty omits search. |
+| `autoapproveWebSearch` | `false` | Advanced: auto-approve web searches in Act, Plan, and Review modes. User settings only. |
 
 The generated-text settings are instruction strings, not templates, so they do
 not need variables. The harness constructs the requests as follows:
@@ -442,8 +461,8 @@ trash icon. Deleting cannot be undone.
 - File tools cannot read or write outside the workspace root.
 - Commit-message generation reads only staged changes (`git diff --cached`)
   and sends that diff to the configured local/LAN endpoint.
-- Only Advanced includes a direct search tool, with per-query approval. General
-  commands run with your normal
+- Only Advanced includes a direct search tool, with per-query approval by default.
+  **Auto-approve web searches** skips those prompts when enabled. General commands run with your normal
   permissions and can fetch URLs, call APIs, install packages, or access files
   outside the workspace. Command approval is required by default; enabling
   **Auto-approve commands** permits these actions without a prompt in Act mode.

@@ -1,3 +1,4 @@
+import type { SecretStorage } from "vscode";
 import { beginForeground } from "../llm/activity.js";
 import { searchMemories, recallMemory, memoryMetadata, type MemorySnapshot } from "./memory.js";
 import { MAX_MEMORY_COUNT } from "./memoryLimits.js";
@@ -238,6 +239,7 @@ export class ChatSession {
     record: ChatRecord;
     emit: (e: UiEvent) => void;
     memory?: WorkspaceMemory;
+    secrets?: SecretStorage;
   }) {
     this.storage = args.storage;
     this.workspaceRoot = args.workspaceRoot;
@@ -245,6 +247,7 @@ export class ChatSession {
     this.emit = args.emit;
     this.features = createFeatures({
       workspaceRoot: this.workspaceRoot,
+      secrets: args.secrets,
       emit: event => this.emit(event),
       appendResult: (name, argsJson, result, metadata) => this.appendToolResult(
         readSettings(), name, argsJson, result, undefined, { status: "executed", ...metadata }
