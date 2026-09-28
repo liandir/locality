@@ -11,20 +11,21 @@ let status: { ok?: boolean; text: string } | undefined;
 
 export const sideFeature: SideFeature = {
   label: "Advanced",
-  render(settings, toggle, escape) {
+  render: (settings, toggle, escape) => commands.render(settings, toggle, escape),
+  renderSection(settings, toggle, escape) {
     const disabled = testing || !loaded ? "disabled" : "";
-    return commands.render(settings, toggle, escape) + `
+    return `<section class="panel-section"><h3>Web search</h3>
       <div class="connection-settings" aria-label="Web search settings">
-        <label class="field-label" for="webSearchEndpoint">Endpoint</label>
+        <label class="field-label" for="webSearchEndpoint">Web search endpoint</label>
         <div class="setting-action-row">
           <input id="webSearchEndpoint" type="text" value="${escape(endpoint ?? String(settings.webSearchEndpoint ?? ""))}" placeholder="https://search.example.org" ${disabled} />
           <button id="setWebSearch" class="primary" aria-label="Test and save web search settings" ${disabled}>${testing ? "Testing…" : "Set"}</button>
         </div>
         <label class="field-label" for="webSearchApiKey">API-key</label>
         <input id="webSearchApiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Optional" ${disabled} />
-        <p class="setting-help">SearXNG base URL. Set tests a search. An optional key uses Bearer authentication. Leave the endpoint blank to disable search.</p>
+        <p class="setting-help">SearXNG base URL. Set tests a search. An optional key uses Bearer authentication. Verify this connection to enable web tools. Leave it blank to disable both tools.</p>
         ${status ? `<div class="validation ${status.ok === false ? "err" : status.ok ? "ok" : ""}" role="${status.ok === false ? "alert" : "status"}">${escape(status.text)}</div>` : ""}
-      </div>` + toggle("autoapproveWebSearch", "Auto-approve web searches", settings.autoapproveWebSearch === true);
+      </div>` + toggle("autoapproveWebSearch", "Auto-approve web requests", settings.autoapproveWebSearch === true) + "</section>";
   },
   bind(root, send, render) {
     commands.bind(root, send);
@@ -63,7 +64,9 @@ export const sideFeature: SideFeature = {
         if (endpoint !== message.endpoint) status = undefined;
         endpoint = message.endpoint;
         apiKey = message.apiKey;
-        if (message.error) status = { ok: false, text: message.error };
+        status = message.error ? { ok: false, text: message.error }
+          : message.verified ? { ok: true, text: "Verified — web tools enabled." }
+          : message.endpoint ? { text: "Click Set to verify this connection and enable web tools." } : undefined;
       }
       loaded = true;
       return true;
@@ -75,7 +78,7 @@ export const sideFeature: SideFeature = {
         if (!endpoint) apiKey = "";
         dirty = false;
       }
-      status = { ok: message.ok, text: message.ok ? (endpoint ? "Connected — search settings saved." : "Web search disabled.") : message.error ?? "Search connection failed." };
+      status = { ok: message.ok, text: message.ok ? (endpoint ? "Verified — web tools enabled." : "Web search disabled.") : message.error ?? "Search connection failed." };
       return true;
     }
     return false;

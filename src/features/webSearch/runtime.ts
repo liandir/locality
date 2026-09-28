@@ -8,6 +8,7 @@ export function createSearchFeature(secrets?: SecretStorage): FeatureRuntime {
   return {
     tools: ["web_search"], category: () => "search", needsApproval: settings => settings.autoapproveWebSearch !== true,
     async prepare(_name, args, settings) {
+      if (!settings.webToolsEnabled) throw new Error("Verify the Web search endpoint using Set in Settings before using web tools.");
       searchRequest(args);
       const endpoint = settings.webSearchEndpoint ?? "";
       await searchUrl(endpoint);
@@ -18,7 +19,9 @@ export function createSearchFeature(secrets?: SecretStorage): FeatureRuntime {
     },
     async execute(_name, args, _id, signal) {
       const request = searchRequest(args);
-      const endpoint = readSettings().webSearchEndpoint ?? "";
+      const settings = readSettings();
+      if (!settings.webToolsEnabled) throw new Error("Web tools are unavailable. Verify the Web search endpoint in Settings.");
+      const endpoint = settings.webSearchEndpoint ?? "";
       if (approvedDestinations.get(args) !== endpoint) throw new Error("Search destination is no longer approved.");
       const apiKey = await readSearchApiKey(secrets, endpoint);
       const results = await searchSearxng(endpoint, request, { signal, apiKey });

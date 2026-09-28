@@ -36,6 +36,8 @@ export interface HarnessSettings {
   autoapproveSafeCommands?: boolean;
   safeCommandPatterns?: unknown;
   webSearchEndpoint?: string;
+  /** Host-derived capability flag, never a configurable permission. */
+  webToolsEnabled?: boolean;
   autoapproveWebSearch?: boolean;
 }
 

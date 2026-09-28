@@ -35,7 +35,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
     private onOpenTabs: () => ChatTab[],
     private memory?: WorkspaceMemory,
     private onEndpointConnected?: () => void
-  ) { this.featureHost = createSideHost?.(context.secrets, message => this.post(message)); }
+  ) { this.featureHost = createSideHost?.(context.secrets, message => this.post(message), context.globalState); }
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;

@@ -17,6 +17,7 @@ export function assertProfile(profile) {
 export function forbiddenInput(profile, name) {
   const file = name.replaceAll("\\", "/");
   if (profile !== "advanced" && /src\/features\/(webSearch|advanced)\//.test(file)) return true;
+  if (profile !== "advanced" && /node_modules\/(undici|htmlparser2)\//.test(file)) return true;
   if (profile !== "safe-list" && /src\/features\/commands\/safeList\//.test(file)) return true;
   if (profile === "safe-list" && (/src\/features\/commands\/full\//.test(file) || file.endsWith("src/tools/terminalTool.ts"))) return true;
   if (profile === "no-commands" && (/src\/features\/commands\//.test(file) || /src\/(tools\/terminalTool|ui\/commandDisplay|util\/exec)\.ts$/.test(file))) return true;

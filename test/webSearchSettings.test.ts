@@ -1,21 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SecretStorage } from "vscode";
+import type { Memento, SecretStorage } from "vscode";
 import type { HarnessSettings } from "../src/config/settings.js";
 import type { ExtToSide } from "../src/ui/messaging.js";
 const mocks = vi.hoisted(() => ({ fetch: vi.fn(), settings: vi.fn(), write: vi.fn() }));
 vi.mock("../src/network/safeFetch.js", () => ({ safeFetch: mocks.fetch }));
 vi.mock("../src/config/settings.js", () => ({ readSettings: mocks.settings, writeSetting: mocks.write }));
 import { createSideHost } from "../src/features/advanced/sideHost.js";
+import { initializeVerification, isWebSearchVerified, VERIFICATION_KEY } from "../src/features/webSearch/verification.js";
 import { createSearchFeature } from "../src/features/webSearch/runtime.js";
 import { readSearchApiKey, SEARCH_SECRET_KEY } from "../src/features/webSearch/credentials.js";
 
 let saved: Map<string, string>;
 let secrets: SecretStorage;
 let settings: HarnessSettings;
+let state: Memento;
+let storedState: Map<string, unknown>;
 let messages: ExtToSide[];
 beforeEach(() => {
   vi.resetAllMocks();
   saved = new Map();
+  storedState = new Map();
+  state = { get: (key: string) => storedState.get(key), update: vi.fn(async (key: string, value: unknown) => { storedState.set(key, value); }), keys: () => [...storedState.keys()] } as Memento;
+  initializeVerification(state);
   secrets = {
     get: vi.fn(async (key: string) => saved.get(key)),
     store: vi.fn(async (key: string, value: string) => { saved.set(key, value); }),
@@ -24,13 +30,13 @@ beforeEach(() => {
     onDidChange: vi.fn()
   };
   settings = { webSearchEndpoint: "https://old.example", autoapproveWebSearch: false } as HarnessSettings;
-  mocks.settings.mockImplementation(() => settings);
+  mocks.settings.mockImplementation(() => ({ ...settings, webToolsEnabled: isWebSearchVerified(settings.webSearchEndpoint ?? "") }));
   mocks.write.mockImplementation(async (key: string, value: unknown) => { settings = { ...settings, [key]: value }; });
   mocks.fetch.mockImplementation(async () => new Response('{"results":[]}'));
   messages = [];
 });
 
-const host = () => createSideHost(secrets, message => messages.push(message));
+const host = () => createSideHost(secrets, message => messages.push(message), state);
 const set = (apiKey = "", endpoint = "https://search.example") => ({ type: "validateWebSearch" as const, endpoint, apiKey });
 
 describe("Advanced search connection settings", () => {
@@ -44,6 +50,10 @@ describe("Advanced search connection settings", () => {
     expect(await readSearchApiKey(secrets, settings.webSearchEndpoint!)).toBe(apiKey);
     expect(messages).toEqual([{ type: "webSearchValidation", ok: true, endpoint: "https://search.example" }]);
     expect(JSON.stringify(settings)).not.toContain("personal-key");
+    expect(isWebSearchVerified(settings.webSearchEndpoint!)).toBe(true);
+    expect(storedState.get(VERIFICATION_KEY)).toBe("https://search.example");
+    initializeVerification(state);
+    expect(isWebSearchVerified(settings.webSearchEndpoint!)).toBe(true);
   });
 
   it.each([401, 403, 429, 503])("does not save failed probes (HTTP %s)", async status => {
@@ -92,21 +102,19 @@ describe("Advanced search connection settings", () => {
     const instance = host();
     await instance.handle(set("personal-key"));
     await instance.pushSettings();
-    expect(messages.at(-1)).toEqual({ type: "webSearchSettings", endpoint: "https://search.example", apiKey: "personal-key" });
+    expect(messages.at(-1)).toEqual({ type: "webSearchSettings", endpoint: "https://search.example", apiKey: "personal-key", verified: true });
     const feature = createSearchFeature(secrets);
     const args = { query: "docs" };
-    await feature.prepare("web_search", args, settings);
+    await feature.prepare("web_search", args, mocks.settings());
     const result = await feature.execute("web_search", args, "call");
     expect(mocks.fetch.mock.calls.at(-1)![2].headers.Authorization).toBe("Bearer personal-key");
     expect(JSON.stringify(result)).not.toContain("personal-key");
     for (const endpoint of ["https://other.example", "https://search.example/other-path"]) {
       settings = { ...settings, webSearchEndpoint: endpoint };
       await instance.pushSettings();
-      expect(messages.at(-1)).toEqual({ type: "webSearchSettings", endpoint, apiKey: "" });
+      expect(messages.at(-1)).toEqual({ type: "webSearchSettings", endpoint, apiKey: "", verified: false });
       const next = { query: "docs" };
-      await feature.prepare("web_search", next, settings);
-      await feature.execute("web_search", next, "next");
-      expect(mocks.fetch.mock.calls.at(-1)![2].headers).not.toHaveProperty("Authorization");
+      await expect(feature.prepare("web_search", next, mocks.settings())).rejects.toThrow("Verify");
     }
   });
 
@@ -129,7 +137,7 @@ describe("Advanced search connection settings", () => {
     await first;
     expect(mocks.write).not.toHaveBeenCalled();
     expect(saved.has(SEARCH_SECRET_KEY)).toBe(false);
-    expect(messages).toEqual([{ type: "webSearchSettings", endpoint: "", apiKey: "", reset: true }]);
+    expect(messages).toEqual([{ type: "webSearchSettings", endpoint: "", apiKey: "", verified: false, reset: true }]);
   });
 
 });

@@ -74,7 +74,7 @@ describe("SearXNG search", () => {
   it.each([false, true])("refuses changed destinations with auto-approval %s", async autoapproveWebSearch => {
     const feature = createSearchFeature();
     const args = { query: "docs" };
-    const settings = { webSearchEndpoint: "https://search.example", autoapproveWebSearch } as HarnessSettings;
+    const settings = { webSearchEndpoint: "https://search.example", webToolsEnabled: true, autoapproveWebSearch } as HarnessSettings;
     expect(feature.needsApproval(settings)).toBe(!autoapproveWebSearch);
     await feature.prepare("web_search", args, settings);
     const changed = { ...settings, webSearchEndpoint: "https://another.example" };

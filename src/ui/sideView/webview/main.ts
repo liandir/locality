@@ -160,15 +160,14 @@ function renderChats(): string {
 }
 
 function renderMemorySettings(): string {
-  return `<section class="panel-section">
-    <h3>Workspace memory</h3>
+  return `<div class="memory-settings">
     ${switchControl("memoryEnabled", "Use workspace memories", state.settings.memoryEnabled === true)}
     <p class="setting-help">Let the agent search and recall active memories from this workspace. Summaries are generated and managed in Recent Chats.</p>
     <label class="field-label" for="memoryMaxCount">Maximum search results</label>
     <input id="memoryMaxCount" type="number" min="1" max="${MAX_MEMORY_COUNT}" step="1" value="${esc(String(state.settings.memoryMaxCount ?? DEFAULT_MEMORY_MAX_COUNT))}" />
     <p class="setting-help">Return up to 10 matches per search by default. The agent chooses which memories to recall.</p>
     ${state.memorySettingError ? `<p class="memory-error" role="alert">${esc(state.memorySettingError)}</p>` : ""}
-  </section>`;
+  </div>`;
 }
 
 function renderChatEntry(chat: { id: string; title: string; updatedAt?: number }, memory: MemoryListItem | undefined, group: string): string {
@@ -274,9 +273,10 @@ function renderSettings(): string {
         <h3>Chat</h3>
         ${switchControl("showThinking", "Show thoughts", showThinking)}
         <p class="setting-help">When off, completed thoughts are hidden from tool history. Current thinking remains visible while it is active.</p>
+        ${renderMemorySettings()}
       </section>
 
-      ${renderMemorySettings()}
+      ${sideFeature.renderSection?.(s, switchControl, esc) ?? ""}
       <section class="panel-section">
         <h3>Automation</h3>
         ${switchControl("autoCompact", "Auto-compact context", autoCompact)}

@@ -83,7 +83,7 @@ export type ExtToSide =
   | { type: "memories"; memories: MemoryListItem[] }
   | { type: "memoryError"; error: string }
   | { type: "settings"; settings: Record<string, unknown> }
-  | { type: "webSearchSettings"; endpoint: string; apiKey: string; error?: string; reset?: boolean }
+  | { type: "webSearchSettings"; endpoint: string; apiKey: string; verified: boolean; error?: string; reset?: boolean }
   | { type: "webSearchValidation"; ok: boolean; error?: string; endpoint?: string }
   | { type: "appInfo"; version: string }
   | { type: "chats"; chats: { id: string; title: string; updatedAt: number }[] }

@@ -316,12 +316,14 @@
   },
   "dependencies": {
     "@vscode/markdown-it-katex": "^1.1.2",
+    "htmlparser2": "^10.1.0",
     "katex": "^0.16.10",
     "markdown-it": "^14.1.0",
-    "shiki": "^4.1.0"
+    "shiki": "^4.1.0",
+    "undici": "^6.29.0"
   },
   "overrides": {
-    "undici": "^6.21.0"
+    "undici": "$undici"
   },
   "allowScripts": {
     "esbuild@0.28.1": true,

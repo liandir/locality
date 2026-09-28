@@ -1,4 +1,4 @@
-import type { SecretStorage } from "vscode";
+import type { SecretStorage, Memento } from "vscode";
 import type { ExtToSide, SideToExt } from "../ui/messaging.js";
 
 export interface SideHost {
@@ -6,4 +6,4 @@ export interface SideHost {
   pushSettings(): Promise<void>;
   reset(): Promise<void>;
 }
-export type SideHostFactory = (secrets: SecretStorage, post: (message: ExtToSide) => void) => SideHost;
+export type SideHostFactory = (secrets: SecretStorage, post: (message: ExtToSide) => void, state: Memento) => SideHost;

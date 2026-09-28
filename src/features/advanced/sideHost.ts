@@ -1,9 +1,11 @@
 import type { SideHostFactory } from "../../build/sideHostContracts.js";
 import { readSettings, writeSetting } from "../../config/settings.js";
 import { credentialScope, readSearchApiKey, SEARCH_SECRET_KEY } from "../webSearch/credentials.js";
+import { initializeVerification, isWebSearchVerified, verifyWebSearch } from "../webSearch/verification.js";
 import { SearchError, searchSearxng } from "../webSearch/searxng.js";
 
-export const createSideHost: SideHostFactory = (secrets, post) => {
+export const createSideHost: SideHostFactory = (secrets, post, state) => {
+  initializeVerification(state);
   let saving = false;
   let generation = 0;
   let resetVersion = 0;
@@ -14,9 +16,9 @@ export const createSideHost: SideHostFactory = (secrets, post) => {
       const endpoint = readSettings().webSearchEndpoint ?? "";
       try {
         const apiKey = await readSearchApiKey(secrets, endpoint);
-        if (current === generation) post({ type: "webSearchSettings", endpoint, apiKey });
+        if (current === generation) post({ type: "webSearchSettings", endpoint, apiKey, verified: isWebSearchVerified(endpoint) });
       } catch {
-        if (current === generation) post({ type: "webSearchSettings", endpoint, apiKey: "", error: "Could not read the saved search API key from secret storage." });
+        if (current === generation) post({ type: "webSearchSettings", endpoint, apiKey: "", verified: false, error: "Could not read the saved search API key from secret storage." });
       }
     },
     async handle(message) {
@@ -35,8 +37,13 @@ export const createSideHost: SideHostFactory = (secrets, post) => {
         if (version !== resetVersion) return true;
         if (endpoint && apiKey) await secrets.store(SEARCH_SECRET_KEY, JSON.stringify({ endpoint: credentialScope(endpoint), apiKey }));
         else await secrets.delete(SEARCH_SECRET_KEY);
-        try { await writeSetting("webSearchEndpoint", endpoint); }
+        const previousEndpoint = readSettings().webSearchEndpoint ?? "";
+        try {
+          await writeSetting("webSearchEndpoint", endpoint);
+          await verifyWebSearch(endpoint);
+        }
         catch {
+          if (readSettings().webSearchEndpoint !== previousEndpoint) await writeSetting("webSearchEndpoint", previousEndpoint);
           if (previous === undefined) await secrets.delete(SEARCH_SECRET_KEY);
           else await secrets.store(SEARCH_SECRET_KEY, previous);
           throw new SearchError("Could not save the search endpoint. Previous settings were kept.");
@@ -56,7 +63,8 @@ export const createSideHost: SideHostFactory = (secrets, post) => {
       ++resetVersion;
       pending?.abort();
       await secrets.delete(SEARCH_SECRET_KEY);
-      post({ type: "webSearchSettings", endpoint: readSettings().webSearchEndpoint ?? "", apiKey: "", reset: true });
+      await verifyWebSearch("");
+      post({ type: "webSearchSettings", endpoint: readSettings().webSearchEndpoint ?? "", apiKey: "", verified: false, reset: true });
     }
   };
 };
