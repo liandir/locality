@@ -11,4 +11,4 @@ export function featurePrompt(opts: PromptOptions, mode: ChatMode): string {
     "Long-running commands return a job_id. Use wait_process to observe output and stop_process to terminate a job. Run available checks appropriate to the change and report any verification limitations."
   ].join("\n");
 }
-export const featureExamples: Record<string, unknown> = { command: "git status", job_id: "job_1", "run_process.program": "git", "run_process.args": ["status"] };
+export const featureExamples: Record<string, unknown> = { command: "git status", job_id: "job_1" };

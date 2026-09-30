@@ -33,9 +33,7 @@ const mocks = vi.hoisted(() => ({
   fetchServerContextSize: vi.fn(),
   supportsVision: true,
   runCommand: vi.fn(),
-  runProcess: vi.fn(),
-  startCommand: vi.fn(),
-  startProcess: vi.fn()
+  startCommand: vi.fn()
 }));
 
 vi.mock("vscode", () => ({
@@ -73,9 +71,7 @@ vi.mock("../src/llm/client.js", () => ({
 
 vi.mock("../src/tools/terminalTool.js", () => ({
   runCommand: mocks.runCommand,
-  runProcess: mocks.runProcess,
-  startCommand: mocks.startCommand,
-  startProcess: mocks.startProcess
+  startCommand: mocks.startCommand
 }));
 
 beforeEach(() => {
@@ -85,18 +81,13 @@ beforeEach(() => {
   mocks.fetchServerContextSize.mockReset();
   mocks.supportsVision = true;
   mocks.runCommand.mockReset();
-  mocks.runProcess.mockReset();
   mocks.startCommand.mockReset();
-  mocks.startProcess.mockReset();
   mocks.tokenize.mockResolvedValue(1);
   mocks.complete.mockResolvedValue("Test chat");
   mocks.fetchServerContextSize.mockResolvedValue(32768);
-  mocks.runProcess.mockResolvedValue({ exitCode: 0, stdout: "ok\n", stderr: "", truncated: false });
+  mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "ok\n", stderr: "", truncated: false });
   mocks.startCommand.mockImplementation((command, cwd, signal, onOutput) =>
     mockCommandHandle(mocks.runCommand(command, cwd, signal, onOutput))
-  );
-  mocks.startProcess.mockImplementation((program, args, cwd, signal, onOutput) =>
-    mockCommandHandle(mocks.runProcess(program, args, cwd, signal, onOutput))
   );
   mocks.settings.autoapproveReads = true;
   mocks.settings.autoapproveWrites = false;
@@ -1632,13 +1623,14 @@ describe("ChatSession", () => {
     expect(events.some(event => event.kind === "abort" && event.reason.includes("Duplicate tool call id"))).toBe(true);
   });
 
-  it("executes native command arguments without using the legacy shell tool", async () => {
+  it("passes native multiline commands unchanged to the shell runner", async () => {
+    const command = "cat <<'TEXT'\nfirst line\nsecond line\nTEXT\nprintf 'done\\n'";
     mocks.settings.toolCallingMode = "native";
     mocks.settings.autoapproveCommands = true;
     let pass = 0;
     mocks.streamChat.mockImplementation(async function* () {
       if (pass++ === 0) {
-        yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["test"]}', id: "call_process_1" };
+        yield { kind: "toolCall", name: "run_command", argsJson: JSON.stringify({ command }), id: "call_command_1" };
       } else {
         yield { kind: "text", text: "done" };
       }
@@ -1654,19 +1646,52 @@ describe("ChatSession", () => {
     });
     await session.sendUserMessage("test");
 
-    expect(mocks.runProcess).toHaveBeenCalledWith(
-      "npm",
-      ["test"],
+    expect(mocks.runCommand).toHaveBeenCalledWith(
+      command,
       "/tmp/workspace",
       expect.any(AbortSignal),
       expect.any(Function)
     );
-    expect(mocks.runCommand).not.toHaveBeenCalled();
     expect(events).toContainEqual(expect.objectContaining({
       kind: "toolCallProposed",
       category: "command",
+      processCommand: command,
       approvalRequired: false
     }));
+  });
+
+  it("rejects the removed run_process tool and reports run_command as available", async () => {
+    mocks.settings.toolCallingMode = "native";
+    mocks.settings.autoapproveCommands = true;
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (pass++ === 0) yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["test"]}', id: "removed_process" };
+      else yield { kind: "text", text: "done" };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const session = new ChatSession({ storage: { save: vi.fn() } as never, workspaceRoot: "/tmp/workspace", record, emit: vi.fn() });
+    await session.sendUserMessage("Run tests");
+    expect(mocks.startCommand).not.toHaveBeenCalled();
+    const result = record.messages.find(message => message.role === "tool");
+    expect(result?.content).toContain('Unknown tool "run_process"');
+    expect(result?.content).toMatch(/Available tools: .*run_command/);
+  });
+
+  it.each([{}, { command: 123 }, { command: " \n" }, { command: "echo a\0b" }])("rejects invalid native command arguments without launching: %j", async args => {
+    mocks.settings.toolCallingMode = "native";
+    mocks.settings.autoapproveCommands = true;
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (pass++ === 0) yield { kind: "toolCall", name: "run_command", argsJson: JSON.stringify(args), id: "invalid_command" };
+      else yield { kind: "text", text: "done" };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const session = new ChatSession({ storage: { save: vi.fn() } as never, workspaceRoot: "/tmp/workspace", record, emit: vi.fn() });
+    await session.sendUserMessage("Run the command");
+    expect(mocks.startCommand).not.toHaveBeenCalled();
+    expect(record.messages.find(message => message.role === "tool")?.toolCall?.status).toBe("failed");
   });
 
   it.each([0, 1, 127, "runner-error"])("separates command outcome %s from tool status and persists display data", async outcome => {
@@ -1674,11 +1699,11 @@ describe("ChatSession", () => {
     try {
       mocks.settings.toolCallingMode = "native";
       mocks.settings.autoapproveCommands = true;
-      if (outcome === "runner-error") mocks.runProcess.mockRejectedValue(new Error("runner unavailable"));
-      else mocks.runProcess.mockResolvedValue({ exitCode: outcome, stdout: "out\n", stderr: "err\n", output: "err\nout\n", truncated: false });
+      if (outcome === "runner-error") mocks.runCommand.mockRejectedValue(new Error("runner unavailable"));
+      else mocks.runCommand.mockResolvedValue({ exitCode: outcome, stdout: "out\n", stderr: "err\n", output: "err\nout\n", truncated: false });
       let pass = 0;
       mocks.streamChat.mockImplementation(async function* () {
-        if (pass++ === 0) yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["test"]}', id: "command_outcome" };
+        if (pass++ === 0) yield { kind: "toolCall", name: "run_command", argsJson: '{"command":"npm test"}', id: "command_outcome" };
         else yield { kind: "text", text: "done" };
       });
       const { ChatStorage } = await import("../src/chat/storage.js");
@@ -1706,8 +1731,8 @@ describe("ChatSession", () => {
     }
   });
 
-  it.each(["run_command", "run_process"])("shows the command when checking a long-running %s", async toolName => {
-    const legacy = toolName === "run_command";
+  it.each(["native", "legacy"])("shows the command when checking a long-running command in %s mode", async transport => {
+    const legacy = transport === "legacy";
     mocks.settings.toolCallingMode = legacy ? "compat-qwen3" : "native";
     mocks.settings.autoapproveCommands = true;
     const finalResult = { exitCode: 0, stdout: "started\ndone\n", stderr: "", output: "started\ndone\n", truncated: false };
@@ -1715,8 +1740,7 @@ describe("ChatSession", () => {
     let resolveResult = (_value: typeof finalResult): void => undefined;
     const result = new Promise<typeof finalResult>(resolve => { resolveResult = resolve; });
     let waits = 0;
-    const start = toolName === "run_command" ? mocks.startCommand : mocks.startProcess;
-    start.mockReturnValue({
+    mocks.startCommand.mockReturnValue({
       result,
       snapshot: () => output,
       wait: vi.fn(async () => {
@@ -1734,7 +1758,7 @@ describe("ChatSession", () => {
       if (legacy && request.tools) throw new mocks.NativeToolsUnsupportedError("tools unsupported");
       if (pass++ === 0) {
         if (legacy) yield { kind: "text", text: '<tool_call>{"name":"run_command","arguments":{"command":"npm test"}}</tool_call>' };
-        else yield { kind: "toolCall", name: toolName, argsJson: '{"program":"npm","args":["test"]}', id: "call_job_start" };
+        else yield { kind: "toolCall", name: "run_command", argsJson: '{"command":"npm test"}', id: "call_job_start" };
       } else if (pass === 2) {
         const started = events.find(
           (event): event is Extract<UiEvent, { kind: "toolCallResolved" }> =>
@@ -1780,7 +1804,7 @@ describe("ChatSession", () => {
     mocks.settings.autoapproveCommands = true;
     let fail!: (error: Error) => void;
     const result = new Promise<never>((_resolve, reject) => { fail = reject; });
-    mocks.startProcess.mockReturnValue({
+    mocks.startCommand.mockReturnValue({
       result,
       snapshot: () => ({ stdout: "started\n", stderr: "", output: "started\n", truncated: false }),
       wait: vi.fn(async () => ({ running: true as const })),
@@ -1788,7 +1812,7 @@ describe("ChatSession", () => {
     });
     let pass = 0;
     mocks.streamChat.mockImplementation(async function* () {
-      if (pass++ === 0) yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["test"]}', id: "yield_then_fail" };
+      if (pass++ === 0) yield { kind: "toolCall", name: "run_command", argsJson: '{"command":"npm test"}', id: "yield_then_fail" };
       else {
         fail(new Error("runner connection lost"));
         await Promise.resolve();
@@ -1816,7 +1840,7 @@ describe("ChatSession", () => {
       return stoppedResult;
     });
     let waits = 0;
-    mocks.startProcess.mockReturnValue({
+    mocks.startCommand.mockReturnValue({
       result,
       snapshot: () => ({ stdout: "started\n", stderr: "", truncated: false }),
       wait: vi.fn(async () => waits++ === 0
@@ -1829,7 +1853,7 @@ describe("ChatSession", () => {
     let pass = 0;
     mocks.streamChat.mockImplementation(async function* () {
       if (pass++ === 0) {
-        yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["test"]}', id: "call_user_stop" };
+        yield { kind: "toolCall", name: "run_command", argsJson: '{"command":"npm test"}', id: "call_user_stop" };
       } else if (pass === 2) {
         const started = events.find(
           (event): event is Extract<UiEvent, { kind: "toolCallResolved" }> =>
@@ -1891,7 +1915,7 @@ describe("ChatSession", () => {
       resolveResult(stoppedResult);
       return stoppedResult;
     });
-    mocks.startProcess.mockReturnValue({
+    mocks.startCommand.mockReturnValue({
       result,
       snapshot: () => ({ stdout: "started\n", stderr: "", truncated: false }),
       wait: vi.fn(async () => ({ running: true as const, output: { stdout: "started\n", stderr: "", truncated: false } })),
@@ -1900,7 +1924,7 @@ describe("ChatSession", () => {
     let pass = 0;
     mocks.streamChat.mockImplementation(async function* () {
       if (pass++ === 0) {
-        yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["test"]}', id: "call_auto_stop" };
+        yield { kind: "toolCall", name: "run_command", argsJson: '{"command":"npm test"}', id: "call_auto_stop" };
       } else {
         yield { kind: "text", text: "final answer" };
       }
@@ -2341,7 +2365,7 @@ describe("ChatSession", () => {
       let pass = 0;
       mocks.streamChat.mockImplementation(async function* () {
         if (pass++ === 0) {
-          yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["test"]}', id: "call_review_process" };
+          yield { kind: "toolCall", name: "run_command", argsJson: '{"command":"npm test"}', id: "call_review_process" };
         } else {
           yield { kind: "text", text: "review complete" };
         }
@@ -2376,11 +2400,10 @@ describe("ChatSession", () => {
     );
     expect(proposed).toMatchObject({ category: "command", approvalRequired: true });
     expect(mocks.runCommand).not.toHaveBeenCalled();
-    expect(mocks.runProcess).not.toHaveBeenCalled();
 
     session.approve(toolId, true);
     await turn;
-    expect(profile === "native" ? mocks.runProcess : mocks.runCommand).toHaveBeenCalledOnce();
+    expect(mocks.runCommand).toHaveBeenCalledOnce();
     expect(events.some(event => event.kind === "planFinal")).toBe(false);
     expect(events.some(event => event.kind === "summary")).toBe(true);
   });
@@ -2498,7 +2521,7 @@ describe("ChatSession", () => {
   it("does not execute a command when the user rejects it", async () => {
     mocks.settings.autoapproveCommands = false;
     mocks.streamChat.mockImplementation(async function* () {
-      yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"npm","args":["publish"]}', id: "call_rejected" };
+      yield { kind: "toolCall", name: "run_command", argsJson: '{"command":"npm publish"}', id: "call_rejected" };
     });
 
     const { ChatSession } = await import("../src/chat/session.js");
@@ -2520,7 +2543,7 @@ describe("ChatSession", () => {
     session.approve(toolId, false);
     await turn;
 
-    expect(mocks.runProcess).not.toHaveBeenCalled();
+    expect(mocks.runCommand).not.toHaveBeenCalled();
     expect(events).toContainEqual(expect.objectContaining({
       kind: "toolCallResolved",
       toolId,
@@ -3537,7 +3560,7 @@ describe("tool presentation data", () => {
     mocks.settings.toolCallingMode = "native";
     let turn = 0;
     mocks.streamChat.mockImplementation(async function* () {
-      if (turn++ === 0) yield { kind: "toolCall", name: "run_process", argsJson: '{"program":"echo","args":["ok"]}', id: "display_test" };
+      if (turn++ === 0) yield { kind: "toolCall", name: "run_command", argsJson: '{"command":"echo ok"}', id: "display_test" };
       else yield { kind: "text", text: "done" };
     });
     const { ChatSession } = await import("../src/chat/session.js");
@@ -3547,7 +3570,7 @@ describe("tool presentation data", () => {
     const result = "Complete result for the model";
     const displayResult = "Separate UI-only payload";
     (session as unknown as { features: import("../src/build/contracts.js").FeatureRuntime[] }).features = [{
-      tools: ["run_process"], category: () => "command", needsApproval: () => false,
+      tools: ["run_command"], category: () => "command", needsApproval: () => false,
       prepare: async () => ({}), execute: async () => ({ result, displayResult })
     }];
     await session.sendUserMessage("show result");

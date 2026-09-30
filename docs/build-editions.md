@@ -36,9 +36,9 @@ for rules, supported commands, platforms, and repository layouts.
 ## Commands
 
 Use this edition when the assistant needs general command execution for builds,
-tests, or other programs. Native tool calls start programs with literal
-arguments; legacy command calls use a shell. The assistant can wait for output
-from a running job or stop it.
+tests, or other programs. Both native and legacy tool calls accept command
+strings interpreted by a shell, including pipelines, redirects, and multiline
+scripts. The assistant can wait for output from a running job or stop it.
 
 Commands run with the permissions of the VS Code extension host and may access
 files or the network beyond the workspace. They require approval by default.

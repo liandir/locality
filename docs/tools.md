@@ -59,19 +59,26 @@ the tool set automatically. See [model setup](user-guide.md#first-time-setup).
 ## Command tools
 
 Available in **Safe list**, **Commands**, and **Advanced**, in Act and Review
-modes. No commands contains no command executor. Safe list applies its configured
-rules to both command transports.
+modes, with the same command-string interface in native and legacy tool calling.
+No commands contains no command executor. Safe list applies its configured rules
+in both calling formats.
 
 | Tool | Purpose |
 | --- | --- |
-| `run_process` | Start a program with literal arguments, without a shell; native tool calling |
-| `run_command` | Run a command line; legacy tool calling. Commands and Advanced use a shell; Safe list accepts one program with literal arguments |
+| `run_command` | Run a command string. Commands and Advanced use a shell; Safe list accepts one program with literal arguments |
 | `wait_process` | Wait for new output from a running job, for up to 30 seconds per call |
 | `stop_process` | Stop a process tree owned by the current chat |
 
 Long-running commands return a job ID so the assistant can check their output or
 stop them. Output is shown in the chat, and the process card also offers a Stop
 button. See [command approval](#command-approval) for permissions.
+
+In Commands and Advanced, command strings can contain pipelines, redirects,
+and multiline scripts. They use the system shell (`/bin/sh` on Unix or the
+configured command shell on Windows); Bash-specific syntax requires invoking
+`bash` explicitly. Safe list does not interpret shell operators or multiline
+scripts; it parses the command into a program and literal arguments before
+applying its policy.
 
 ## Web tools
 
@@ -113,12 +120,12 @@ call which appears as a small card in the chat. Cards are color-coded:
   a unified diff preview when expanded. Requires your approval by default.
   Click **Accept changes** to apply, or **Reject changes and suggest
   changes** to refuse and leave feedback in the composer.
-- **Commands** (in command-capable editions; `run_process` in native mode, `run_command` in legacy mode) —
+- **Commands** (`run_command` in command-capable editions) —
   purple. Each approved command runs as a background child process;
   no VS Code terminal is opened, and bounded stdout/stderr appear in the
-  expanded tool card. Native commands use a program and argument vector without
-  a shell. The assistant can decide when a command would help and propose it
-  directly. Every command requires manual approval by default. Turning on
+  expanded tool card. Commands and Advanced use a shell; Safe list runs one
+  permitted program directly. The assistant can decide when a command would help
+  and propose it directly. Every command requires manual approval by default. Turning on
   **Auto-approve commands** (or **Auto-approve safe commands**) skips the prompt
   in Act mode for commands permitted by that edition.
   Review mode always requires explicit approval.
@@ -133,7 +140,7 @@ call which appears as a small card in the chat. Cards are color-coded:
 ## Command approval
 
 In Commands and Advanced, **Auto-approve commands** controls approval for all
-command tool calls (`run_process` and `run_command`) in Act mode. It is off by
+`run_command` calls in Act mode. It is off by
 default, so each command waits for you to approve or reject it. Turning it on
 lets commands run without an approval prompt. Review mode always requires
 explicit command approval, and Plan mode cannot run commands.

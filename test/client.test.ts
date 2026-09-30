@@ -477,19 +477,22 @@ describe("OpenAI-compatible client", () => {
     expect(tools.map(tool => tool.function.name)).toEqual(["read_file", "list_dir", "glob", "ask_user_question"]);
   });
 
-  it("offers argv-based execution to native models instead of the legacy shell-string tool", () => {
+  it("offers command strings alongside native file tools", () => {
     const names = toolsForMode("act", "native").map(tool => tool.name);
-    expect(names).toContain("run_process");
-    expect(names).not.toContain("run_command");
+    expect(names).toContain("run_command");
+    expect(names).not.toContain("run_process");
     expect(names).toContain("create_file");
     expect(names).toContain("edit_file");
     expect(names).not.toContain("write_file");
     expect(names).toContain("insert_text");
     expect(names).toContain("replace_range");
-    const process = toolsForMode("act", "native").find(tool => tool.name === "run_process")!;
-    expect(process.parameters.properties.args.items).toEqual({ type: "string" });
-    expect(process.description).not.toContain("safe-list");
-    expect(process.description).not.toContain("approval");
+    const command = toolsForMode("act", "native").find(tool => tool.name === "run_command")!;
+    expect(command.parameters.required).toEqual(["command"]);
+    expect(Object.keys(command.parameters.properties)).toEqual(["command"]);
+    expect(command.parameters.properties.command.type).toBe("string");
+    expect(command).toEqual(toolsForMode("act", "legacy").find(tool => tool.name === "run_command"));
+    expect(command.description).not.toContain("safe-list");
+    expect(command.description).not.toContain("approval");
   });
 
   it("offers read and command tools but no mutations in review mode", () => {
@@ -500,7 +503,7 @@ describe("OpenAI-compatible client", () => {
 
     const nativeNames = toolsForMode("review", "native").map(tool => tool.name);
     expect(nativeNames).toEqual([
-      "read_file", "list_dir", "glob", "run_process", "wait_process", "stop_process", "ask_user_question"
+      "read_file", "list_dir", "glob", "run_command", "wait_process", "stop_process", "ask_user_question"
     ]);
     expect(nativeNames).not.toContain("create_file");
     expect(nativeNames).not.toContain("edit_file");

@@ -1,6 +1,6 @@
 /**
  * Normalize compatibility envelopes for display without unwrapping legitimate
- * tool parameters. In particular, run_process owns an `args` array alongside
+ * tool parameters. Saved run_process cards have an `args` array alongside
  * `program`; treating every `args` property as an envelope hides the command
  * from its card and approval prompt.
  */

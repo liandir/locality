@@ -32,10 +32,8 @@ export function quoteArgument(value: string): string {
   return /^[A-Za-z0-9_./:@%+=,~^-]+$/.test(value) ? value : "'" + value.replace(/'/g, "'\"'\"'") + "'";
 }
 
-export function prepareCommand(name: string, input: Record<string, unknown>): PreparedCommand {
-  const tokens = name === "run_command"
-    ? parseCommand(typeof input.command === "string" ? input.command : "")
-    : [input.program, ...(Array.isArray(input.args) ? input.args : [undefined])];
+export function prepareCommand(input: Record<string, unknown>): PreparedCommand {
+  const tokens = parseCommand(typeof input.command === "string" ? input.command : "");
   if (!tokens.length || tokens.some(token => typeof token !== "string" || /[\0\r\n]/.test(token))) {
     throw new Error("Expected a program and literal string arguments.");
   }

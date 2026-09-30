@@ -2487,7 +2487,7 @@ function normalizeToolArgs(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object") return {};
   const obj = value as Record<string, unknown>;
   // Unwrap compatibility envelopes only when they are actually envelopes.
-  // A real tool parameter named `args` (run_process) must remain intact.
+  // A real tool parameter named `args` must remain intact.
   const keys = Object.keys(obj);
   const wrapper = ["arguments", "args", "input", "parameters"].find(key =>
     key in obj && (keys.length === 1 || (key === "arguments" && keys.every(name => name === "name" || name === "arguments")))

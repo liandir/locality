@@ -140,8 +140,8 @@ async function checkSearchTree(root: string, target: string, budget: { remaining
   } else if (!stat.isFile()) throw new Error("Search input must be regular files.");
 }
 
-export async function authorizeCommand(name: string, input: Record<string, unknown>, root: string, settings: HarnessSettings) {
-  const prepared = prepareCommand(name, input);
+export async function authorizeCommand(input: Record<string, unknown>, root: string, settings: HarnessSettings) {
+  const prepared = prepareCommand(input);
   if (!await matchesSafeList(checkedPatterns(settings.safeCommandPatterns), prepared.display)) {
     throw new Error(`Command does not match the configured safe list: ${prepared.display}. Use a matching command; only the user can edit the safe list.`);
   }

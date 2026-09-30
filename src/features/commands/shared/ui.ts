@@ -2,6 +2,7 @@ import type { ChatFeature } from "../../../build/chatContracts.js";
 import { toolCommandText } from "../../../ui/commandDisplay.js";
 import { commandPresentation } from "./presentation.js";
 
+// Saved chats may still contain run_process cards; it is no longer executable.
 const names = ["run_command", "run_process", "wait_process", "stop_process"];
 const starts = ["run_command", "run_process"];
 export const chatFeature: ChatFeature = {
