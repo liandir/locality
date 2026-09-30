@@ -133,8 +133,8 @@ for details.
 
 - [User guide](docs/user-guide.md) — setup, chat modes, attachments, settings, and memory.
 - [Tools reference](docs/tools.md) — available tools and how to configure them.
-- [Build editions](docs/build-editions.md) — package from source and understand edition isolation.
-- [Developer guide](docs/developer-guide.md) — set up a development environment, build, and run checks.
+- [Build editions](docs/build-editions.md) — compare the four editions and their capabilities.
+- [Developer guide](docs/developer-guide.md) — develop, build, test, package, and release Locality.
 - [Issues](https://github.com/liandir/locality/issues) — report a bug or request a feature.
 
 ## License

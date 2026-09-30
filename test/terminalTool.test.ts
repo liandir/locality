@@ -2,10 +2,24 @@ import { describe, expect, it } from "vitest";
 import * as os from "node:os";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { runProcess, startProcess } from "../src/tools/terminalTool.js";
+import { runCommand, runProcess, startProcess } from "../src/tools/terminalTool.js";
 import { sanitizeTerminalText } from "../src/util/terminalText.js";
 
 describe("background command execution", () => {
+  it.skipIf(process.platform === "win32")("executes multiline commands with heredocs, pipelines and redirects", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "locality-multiline-command-"));
+    try {
+      const result = await runCommand(`cat <<'TEXT' | tr '[:lower:]' '[:upper:]' > 'output file.txt'
+first line
+second line
+TEXT
+cat 'output file.txt' && printf 'done\\n'
+`, root);
+      expect(result).toMatchObject({ exitCode: 0, stdout: "FIRST LINE\nSECOND LINE\ndone\n", stderr: "", truncated: false });
+      expect(await fs.readFile(path.join(root, "output file.txt"), "utf8")).toBe("FIRST LINE\nSECOND LINE\n");
+    } finally { await fs.rm(root, { recursive: true, force: true }); }
+  });
+
   it("captures stdout and stderr from an isolated child process", async () => {
     const program = process.platform === "win32" ? (process.env.ComSpec ?? "cmd.exe") : "/bin/sh";
     const args = process.platform === "win32"

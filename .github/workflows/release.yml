@@ -2,27 +2,62 @@ name: Release VSIX
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: ["main"]
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-vsix-${{ github.sha }}
+  cancel-in-progress: false
+
 jobs:
   release-vsix:
     name: Release VSIX
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
+
+      - name: Read and validate release version
+        id: version
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from "node:fs";
+
+          const { version } = JSON.parse(readFileSync("package.json", "utf8"));
+          const lock = JSON.parse(readFileSync("package-lock.json", "utf8"));
+          if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
+            throw new Error("Releases require a stable major.minor.patch version in package.json.");
+          }
+          if (lock.version !== version || lock.packages[""].version !== version) {
+            throw new Error("package.json and package-lock.json versions must match.");
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `tag=v${version}\n`);
+          NODE
+
+      - name: Check release tag
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+            if [ "$(git rev-parse "$RELEASE_TAG^{commit}")" != "$GITHUB_SHA" ]; then
+              echo "::error::$RELEASE_TAG already belongs to another commit. Bump the package version before merging."
+              exit 1
+            fi
+          fi
 
       - name: Install dependencies
         run: npm ci
@@ -54,14 +89,26 @@ jobs:
           }
           NODE
 
-      - name: Create GitHub release
+      - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" .build/release-assets/*.vsix --clobber
+          if release=$(gh release view "$RELEASE_TAG" --json isDraft,targetCommitish); then
+            is_draft=$(node -e 'console.log(JSON.parse(process.argv[1]).isDraft)' "$release")
+            if [ "$is_draft" = "false" ]; then
+              echo "$RELEASE_TAG is already published; leaving its assets unchanged."
+              exit 0
+            fi
+            target=$(node -e 'console.log(JSON.parse(process.argv[1]).targetCommitish)' "$release")
+            if [ "$target" != "$GITHUB_SHA" ]; then
+              echo "::error::The existing draft targets another commit. Resolve the draft before retrying."
+              exit 1
+            fi
           else
-            gh release create "${GITHUB_REF_NAME}" .build/release-assets/*.vsix \
-              --title "${GITHUB_REF_NAME}" \
-              --notes "VS Code extension package for Locality."
+            gh release create "$RELEASE_TAG" --draft \
+              --target "$GITHUB_SHA" --title "$RELEASE_TAG" --generate-notes
           fi
+
+          gh release upload "$RELEASE_TAG" .build/release-assets/*.vsix --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --latest

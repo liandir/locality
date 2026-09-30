@@ -288,7 +288,7 @@ describe("system prompt policy", () => {
       workspaceRoot: "/tmp/ws",
       nativeTools: true
     });
-    expect(native).toContain("run_process is available whenever you decide a command would help");
+    expect(native).toContain("run_command is available whenever you decide a command would help");
     expect(native).not.toContain("safe-list");
     expect(native).not.toContain("approval");
   });

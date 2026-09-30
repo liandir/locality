@@ -64,12 +64,13 @@ describe("edition composition", () => {
     const features = api.createFeatures({ workspaceRoot: "/tmp", emit() {}, async appendResult() {} });
     for (const mode of ["act", "plan", "review"] as const) for (const transport of ["native", "legacy"] as const) {
       const names = api.toolsForMode(mode, transport, false, false, settings).map(tool => tool.name);
-      const commandName = transport === "native" ? "run_process" : "run_command";
-      expect(names.includes(commandName)).toBe(profile !== "no-commands" && mode !== "plan");
+      expect(names.includes("run_command")).toBe(profile !== "no-commands" && mode !== "plan");
+      expect(names).not.toContain("run_process");
       expect(names.includes("web_search")).toBe(profile === "advanced");
       expect(names.includes("read_webpage")).toBe(profile === "advanced");
       for (const family of ["gemma4", "qwen3", "muse-glimmer", "gpt-oss"] as const) {
         const prompt = api.buildSystemPrompt({ family, mode, nativeTools: transport === "native", workspaceRoot: "/tmp", featureSettings: settings });
+        expect(prompt).not.toContain("run_process");
         expect(prompt.includes("SAFE-LIST CONFIGURATION")).toBe(profile === "safe-list" && mode !== "plan");
         if (profile === "no-commands" || mode === "plan") expect(prompt).not.toContain("run_command");
         if (profile !== "advanced") expect(prompt).not.toContain("web_search");
@@ -78,6 +79,7 @@ describe("edition composition", () => {
       }
     }
     const registered = features.flatMap(feature => [...feature.tools]);
+    expect(registered).not.toContain("run_process");
     expect(registered.includes("run_command")).toBe(profile !== "no-commands");
     expect(registered.includes("web_search")).toBe(profile === "advanced");
     const html = api.sideFeature.render(settings as unknown as Record<string, unknown>, (key, label) => `${key}:${label}`, value => value)

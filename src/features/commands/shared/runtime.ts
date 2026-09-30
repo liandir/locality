@@ -5,10 +5,10 @@ import type { CommandHandle, CommandProgress, CommandResult, CommandWaitResult }
 import { toolCommandText } from "../../../ui/commandDisplay.js";
 
 export interface CommandPolicy {
-  prepare(name: string, args: Record<string, unknown>, root: string, settings?: HarnessSettings): Promise<void>;
-  launch(name: string, args: Record<string, unknown>, root: string, signal: AbortSignal | undefined, output: (value: CommandProgress) => void): Promise<CommandHandle>;
+  prepare(args: Record<string, unknown>, root: string, settings?: HarnessSettings): Promise<void>;
+  launch(args: Record<string, unknown>, root: string, signal: AbortSignal | undefined, output: (value: CommandProgress) => void): Promise<CommandHandle>;
   autoapprove(settings: HarnessSettings): boolean;
-  display?(name: string, args: Record<string, unknown>): string;
+  display?(args: Record<string, unknown>): string;
 }
 interface ManagedProcessJob {
   id: string;
@@ -31,15 +31,15 @@ const MAX_ACTIVE_PROCESS_JOBS = 4;
 const MAX_RETAINED_PROCESS_JOBS = 32;
 
 export class CommandRuntime implements FeatureRuntime {
-  readonly tools = ["run_command", "run_process", "wait_process", "stop_process"];
+  readonly tools = ["run_command", "wait_process", "stop_process"];
   private processJobs = new Map<string, ManagedProcessJob>();
   constructor(private context: FeatureContext, private policy: CommandPolicy) {}
-  category(name: string): "command" | "process" { return name === "run_command" || name === "run_process" ? "command" : "process"; }
+  category(name: string): "command" | "process" { return name === "run_command" ? "command" : "process"; }
   needsApproval(settings: HarnessSettings): boolean { return !this.policy.autoapprove(settings); }
   async prepare(name: string, args: Record<string, unknown>, settings: HarnessSettings): Promise<ChatToolProcess> {
     if (this.category(name) === "command") {
-      await this.policy.prepare(name, args, this.context.workspaceRoot, settings);
-      return { processCommand: this.policy.display?.(name, args) ?? toolCommandText(name, args) };
+      await this.policy.prepare(args, this.context.workspaceRoot, settings);
+      return { processCommand: this.policy.display?.(args) ?? toolCommandText(name, args) };
     }
     const job = this.requireProcessJob(args);
     return { processCommand: job.command, processJobId: job.id, processRunning: job.running };
@@ -72,9 +72,9 @@ export class CommandRuntime implements FeatureRuntime {
       );
 
     } else {
-      const handle = await this.policy.launch(name, args, this.context.workspaceRoot, signal,
+      const handle = await this.policy.launch(args, this.context.workspaceRoot, signal,
         output => this.context.emit({ kind: "toolCallOutput", toolId, resultPreview: commandOutputText(output), ...displayResult(output) }));
-      const job = this.registerProcessJob(handle, toolId, this.policy.display?.(name, args) ?? toolCommandText(name, args));
+      const job = this.registerProcessJob(handle, toolId, this.policy.display?.(args) ?? toolCommandText(name, args));
       const waited = await handle.wait(INITIAL_PROCESS_WAIT_MS);
       return this.processWaitResult(job, waited, INITIAL_PROCESS_WAIT_MS);
     }
@@ -271,16 +271,4 @@ function normalizeProcessWaitMs(value: unknown): number {
   const number = Number(value);
   if (!Number.isFinite(number)) return DEFAULT_PROCESS_WAIT_MS;
   return Math.min(MAX_PROCESS_WAIT_MS, Math.max(0, Math.round(number)));
-}
-
-export function normalizeProcessArgs(args: Record<string, unknown>): { program: string; args: string[] } {
-  const program = args.program;
-  const argv = args.args;
-  if (typeof program !== "string" || !/^[A-Za-z0-9_./+-]+$/.test(program)) {
-    throw new Error("run_process.program must be a non-empty executable name without whitespace.");
-  }
-  if (!Array.isArray(argv) || argv.some(value => typeof value !== "string" || /[\0\r\n]/.test(value))) {
-    throw new Error("run_process.args must be an array of strings without control characters.");
-  }
-  return { program, args: argv as string[] };
 }
