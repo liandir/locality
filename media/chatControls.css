@@ -9,6 +9,15 @@
   --error-highlight-foreground: color-mix(in srgb, var(--vscode-errorForeground) 78%, #5c1111);
 }
 
+/* Use the Settings/Welcome button geometry for question and plan actions too. */
+.welcome-button, .wide-button, .question-option, .question-action {
+  min-height: 30px;
+  padding: 4px 12px;
+  box-sizing: border-box;
+  border-radius: var(--control-radius);
+  font: inherit;
+}
+
 /* Text links share hover/focus underlines in both webviews. Workspace links
    underline only their label; tool path/URL links keep the tighter underline
    spacing defined by .tool-path-link so it fits their clipped header rows. */

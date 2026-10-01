@@ -700,10 +700,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .question-markdown .copy-code-block { margin: 0.45em 0; }
 .question-options { display: flex; flex-direction: column; gap: 4px; }
 .question-option {
-  display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; box-sizing: border-box; text-align: left;
+  display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; text-align: left;
   background: transparent; border: 1px solid transparent;
-  color: var(--vscode-foreground); padding: 5px 7px; border-radius: var(--control-radius);
-  font: inherit; cursor: pointer; line-height: 1.4; outline: none;
+  color: var(--vscode-foreground); cursor: pointer; outline: none;
   transition: background 0.12s;
 }
 .question-option:hover:not(:disabled), .question-option:focus-visible:not(:disabled) { background: var(--surface-fill-strong); }
@@ -724,7 +723,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .question-composer .question-other-input:focus { background: transparent; border-color: transparent; }
 .question-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; margin-left: auto; }
-.question-action { min-height: 30px; padding: 4px 10px; background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; border-radius: var(--control-radius); font: inherit; font-size: 0.9em; cursor: pointer; outline: none; }
+.question-action { background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; cursor: pointer; outline: none; }
 .question-action:hover:not(:disabled), .question-action:focus-visible:not(:disabled) { background: var(--surface-fill-strong); }
 .question-send { background: var(--surface-fill-strong); }
 .question-action:disabled { opacity: 0.5; cursor: default; }

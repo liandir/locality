@@ -59,7 +59,7 @@ button.primary:hover, button.primary:focus-visible { background: color-mix(in sr
 .welcome-actions { display: flex; flex-direction: column; gap: 22px; margin-top: 26px; }
 .welcome-group { display: flex; flex-direction: column; align-items: center; gap: 9px; }
 .welcome-caption { margin: 0; max-width: 240px; color: var(--vscode-descriptionForeground); line-height: 1.4; }
-.welcome-button, .wide-button { width: 100%; min-height: 30px; padding: 4px 12px; box-sizing: border-box; }
+.welcome-button, .wide-button { width: 100%; }
 .panel-section .welcome-button + .wide-button { margin-top: 8px; }
 .welcome-footer { display: flex; align-items: center; justify-content: center; gap: 7px; margin-top: auto; padding-top: 36px; color: var(--vscode-descriptionForeground); font-size: .9em; }
 .link-button { min-width: 0; padding: 2px 0; color: var(--vscode-textLink-foreground); background: transparent; border-color: transparent; }
