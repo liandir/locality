@@ -2189,6 +2189,7 @@ function renderQuestionLayout(config: {
   options: string;
   secondary?: { attribute: string; label: string };
   submit: { attribute: string; label: string };
+  iconActions?: boolean;
   placeholder: string;
   inputLabel: string;
 }): string {
@@ -2205,8 +2206,8 @@ function renderQuestionLayout(config: {
         <textarea id="questionOther" class="question-other-input" rows="1" placeholder="${escapeHtml(config.placeholder)}" aria-label="${escapeHtml(config.inputLabel)}"></textarea>
       </div>
       <div class="question-actions">
-        ${config.secondary ? `<button class="question-action" type="button" ${config.secondary.attribute}>${escapeHtml(config.secondary.label)}</button>` : ""}
-        <button class="question-action question-send" type="button" ${config.submit.attribute} disabled>${escapeHtml(config.submit.label)}</button>
+        ${config.secondary ? `<button class="${config.iconActions ? "send-btn cancel-btn" : "question-action"}" type="button" ${config.secondary.attribute} data-tip="${escapeHtml(config.secondary.label)}" aria-label="${escapeHtml(config.secondary.label)}">${config.iconActions ? stopIcon() : escapeHtml(config.secondary.label)}</button>` : ""}
+        <button class="${config.iconActions ? "send-btn" : "question-action question-send"}" type="button" ${config.submit.attribute} data-tip="${escapeHtml(config.submit.label)}" aria-label="${escapeHtml(config.submit.label)}" disabled>${config.iconActions ? sendIcon() : escapeHtml(config.submit.label)}</button>
       </div>
     </div>
   </div>`;
@@ -2242,13 +2243,14 @@ function renderPlanApprovalComposer(messageTs?: number): string {
   return renderQuestionLayout({
     title: "Plan", icon: scrollIcon(),
     content: `<p>${messageTs === undefined ? "Planning is paused. " : ""}Accepting the plan switches to Act mode and starts implementation. Request changes to stay in Plan mode, or cancel planning to release queued messages.</p>`,
-    options: `<button class="question-option" type="button" data-accept-plan="${messageTs ?? ""}"${messageTs === undefined ? " disabled" : ""}>
+    options: `<button class="question-option" type="button" data-accept-plan="${messageTs ?? ""}" data-tip="Accept plan"${messageTs === undefined ? " disabled" : ""}>
       <span class="question-option-badge" aria-hidden="true">${pawnIcon()}</span>
       <span class="question-option-label">Accept plan</span>
       <span class="question-option-arrow" aria-hidden="true">${sendIcon()}</span>
     </button>`,
     secondary: { attribute: `data-cancel-planning="${messageTs ?? ""}"`, label: "Cancel planning" },
     submit: { attribute: `data-plan-changes="${messageTs ?? ""}"`, label: "Request changes" },
+    iconActions: true,
     placeholder: "Describe the changes…", inputLabel: "Suggest changes to the plan"
   });
 }
