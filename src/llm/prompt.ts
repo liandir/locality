@@ -69,6 +69,10 @@ function policySections(opts: PromptOptions): string[] {
     sections.push("view_image is available in every mode. Use it to inspect workspace image files found by list_dir or glob. Describe an image only after its pixels are supplied by view_image or an image attachment.");
   }
 
+  if (mode !== "act") {
+    sections.push("This mode is read-only. Do not modify workspace files or run commands. Gather evidence with the available read tools and ask_user_question. Changes and command execution require Act mode.");
+  }
+
   if (mode === "plan") {
     sections.push(
       `You are in plan mode: read_file, list_dir, glob, and ask_user_question are available${opts.memoryEnabled ? ", along with search_memories and recall_memory" : ""}. Explore the code, clarify any unresolved material user choice, and reply with a GitHub-flavored markdown checklist of concrete steps — name the file for each step and describe the change. The user reviews and accepts the plan before any change is made.`

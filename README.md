@@ -94,8 +94,8 @@ settings. The installed edition is shown in Locality's Settings tab.
 4. Open a project folder, click **+ New chat**, and describe what you want to do.
 
 Use **Act** to make changes, **Plan** to explore a solution before editing, and
-**Review** to inspect code and answer questions. Plan cannot edit files or run
-commands. Review uses the same tools and approval settings as Act.
+**Review** to inspect code and answer questions. Plan and Review are read-only:
+they cannot edit files or run commands.
 
 See the [user guide](docs/user-guide.md#first-time-setup) for model compatibility,
 image attachments, context management, and settings. Advanced users can configure
@@ -110,9 +110,9 @@ its arguments, output, or proposed file diff before approving a change.
 | --- | --- | --- |
 | Workspace files | List and find files, read code, create files, and apply edits with diff previews | All editions |
 | Images | Inspect workspace images with `view_image` | All editions, with a vision model and native tool calling |
-| Questions and task progress | Ask for a decision and track a task checklist | All editions; checklists in Act and Review modes |
+| Questions and task progress | Ask for a decision and track a task checklist | All editions; checklists in Act mode |
 | Workspace memory | Search and recall summaries from earlier chats in the same workspace | All editions, when enabled in workspace settings |
-| Commands | Start a process, read its output, and stop it | Safe list, Commands, and Advanced; Act and Review modes |
+| Commands | Start a process, read its output, and stop it | Safe list, Commands, and Advanced; Act mode |
 | Web research | Search through Brave or SearXNG and read public webpages | Advanced, after configuring and verifying a search connection |
 
 The [tools reference](docs/tools.md) lists individual tools, mode availability,

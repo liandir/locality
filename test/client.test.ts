@@ -511,14 +511,11 @@ describe("OpenAI-compatible client", () => {
     expect(command.description).not.toContain("approval");
   });
 
-  it.each(["legacy", "native"] as const)("offers the same tools in Review and Act (%s)", transport => {
+  it.each(["legacy", "native"] as const)("offers only read tools and questions in Review and Plan (%s)", transport => {
     const tools = toolsForMode("review", transport);
-    expect(tools).toEqual(toolsForMode("act", transport));
+    expect(tools).toEqual(toolsForMode("plan", transport));
     const names = tools.map(tool => tool.name);
-    expect(names).toContain("run_command");
-    expect(names).toContain(transport === "native" ? "create_file" : "write_file");
-    expect(names).toContain("insert_text");
-    expect(names).toContain("replace_range");
+    expect(names).toEqual(["read_file", "list_dir", "glob", "ask_user_question"]);
   });
 
   it("reports an explicit server rejection so a compatibility profile can use its legacy adapter", async () => {

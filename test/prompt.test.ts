@@ -207,11 +207,11 @@ describe("system prompt policy", () => {
     }
   });
 
-  it("offers update_todos outside plan mode, with implementation guidance in Act", () => {
+  it("offers update_todos only in Act, with implementation guidance", () => {
     expect(normal).toContain("update_todos");
     expect(normal).toContain("Use update_todos for substantial work with several meaningful stages");
-    // Not a read-only tool, so it is absent from the plan-mode tool list.
     expect(plan).not.toContain("update_todos");
+    expect(review).not.toContain("update_todos");
   });
 
   it("shows update_todos with a concrete array-of-objects example", () => {
@@ -337,16 +337,18 @@ describe("system prompt policy", () => {
     expect(plan).not.toContain("You work step by step");
   });
 
-  it("review mode keeps the normal tools and approval rules while asking for a direct review", () => {
+  it("review mode offers read-only tools while asking for a direct review", () => {
     expect(review).toContain("You are in review mode");
     expect(review).not.toContain("always require the user's explicit approval");
-    expect(review).not.toContain("Do not modify the workspace");
+    expect(review).toContain("This mode is read-only");
+    expect(review).toContain("Do not modify workspace files or run commands");
     expect(review).toContain("review findings, not an implementation plan");
     expect(review).toContain("ordered by severity");
-    expect(review).toContain("run_command");
-    expect(review).toContain('"name": "write_file"');
-    expect(review).toContain('"name": "insert_text"');
-    expect(review).toContain('"name": "update_todos"');
+    expect(review).toContain('"name": "read_file"');
+    expect(review).not.toContain("run_command");
+    expect(review).not.toContain('"name": "write_file"');
+    expect(review).not.toContain('"name": "insert_text"');
+    expect(review).not.toContain('"name": "update_todos"');
     expect(review).not.toContain("You work step by step");
   });
 });
@@ -452,22 +454,25 @@ describe("executable legacy prompt examples", () => {
   }
 });
 
-describe("Plan tool descriptions", () => {
-  it.each(["gemma4", "qwen3", "muse-glimmer", "gpt-oss"] as const)("keeps unavailable editing tools out of the %s Plan prompt", family => {
-    const prompt = buildSystemPrompt({ family, mode: "plan", workspaceRoot: "/tmp/ws" });
-    for (const name of ["write_file", "create_file", "edit_file", "insert_text", "replace_range"]) {
-      expect(prompt).not.toContain(name);
+describe("Read-only tool descriptions", () => {
+  it.each(["gemma4", "qwen3", "muse-glimmer", "gpt-oss"] as const)("keeps unavailable editing tools out of the %s Plan and Review prompts", family => {
+    for (const mode of ["plan", "review"] as const) {
+      const prompt = buildSystemPrompt({ family, mode, workspaceRoot: "/tmp/ws" });
+      for (const name of ["write_file", "create_file", "edit_file", "insert_text", "replace_range"]) {
+        expect(prompt).not.toContain(name);
+      }
+      expect(prompt).toContain("This mode is read-only");
+      expect(prompt).toContain("1-based line number");
+      expect(prompt).toContain("[lines X-Y of N]");
     }
-    expect(prompt).toContain("1-based line number");
-    expect(prompt).toContain("[lines X-Y of N]");
   });
 
-  it.each(["native", "legacy"] as const)("keeps %s Plan descriptions read-only without changing other modes", transport => {
+  it.each(["native", "legacy"] as const)("keeps %s Plan and Review descriptions read-only", transport => {
     const readTool = (mode: "act" | "plan" | "review") => toolsForMode(mode, transport).find(tool => tool.name === "read_file")!;
     for (const name of ["insert_text", "replace_range"]) {
       expect(readTool("plan").description).not.toContain(name);
       expect(readTool("act").description).toContain(name);
-      expect(readTool("review").description).toContain(name);
+      expect(readTool("review").description).not.toContain(name);
     }
     expect(readTool("plan").parameters).toEqual(readTool("act").parameters);
   });

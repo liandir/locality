@@ -152,9 +152,8 @@ The mode menu in the chat composer offers three ways to work:
 - **Plan mode** restricts the assistant to read-only tools. It can browse and read
   files but cannot write or run commands, and it finishes with an implementation
   plan.
-- **Review mode** focuses on answers and review findings. It has the same tools and
-  approval settings as Act mode, including file tools and commands available in
-  your edition.
+- **Review mode** uses read-only tools to gather evidence and provide answers and
+  review findings. It cannot edit files or run commands.
 
 Each message uses the mode selected when you send or queue it. Its bubble shows
 the mode's icon and label beneath an inset divider. Changing the composer mode
@@ -308,8 +307,8 @@ Only settings supported by the installed edition are available.
 | `autoCompactThresholdPercent` | `80` | Context usage percentage that triggers auto-compaction. |
 | `autoapproveReads` | `true` | Skip approval for read-only file tools. |
 | `autoapproveWrites` | `false` | Skip approval for file-edit tool calls. Off by default. |
-| `autoapproveCommands` | `false` | Commands and Advanced: skip command approval in Act and Review modes. |
-| `autoapproveSafeCommands` | `false` | Safe list: skip approval for every matching command in Act and Review modes. |
+| `autoapproveCommands` | `false` | Commands and Advanced: skip command approval in Act mode. |
+| `autoapproveSafeCommands` | `false` | Safe list: skip approval for every matching command in Act mode. |
 | `safeCommandPatterns` | Built-in regex list | Safe list: whole-command patterns in user settings; empty means deny all. |
 | `webSearchEndpoint` | `https://api.search.brave.com/res/v1/web/search` | Advanced: Brave Web Search URL or SearXNG base URL, configured and tested in Settings. Empty or unverified omits both web tools. |
 | `autoapproveWebSearch` | `false` | Advanced: auto-approve searches and page reads in Act, Plan, and Review modes. User settings only. |
@@ -376,7 +375,7 @@ trash icon. Deleting cannot be undone.
   **Auto-approve web requests** skips those prompts when enabled. General commands run with your normal
   permissions and can fetch URLs, call APIs, install packages, or access files
   outside the workspace. Command approval is required by default; enabling
-  **Auto-approve commands** permits these actions without a prompt in Act and Review modes.
+  **Auto-approve commands** permits these actions without a prompt in Act mode.
 
 ## Workspace memory
 

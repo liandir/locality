@@ -17,7 +17,7 @@ edition adds a different set of command and web capabilities.
 ## No commands
 
 Use this edition when you want the assistant to work through workspace file
-tools. It can explore code, plan changes, and edit files in Act and Review modes, but cannot
+tools. It can explore code, plan changes, and edit files in Act mode, but cannot
 start programs or run builds and tests. It includes no command executor or
 built-in web tools.
 
@@ -57,9 +57,9 @@ with **Set** in Settings. They require approval by default. See
 
 ## Shared behavior and switching editions
 
-Chat modes apply in every edition: Plan cannot edit files or run commands;
-Review uses the same tools and approval settings as Act. See
-[chat modes](user-guide.md#chat-modes) for details.
+Chat modes apply in every edition: Plan and Review are read-only and cannot
+edit files or run commands. File edits and commands are available only in Act
+mode. See [chat modes](user-guide.md#chat-modes) for details.
 
 All editions can draft commit messages through VS Code's built-in Git
 integration, including No commands. See

@@ -106,8 +106,8 @@ export type UiEvent =
 export type ToolCategory =
   | "read"      // gray, auto-approve via setting
   | "write"     // gray + approval, auto via setting
-  | "todos"     // gray, no approval — UI/state only, available in Act and Review
-  | "command"   // purple, auto-approve via setting in Act and Review
+  | "todos"     // gray, no approval — UI/state only, available in Act
+  | "command"   // purple, auto-approve via setting in Act
   | "question"  // gray, interactive — asks the user and waits for an answer
   | "search"    // external reference lookup
   | "process"   // gray, controls a previously approved chat-owned process
@@ -1791,7 +1791,7 @@ export class ChatSession {
       category = "unknown";
       reason = unknownToolReason(e.name, availableToolNames);
     } else if (
-      this.turnMode() === "plan" && (isWriteToolName(e.name) || (feature && feature.category(e.name) !== "search"))
+      this.turnMode() !== "act" && (isWriteToolName(e.name) || (feature && feature.category(e.name) !== "search"))
     ) {
       category = "modeViolation";
       reason = modeViolationReason(this.turnMode(), e.name, args);
@@ -3063,7 +3063,9 @@ function modeViolationReason(mode: ChatMode, toolName: string, args: Record<stri
   return [
     `In ${mode} mode, "${toolName}" is not allowed.`,
     `Arguments: ${JSON.stringify(args)}`,
-    `Use a tool available in the current mode. The user must accept the plan before changes can be made.`
+    mode === "plan"
+      ? "Use a tool available in the current mode. The user must accept the plan before changes can be made."
+      : "Use a read-only tool available in the current mode. Changes and command execution require Act mode."
   ].join("\n");
 }
 

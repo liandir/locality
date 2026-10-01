@@ -756,8 +756,8 @@ describe("ChatSession", () => {
     expect(record.mode).toBe(mode === "plan" ? "plan" : composerMode);
     expect(record.messages[0]).toMatchObject({ role: "user", mode });
     expect(events).toContainEqual(expect.objectContaining({ kind: "userMessage", mode }));
-    expect(requests[0].tools?.some(tool => tool.function.name === "create_file")).toBe(mode !== "plan");
-    expect(requests[0].tools?.some(tool => tool.function.name === "run_command")).toBe(mode !== "plan");
+    expect(requests[0].tools?.some(tool => tool.function.name === "create_file")).toBe(mode === "act");
+    expect(requests[0].tools?.some(tool => tool.function.name === "run_command")).toBe(mode === "act");
   });
 
   it("retains plan approval after reload and keeps revisions in Plan until acceptance", async () => {
@@ -2492,88 +2492,93 @@ describe("ChatSession", () => {
     expect(record.messages.find(message => message.role === "tool")?.content).toContain("Approval settings changed");
   });
 
-  it.each([
+  it.each((["plan", "review"] as const).flatMap(mode => ([
     ["native", false], ["native", true], ["compat-gemma4", false], ["compat-gemma4", true]
-  ] as const)("uses configured command approval in Review (%s, autoapprove=%s)", async (profile, autoapprove) => {
-    mocks.settings.toolCallingMode = profile;
-    mocks.settings.autoapproveCommands = autoapprove;
-    mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "ok", stderr: "", truncated: false });
-    if (profile === "native") {
-      let pass = 0;
-      mocks.streamChat.mockImplementation(async function* () {
-        if (pass++ === 0) {
-          yield { kind: "toolCall", name: "run_command", argsJson: '{"command":"npm test"}', id: "call_review_process" };
-        } else {
-          yield { kind: "text", text: "review complete" };
-        }
-      });
-    } else {
-      mockLegacyFallback([
-        gemmaCall("run_command", "command:<|\"|>npm test<|\"|>"),
-        "review complete"
-      ]);
-    }
-
-    const { ChatSession } = await import("../src/chat/session.js");
-    const record = newRecord();
-    record.mode = "review";
-    const events: UiEvent[] = [];
-    let resolveProposed: (id: string) => void = () => undefined;
-    const proposedId = new Promise<string>(resolve => { resolveProposed = resolve; });
-    const session = new ChatSession({
-      storage: { save: vi.fn(async () => undefined) } as never,
-      workspaceRoot: "/tmp/workspace",
-      record,
-      emit: event => {
-        events.push(event);
-        if (event.kind === "toolCallProposed") resolveProposed(event.toolId);
+  ] as const).map(([profile, autoapprove]) => ({ mode, profile, autoapprove }))))(
+    "blocks commands in $mode ($profile, autoapprove=$autoapprove)", async ({ mode, profile, autoapprove }) => {
+      mocks.settings.toolCallingMode = profile;
+      mocks.settings.autoapproveCommands = autoapprove;
+      if (profile === "native") {
+        let pass = 0;
+        mocks.streamChat.mockImplementation(async function* () {
+          if (pass++ === 0) {
+            yield { kind: "toolCall", name: "run_command", argsJson: '{"command":"npm test"}', id: "call_read_only_command" };
+          } else yield { kind: "text", text: "Inspection complete" };
+        });
+      } else {
+        mockLegacyFallback([
+          gemmaCall("run_command", 'command:<|"|>npm test<|"|>'),
+          "Inspection complete"
+        ]);
       }
-    });
-
-    const turn = session.sendUserMessage("review the tests");
-    const toolId = await proposedId;
-    const proposed = events.find(
-      (event): event is Extract<UiEvent, { kind: "toolCallProposed" }> => event.kind === "toolCallProposed"
-    );
-    expect(proposed).toMatchObject({ category: "command", approvalRequired: !autoapprove });
-    if (!autoapprove) {
-      expect(mocks.runCommand).not.toHaveBeenCalled();
-      session.approve(toolId, true);
-    }
-    await turn;
-    expect(mocks.runCommand).toHaveBeenCalledOnce();
-    expect(events.some(event => event.kind === "planFinal")).toBe(false);
-    expect(events.some(event => event.kind === "summary")).toBe(true);
-  });
-
-  it.each(["plan", "review"] as const)("blocks file creation only in Plan (%s)", async mode => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-modes-"));
-    mocks.settings.toolCallingMode = "native";
-    mocks.settings.autoapproveWrites = true;
-    let pass = 0;
-    mocks.streamChat.mockImplementation(async function* () {
-      if (pass++ === 0) yield {
-        kind: "toolCall", name: "create_file",
-        argsJson: '{"path":"test.txt","content":"test code"}', id: "call_mode_write"
-      };
-      else yield { kind: "text", text: "Done" };
-    });
-    const { ChatSession } = await import("../src/chat/session.js");
-    const record = newRecord();
-    record.mode = mode;
-    const events: UiEvent[] = [];
-    const session = new ChatSession({
-      storage: { save: vi.fn(async () => undefined) } as never,
-      workspaceRoot: ws, record, emit: event => events.push(event)
-    });
-    try {
-      await session.sendUserMessage("Inspect the code");
+      const { ChatSession } = await import("../src/chat/session.js");
+      const record = newRecord();
+      record.mode = mode;
+      const events: UiEvent[] = [];
+      const session = new ChatSession({
+        storage: { save: vi.fn(async () => undefined) } as never,
+        workspaceRoot: "/tmp/workspace", record, emit: event => events.push(event)
+      });
+      await session.sendUserMessage("Inspect the tests");
       expect(events).toContainEqual(expect.objectContaining({
-        kind: "toolCallProposed", category: mode === "plan" ? "modeViolation" : "write", approvalRequired: false
+        kind: "toolCallProposed", category: "modeViolation", approvalRequired: false
       }));
-      expect(events).toContainEqual(expect.objectContaining({ kind: "toolCallResolved", status: mode === "plan" ? "rejected" : "executed" }));
-      if (mode === "plan") await expect(fs.stat(path.join(ws, "test.txt"))).rejects.toThrow();
-      else await expect(fs.readFile(path.join(ws, "test.txt"), "utf8")).resolves.toBe("test code");
+      expect(events).toContainEqual(expect.objectContaining({ kind: "toolCallResolved", status: "rejected" }));
+      expect(mocks.startCommand).not.toHaveBeenCalled();
+      expect(mocks.runCommand).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ["plan", "native"], ["review", "native"],
+    ["plan", "compat-qwen3"], ["review", "compat-qwen3"]
+  ] as const)("rejects every write and process tool in %s with %s calling", async (mode, profile) => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-read-only-"));
+    mocks.settings.toolCallingMode = profile;
+    mocks.settings.autoapproveWrites = true;
+    mocks.settings.autoapproveCommands = true;
+    const calls = [
+      { name: "create_file", args: { path: "created.txt", content: "new file" } },
+      { name: "write_file", args: { path: "existing.txt", content: "replacement" } },
+      { name: "edit_file", args: { path: "existing.txt", baseRevision: `sha256:${"a".repeat(64)}`, edits: [{ oldText: "original", newText: "replacement" }] } },
+      { name: "insert_text", args: { path: "existing.txt", line: 1, expectedLine: "original", text: "inserted" } },
+      { name: "replace_range", args: { path: "existing.txt", startLine: 1, endLine: 1, expectedContent: "original", content: "replacement" } },
+      { name: "run_command", args: { command: "npm test" } },
+      { name: "wait_process", args: { job_id: "job_existing" } },
+      { name: "stop_process", args: { job_id: "job_existing" } }
+    ];
+    const { ChatSession } = await import("../src/chat/session.js");
+    try {
+      await fs.writeFile(path.join(ws, "existing.txt"), "original\n");
+      for (const call of calls) {
+        if (profile === "native") {
+          let pass = 0;
+          mocks.streamChat.mockImplementation(async function* () {
+            if (pass++ === 0) yield { kind: "toolCall", name: call.name, argsJson: JSON.stringify(call.args), id: "call_read_only" };
+            else yield { kind: "text", text: "Inspection complete" };
+          });
+        } else {
+          mockLegacyFallback([`<tool_call>${JSON.stringify({ name: call.name, arguments: call.args })}</tool_call>`, "Inspection complete"]);
+        }
+        const record = newRecord();
+        record.mode = mode;
+        const events: UiEvent[] = [];
+        const session = new ChatSession({
+          storage: { save: vi.fn(async () => undefined) } as never,
+          workspaceRoot: ws, record, emit: event => events.push(event)
+        });
+        try {
+          await session.sendUserMessage("Inspect the code");
+          expect(events).toContainEqual(expect.objectContaining({
+            kind: "toolCallProposed", toolName: call.name, category: "modeViolation", approvalRequired: false
+          }));
+          expect(events).toContainEqual(expect.objectContaining({ kind: "toolCallResolved", status: "rejected" }));
+          expect(events.some(event => event.kind === "toolCallResolved" && event.status === "approved")).toBe(false);
+          expect(mocks.startCommand).not.toHaveBeenCalled();
+          await expect(fs.readdir(ws)).resolves.toEqual(["existing.txt"]);
+          await expect(fs.readFile(path.join(ws, "existing.txt"), "utf8")).resolves.toBe("original\n");
+        } finally { await session.shutdown(); }
+      }
     } finally { await fs.rm(ws, { recursive: true, force: true }); }
   });
 

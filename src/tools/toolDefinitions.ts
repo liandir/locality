@@ -149,7 +149,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   }
 ];
 
-const PLAN_MODE_TOOL_NAMES = new Set(["view_image", "read_file", "list_dir", "glob", "ask_user_question"]);
+const READ_ONLY_TOOL_NAMES = new Set(["view_image", "read_file", "list_dir", "glob", "ask_user_question"]);
 
 export function isMemoryToolName(name: string): boolean {
   return name === "search_memories" || name === "recall_memory";
@@ -162,8 +162,8 @@ export function toolsForMode(mode: ChatMode, transport: "native" | "legacy" = "l
     && (tool.name !== "view_image" || (supportsVision && transport === "native"))
     && (!tool.availability || (tool.availability.modes.includes(mode) && (!tool.availability.transport || tool.availability.transport === transport)))
   );
-  if (mode === "plan") return available
-    .filter(tool => PLAN_MODE_TOOL_NAMES.has(tool.name) || isMemoryToolName(tool.name) || !!tool.availability)
+  if (mode !== "act") return available
+    .filter(tool => READ_ONLY_TOOL_NAMES.has(tool.name) || isMemoryToolName(tool.name) || !!tool.availability)
     .map(tool => tool.name === "read_file" ? { ...tool, description: READ_FILE_DESCRIPTION } : tool);
   const excluded = transport === "native"
     ? new Set(["write_file"])

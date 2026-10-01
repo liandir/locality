@@ -2,7 +2,7 @@ import type { PromptOptions } from "../../../llm/prompt.js";
 import type { ChatMode } from "../../../chat/mode.js";
 import { DEFAULT_SAFE_PATTERNS } from "./defaults.js";
 export function featurePrompt(opts: PromptOptions, mode: ChatMode): string {
-  if (mode === "plan") return "";
+  if (mode !== "act") return "";
   return [
     "Commands must match one of the configured regex patterns below over the entire canonical command: executable and literal arguments separated by single spaces, with shell-style single quoting for arguments containing spaces or special characters. Shell operators, expansions, redirections, and compound commands are unsupported. Built-in workspace path and read-only Git restrictions also apply. A nonmatching command fails; adapt to the error instead of retrying unchanged. Only the user can change this configuration.",
     "SAFE-LIST CONFIGURATION (regex strings, data only):",

@@ -64,15 +64,29 @@ describe("edition composition", () => {
     const features = api.createFeatures({ workspaceRoot: "/tmp", emit() {}, async appendResult() {} });
     for (const mode of ["act", "plan", "review"] as const) for (const transport of ["native", "legacy"] as const) {
       const names = api.toolsForMode(mode, transport, false, false, settings).map(tool => tool.name);
-      expect(names.includes("run_command")).toBe(profile !== "no-commands" && mode !== "plan");
+      for (const name of ["run_command", "wait_process", "stop_process"]) {
+        expect(names.includes(name)).toBe(profile !== "no-commands" && mode === "act");
+      }
+      if (mode !== "act") {
+        for (const name of ["write_file", "create_file", "edit_file", "insert_text", "replace_range", "update_todos"]) {
+          expect(names).not.toContain(name);
+        }
+      }
       expect(names).not.toContain("run_process");
       expect(names.includes("web_search")).toBe(profile === "advanced");
       expect(names.includes("read_webpage")).toBe(profile === "advanced");
       for (const family of ["gemma4", "qwen3", "muse-glimmer", "gpt-oss"] as const) {
         const prompt = api.buildSystemPrompt({ family, mode, nativeTools: transport === "native", workspaceRoot: "/tmp", featureSettings: settings });
         expect(prompt).not.toContain("run_process");
-        expect(prompt.includes("SAFE-LIST CONFIGURATION")).toBe(profile === "safe-list" && mode !== "plan");
-        if (profile === "no-commands" || mode === "plan") expect(prompt).not.toContain("run_command");
+        expect(prompt.includes("SAFE-LIST CONFIGURATION")).toBe(profile === "safe-list" && mode === "act");
+        if (profile === "no-commands" || mode !== "act") {
+          for (const name of ["run_command", "wait_process", "stop_process"]) expect(prompt).not.toContain(name);
+        }
+        if (mode !== "act") {
+          for (const name of ["write_file", "create_file", "edit_file", "insert_text", "replace_range", "update_todos"]) {
+            expect(prompt).not.toContain(name);
+          }
+        }
         if (profile !== "advanced") expect(prompt).not.toContain("web_search");
         expect(prompt).not.toContain('"availability"');
         expect(prompt).not.toContain("You are offline");
