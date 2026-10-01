@@ -9,8 +9,9 @@
   --error-highlight-foreground: color-mix(in srgb, var(--vscode-errorForeground) 78%, #5c1111);
 }
 
-/* Use the Settings/Welcome button geometry for question and plan actions too. */
-.welcome-button, .wide-button, .question-option, .question-other {
+/* Use the Settings/Welcome control geometry for decision fields and actions too. */
+.welcome-button, .wide-button, .question-option, .question-other,
+.approval-actions .approve, .approval-actions .reject {
   min-height: 30px;
   padding: 4px 12px;
   box-sizing: border-box;

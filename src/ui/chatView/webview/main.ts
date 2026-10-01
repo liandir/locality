@@ -2085,6 +2085,9 @@ function updateComposer(): void {
     attach.disabled = state.draftAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE || state.attachmentPastePending;
   }
   if (sendSlot) sendSlot.style.display = pendingDecision ? "none" : "";
+  const modeControls = root.querySelector(".composer-mode-controls") as HTMLElement | null;
+  if (modeControls) modeControls.style.display = pendingDecision ? "none" : "";
+  if (pendingDecision) state.chatModeMenuOpen = false;
   updateChatModeControl();
   updateScrollDownButton();
 }

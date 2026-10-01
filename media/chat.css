@@ -662,27 +662,23 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .composer-row.busy textarea { padding-right: 120px; }
 .composer-row textarea:focus { border-color: transparent; outline: none; }
 #approvalSlot { flex: 1; width: 100%; min-width: 0; }
-.approval-composer { width: 100%; min-height: 86px; display: flex; flex-direction: column; justify-content: center; gap: 10px; padding: 12px 14px; background: var(--surface-fill); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: var(--composer-radius); box-sizing: border-box; }
-.approval-composer:not(.question-composer) { padding-bottom: 50px; }
-.approval-summary { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--vscode-descriptionForeground); font-size: 0.9em; }
+.approval-composer { width: 100%; min-height: 86px; display: flex; flex-direction: column; justify-content: center; gap: 10px; padding: 10px 12px; background: var(--surface-fill); color: var(--vscode-input-foreground); border: 1px solid transparent; border-radius: var(--composer-radius); box-sizing: border-box; }
+.approval-summary { display: flex; align-items: center; gap: 8px; min-height: 24px; min-width: 0; color: var(--vscode-descriptionForeground); font-size: 0.9em; }
 .approval-summary > strong { flex: 0 0 auto; white-space: nowrap; }
 .approval-summary span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.approval-actions { display: flex; flex-direction: column; gap: 8px; }
+.approval-actions { display: flex; flex-direction: column; gap: 4px; }
 .approval-actions .approve,
 .approval-actions .reject {
   width: 100%;
   box-sizing: border-box;
-  background: var(--surface-fill);
+  background: transparent;
   border: 1px solid transparent;
   color: var(--vscode-foreground);
-  padding: 6px 16px;
-  border-radius: var(--control-radius);
   text-align: center;
-  font: inherit;
   cursor: pointer;
   transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
-.approval-actions .approve:hover { background: var(--accent-accept-fill); border-color: transparent; }
+.approval-actions .approve:hover, .approval-actions .approve:focus-visible { background: var(--surface-fill); border-color: transparent; }
 .approval-actions .reject:hover, .approval-actions .reject:focus-visible { color: var(--error-highlight-foreground); background: var(--accent-reject-fill); border-color: transparent; }
 
 /* Questions and plan approval share a compact composer surface. */
@@ -701,7 +697,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   color: var(--vscode-foreground); cursor: pointer; outline: none;
   transition: background 0.12s;
 }
-.question-option:hover:not(:disabled), .question-option:focus-visible:not(:disabled) { background: var(--surface-fill-strong); }
+.question-option:hover:not(:disabled), .question-option:focus-visible:not(:disabled) { background: var(--surface-fill); }
 .question-option:disabled { opacity: 0.5; cursor: default; }
 .question-option-badge { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 20px; height: 20px; background: var(--surface-fill); color: var(--vscode-descriptionForeground); border-radius: var(--control-radius); font-size: 0.85em; }
 .question-option-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
@@ -709,8 +705,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .question-option:hover:not(:disabled) .question-option-arrow, .question-option:focus-visible:not(:disabled) .question-option-arrow { opacity: 1; }
 .question-footer { display: flex; flex-direction: column; gap: 10px; }
 .question-other { display: flex; align-items: flex-start; gap: 8px; width: 100%; min-width: 0; background: transparent; border: 1px solid transparent; transition: background 0.12s; }
-.question-other:hover, .question-other:focus-within { background: var(--surface-fill-strong); }
-.question-reply-icon, .question-submit { margin-top: 1px; }
+.question-other:hover, .question-other:focus-within { background: var(--surface-fill); }
+.question-reply-icon { margin-top: 1px; }
 .question-composer textarea.question-other-input {
   display: block; flex: 1; width: 100%; min-width: 0; resize: none; min-height: 22px; max-height: none;
   padding: 0; background: transparent;
@@ -718,7 +714,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   border-radius: var(--control-radius); font: inherit; line-height: 1.4; box-sizing: border-box; outline: none;
 }
 .question-composer textarea.question-other-input:focus { background: transparent; border-color: transparent; }
-.question-submit { padding: 0; background: transparent; border: 1px solid transparent; border-radius: var(--control-radius); cursor: pointer; outline: none; }
+.question-submit { align-self: flex-end; margin-bottom: 1px; padding: 0; background: transparent; border: 1px solid transparent; border-radius: var(--control-radius); cursor: pointer; outline: none; }
 .question-other:hover .question-submit:not(:disabled), .question-other:focus-within .question-submit:not(:disabled) { opacity: 1; }
 .question-submit:hover:not(:disabled), .question-submit:focus-visible:not(:disabled) { background: var(--surface-fill); color: var(--vscode-foreground); }
 .question-submit:disabled { cursor: default; }
