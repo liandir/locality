@@ -671,15 +671,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .approval-actions .reject {
   width: 100%;
   box-sizing: border-box;
-  background: transparent;
   border: 1px solid transparent;
   color: var(--vscode-foreground);
   text-align: center;
   cursor: pointer;
   transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
-.approval-actions .approve:hover, .approval-actions .approve:focus-visible { background: var(--surface-fill); border-color: transparent; }
-.approval-actions .reject:hover, .approval-actions .reject:focus-visible { color: var(--error-highlight-foreground); background: var(--accent-reject-fill); border-color: transparent; }
+.approval-actions .reject:hover, .approval-actions .reject:focus-visible { color: var(--error-highlight-foreground); border-color: transparent; }
 
 /* Questions and plan approval share a compact composer surface. */
 .question-composer { justify-content: flex-start; gap: 10px; padding: 10px 12px; }
@@ -693,19 +691,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .question-options { display: flex; flex-direction: column; gap: 4px; }
 .question-option {
   display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; text-align: left;
-  background: transparent; border: 1px solid transparent;
+  border: 1px solid transparent;
   color: var(--vscode-foreground); cursor: pointer; outline: none;
   transition: background 0.12s;
 }
-.question-option:hover:not(:disabled), .question-option:focus-visible:not(:disabled) { background: var(--surface-fill); }
 .question-option:disabled { opacity: 0.5; cursor: default; }
 .question-option-badge { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 20px; height: 20px; background: var(--surface-fill); color: var(--vscode-descriptionForeground); border-radius: var(--control-radius); font-size: 0.85em; }
 .question-option-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .question-option-arrow { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 20px; width: 20px; height: 20px; color: var(--vscode-descriptionForeground); opacity: 0; transition: opacity 0.12s; }
 .question-option:hover:not(:disabled) .question-option-arrow, .question-option:focus-visible:not(:disabled) .question-option-arrow { opacity: 1; }
 .question-footer { display: flex; flex-direction: column; gap: 10px; }
-.question-other { display: flex; align-items: flex-start; gap: 8px; width: 100%; min-width: 0; background: transparent; border: 1px solid transparent; transition: background 0.12s; }
-.question-other:hover, .question-other:focus-within { background: var(--surface-fill); }
+.question-other { display: flex; align-items: flex-start; gap: 8px; width: 100%; min-width: 0; border: 1px solid transparent; transition: background 0.12s; }
 .question-reply-icon { margin-top: 1px; }
 .question-composer textarea.question-other-input {
   display: block; flex: 1; width: 100%; min-width: 0; resize: none; min-height: 22px; max-height: none;
@@ -714,9 +710,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   border-radius: var(--control-radius); font: inherit; line-height: 1.4; box-sizing: border-box; outline: none;
 }
 .question-composer textarea.question-other-input:focus { background: transparent; border-color: transparent; }
-.question-submit { align-self: flex-end; margin-bottom: 1px; padding: 0; background: transparent; border: 1px solid transparent; border-radius: var(--control-radius); cursor: pointer; outline: none; }
+.question-submit { align-self: flex-end; margin-bottom: 1px; padding: 0; border: 1px solid transparent; border-radius: var(--control-radius); cursor: pointer; outline: none; }
 .question-other:hover .question-submit:not(:disabled), .question-other:focus-within .question-submit:not(:disabled) { opacity: 1; }
-.question-submit:hover:not(:disabled), .question-submit:focus-visible:not(:disabled) { background: var(--surface-fill); color: var(--vscode-foreground); }
+.question-submit:hover:not(:disabled), .question-submit:focus-visible:not(:disabled) { color: var(--vscode-foreground); }
 .question-submit:disabled { cursor: default; }
 .question-actions { display: flex; justify-content: flex-end; }
 .question-actions .cancel-btn { border-radius: var(--control-radius); }
@@ -841,6 +837,19 @@ body.image-preview-open .chat-body { overflow: hidden; }
 .ctx-pill.danger:is(:hover, :focus-visible, .active-menu) { color: var(--error-highlight-foreground); }
 .ctx-pill.active-menu { background: var(--surface-fill); color: var(--vscode-foreground); }
 .ctx-pill.nudge { animation: compact-wiggle 0.28s ease-in-out 0s 2; }
+.ctx-compacting-ring { position: relative; width: 13px; height: 13px; }
+.ctx-compacting-ring::before {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  border-radius: 50%;
+  background: conic-gradient(var(--shimmer-edge) 0deg 240deg, var(--shimmer-peak) 310deg, var(--shimmer-edge) 360deg);
+  mask-image: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
+  animation: context-compaction-shimmer 1.4s linear infinite;
+}
+@keyframes context-compaction-shimmer {
+  to { transform: rotate(360deg); }
+}
 .compact-menu {
   position: absolute;
   left: 0;
@@ -895,6 +904,7 @@ body.image-preview-open .chat-body { overflow: hidden; }
   .tool-card.write.streaming .tool-head::before,
   .tool-card.write.pending .tool-head::before,
   .tool-card.write.approved .tool-head::before,
+  .ctx-compacting-ring::before,
   .ctx-pill.nudge { animation: none; }
 }
 

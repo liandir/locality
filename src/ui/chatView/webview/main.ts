@@ -2229,7 +2229,6 @@ function submitQuestionAnswer(toolId: string, answer: string): void {
 
 function renderToolApprovalComposer(tc: ToolCard): string {
   const isWrite = tc.category === "write";
-  const approveText = isWrite ? "Accept changes" : "Approve";
   const rejectText = isWrite ? "Reject changes and suggest changes" : "Reject";
   const autoApproveLabel = tc.category === "read" ? "reads" : isWrite ? "edits" : tc.category === "command" ? "commands" : tc.category === "search" ? "web searches" : undefined;
   const label = renderToolApprovalLabel(tc);
@@ -2240,9 +2239,9 @@ function renderToolApprovalComposer(tc: ToolCard): string {
       <span>${label}</span>
     </div>
     <div class="approval-actions">
-      <button class="approve" data-approve="${tc.toolId}">${approveText}</button>
-      <button class="reject" data-reject="${tc.toolId}">${rejectText}</button>
+      <button class="approve" data-approve="${tc.toolId}">Approve this time</button>
       ${autoApproveLabel ? `<button class="approve" data-auto-approve="${tc.toolId}">Auto-approve future ${autoApproveLabel}</button>` : ""}
+      <button class="reject" data-reject="${tc.toolId}">${rejectText}</button>
     </div>
   </div>`;
 }
@@ -2279,29 +2278,36 @@ function planTimestamp(value: string | undefined): number | undefined {
 }
 
 function updateContextPill(): void {
+  const compacting = state.compactActivity?.status === "pending";
   const ratio = Math.min(1, state.tokens / Math.max(1, state.limit));
   const pct = Math.round(ratio * 100);
   const dangerAt = state.autoCompact ? 0.9 : state.autoCompactThresholdPercent / 100;
   const pctClass = ratio >= dangerAt ? "danger" : "ok";
+  const contextHint = compacting ? "Compacting context…"
+    : state.compactHintOverride ?? `Context: ${state.tokens} / ${state.limit} tokens. Click to compact.`;
   const compact = root.querySelector("#compact") as HTMLElement | null;
-  compact?.classList.toggle("danger", pctClass === "danger");
-  compact?.classList.toggle("ok", pctClass === "ok");
-  compact?.classList.toggle("nudge", state.compactNudge);
+  compact?.classList.toggle("danger", !compacting && pctClass === "danger");
+  compact?.classList.toggle("ok", !compacting && pctClass === "ok");
+  compact?.classList.toggle("nudge", !compacting && state.compactNudge);
   compact?.classList.toggle("active-menu", state.compactMenuOpen);
-  compact?.setAttribute("aria-disabled", String(!state.compactAvailable));
+  compact?.setAttribute("aria-disabled", String(compacting || !state.compactAvailable));
+  compact?.setAttribute("aria-busy", String(compacting));
+  compact?.setAttribute("aria-label", compacting ? "Compacting context" : "Compact context");
   compact?.setAttribute("aria-expanded", String(state.compactMenuOpen));
-  if (compact) compact.dataset.tip = state.compactHintOverride ?? `Context: ${state.tokens} / ${state.limit} tokens. Click to compact.`;
+  if (compact) compact.dataset.tip = contextHint;
   const hint = root.querySelector("#compactHint") as HTMLElement | null;
   if (hint) {
-    hint.textContent = state.compactHintOverride ?? `Context: ${state.tokens} / ${state.limit} tokens. Click to compact.`;
-    hint.classList.toggle("active", !!state.compactHintOverride);
+    hint.textContent = contextHint;
+    hint.classList.toggle("active", compacting || !!state.compactHintOverride);
   }
   const menu = root.querySelector("#compactMenu") as HTMLElement | null;
   if (menu) menu.hidden = !state.compactMenuOpen;
   const icon = root.querySelector("#ctxIcon") as HTMLElement | null;
   const pctEl = root.querySelector("#ctxPct") as HTMLElement | null;
-  if (icon) icon.innerHTML = circleIcon(ratio);
-  if (pctEl) pctEl.textContent = `${pct}%`;
+  if (icon) setHtml(icon, compacting
+    ? '<span class="ctx-compacting-ring" aria-hidden="true"></span>'
+    : circleIcon(ratio));
+  if (pctEl) pctEl.textContent = compacting ? "?" : `${pct}%`;
 }
 
 function updateChatModeControl(): void {
@@ -3392,6 +3398,7 @@ function bindOnce(): void {
       render();
     }
     else if (target.closest("#compact")) {
+      if (state.compactActivity?.status === "pending") return;
       if (!state.compactAvailable) {
         state.compactMenuOpen = false;
         showCompactUnavailable();
