@@ -1569,7 +1569,7 @@ export class ChatSession {
       limit: this.contextLimit()
     });
     this.emitCompactStatus();
-    this.emit({ kind: "turnEnd", messageId, messageTs: responseTs });
+    this.emit({ kind: "turnEnd", messageId, mode: this.turnMode(), messageTs: responseTs });
   }
 
   private emitCompactStatus(): void {

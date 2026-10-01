@@ -373,7 +373,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (event.kind === "turnEnd" || event.kind === "abort") {
           runtime.running = false;
           this.pushTabs();
-          if (event.kind === "turnEnd" && event.messageTs !== undefined) this.memory?.enqueue(rec.id, false, event.messageTs);
+          if (event.kind === "turnEnd" && event.messageTs !== undefined && (event.mode === "act" || event.mode === "review")) {
+            this.memory?.enqueue(rec.id, false, event.messageTs);
+          }
         }
         if (event.kind === "titleChanged") { this.onChatOpened(rec); this.pushTabs(); }
       }

@@ -377,8 +377,11 @@ agent search and recall active summaries from other chats in the same workspace.
 default and is stored in workspace settings (`locality.memoryEnabled`);
 user-level activation is ignored. This switch controls whether memory tools are available. Generation and editing remain available when it is off.
 
-After a response finishes, the harness queues a short memory summary using the
-configured local model. New generated memories are active automatically; existing
+After a final response in **Act** or **Review** mode, the harness queues a short
+memory summary using the configured local model. **Plan** responses and plan
+revisions do not create or update memories automatically. After accepting a
+plan, memory generation waits for the Act implementation response to finish.
+New generated memories are active automatically; existing
 individual exclusions are preserved. The workspace switch still controls whether
 the agent can search and recall them.
 

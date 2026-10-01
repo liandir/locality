@@ -686,11 +686,12 @@ describe("ChatSession", () => {
     const { ChatSession } = await import("../src/chat/session.js");
     const record = newRecord();
     record.reasoningEffort = "effort:high";
+    const events: UiEvent[] = [];
     const session = new ChatSession({
       storage: { save: vi.fn(async () => undefined) } as never,
       workspaceRoot: ws,
       record,
-      emit: () => undefined
+      emit: event => events.push(event)
     });
 
     const firstTurn = session.sendUserMessage("read it");
@@ -713,6 +714,7 @@ describe("ChatSession", () => {
     expect(requests[2].chat_template_kwargs).toEqual({ enable_thinking: false });
     expect(requests[2].tools?.some(tool => tool.function.name === "create_file")).toBe(false);
     expect(record.messages.filter(message => message.role === "user").map(message => message.mode)).toEqual(["act", "plan"]);
+    expect(events.filter(event => event.kind === "turnEnd").map(event => event.mode)).toEqual(["act", "plan"]);
   });
 
   it.each(["act", "plan", "review"] as const)("executes a submitted %s message independently of the composer mode", async mode => {
@@ -735,6 +737,7 @@ describe("ChatSession", () => {
     });
 
     await session.sendUserMessage("Use my submitted mode", [], mode);
+    expect(events).toContainEqual(expect.objectContaining({ kind: "turnEnd", mode, messageTs: expect.any(Number) }));
 
     expect(record.mode).toBe(mode === "plan" ? "plan" : composerMode);
     expect(record.messages[0]).toMatchObject({ role: "user", mode });

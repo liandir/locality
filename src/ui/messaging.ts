@@ -75,10 +75,12 @@ export interface ChatContextActivity {
   activityIds: string[];
 }
 
-/** Saved final-answer time, for display only; absent for turns without an answer. */
+/** Completed turn metadata; the answer time is absent for turns without a final answer. */
 export interface ChatTurnEnd {
   kind: "turnEnd";
   messageId: string;
+  /** Mode captured for this turn, independent of the current composer mode. */
+  mode: ChatMode;
   messageTs?: number;
 }
 

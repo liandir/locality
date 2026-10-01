@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as vscode from "vscode";
 import type { ChatMode } from "../src/chat/mode.js";
 import type { ChatAttachment, ChatRecord, ChatStorage } from "../src/chat/storage.js";
+import type { WorkspaceMemory } from "../src/chat/workspaceMemory.js";
 import type { UiEvent } from "../src/chat/session.js";
 import type { ChatToExt, ExtToChat } from "../src/ui/messaging.js";
 
@@ -84,7 +85,7 @@ vi.mock("../src/chat/session.js", () => ({
       this.turn = new Promise<void>(resolve => { this.finishTurn = resolve; });
       await this.turn;
       this.active = false;
-      this.emit({ kind: "turnEnd", messageId: this.args.record.id });
+      this.emit({ kind: "turnEnd", messageId: this.args.record.id, mode });
     }
     finish() { this.finishTurn?.(); }
   }
@@ -92,11 +93,11 @@ vi.mock("../src/chat/session.js", () => ({
 import { ChatViewProvider } from "../src/ui/chatView/provider.js";
 
 const record = (id: string) => ({ id, title: id, messages: [], reasoningEffort: "default", mode: "act" } as unknown as ChatRecord);
-function setup() {
+function setup(memory?: WorkspaceMemory) {
   const storage = { list: vi.fn().mockResolvedValue([]), load: vi.fn(), save: vi.fn(), delete: vi.fn(), deleteAll: vi.fn(), deleteAttachment: vi.fn(), importAttachment: vi.fn(), importAttachmentBytes: vi.fn(), attachmentPath: (id: string) => `/workspace/${id}/image.png` };
   const provider = new ChatViewProvider(
     { workspaceState: { get: vi.fn() } } as unknown as vscode.ExtensionContext,
-    () => storage as unknown as ChatStorage, () => "/workspace", vi.fn(), vi.fn(), vi.fn(), vi.fn()
+    () => storage as unknown as ChatStorage, () => "/workspace", vi.fn(), vi.fn(), vi.fn(), vi.fn(), memory
   );
   const posted: ExtToChat[] = [];
   (provider as unknown as { view: unknown }).view = { webview: { postMessage: (message: ExtToChat) => posted.push(message), asWebviewUri: (path: string) => path } };
@@ -112,6 +113,26 @@ beforeEach(() => {
 });
 
 describe("independent chat tabs", () => {
+  it.each([
+    { mode: "act" as const, messageTs: 2, createsMemory: true },
+    { mode: "review" as const, messageTs: 2, createsMemory: true },
+    { mode: "plan" as const, messageTs: 2, createsMemory: false },
+    { mode: "act" as const, messageTs: undefined, createsMemory: false },
+    { mode: "review" as const, messageTs: undefined, createsMemory: false },
+    { mode: "plan" as const, messageTs: undefined, createsMemory: false }
+  ])("only queues memory for completed Act/Review answers ($mode, answer=$messageTs)", ({ mode, messageTs, createsMemory }) => {
+    const memory = { enqueue: vi.fn(), creations: vi.fn().mockResolvedValue([]) };
+    const { provider } = setup(memory as unknown as WorkspaceMemory);
+    const rec = record("a");
+    // The composer and active tab can change while this response is running.
+    rec.mode = mode === "plan" ? "act" : "plan";
+    provider.openChat(rec);
+    provider.openChat(record("b"));
+    mocks.sessions.get("a")!.emit({ kind: "turnEnd", messageId: "answer-a", mode, messageTs });
+    if (createsMemory) expect(memory.enqueue).toHaveBeenCalledExactlyOnceWith("a", false, 2);
+    else expect(memory.enqueue).not.toHaveBeenCalled();
+  });
+
   it("reuses the current live session without reloading or cancelling it", async () => {
     const { provider, posted } = setup();
     provider.openChat(record("a"));

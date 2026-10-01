@@ -141,6 +141,44 @@ describe("memory generation", () => {
     expect(await memory.creations(rec.id)).toEqual([expect.objectContaining({ messageTs: 2, status: "created" })]);
   });
 
+  it("keeps delayed automatic memory on its Act answer when a newer Plan response exists", async () => {
+    const rec = await chat();
+    rec.messages[0].mode = "act";
+    const revision = transcriptRevision(rec);
+    const release = beginForeground(); releases.push(release);
+    memory.enqueue(rec.id, false, 2);
+    rec.messages.push(
+      { role: "user", content: "PLAN_REQUEST_SENTINEL", mode: "plan", ts: 3 },
+      { role: "assistant", content: "PLAN_RESPONSE_SENTINEL", ts: 4 }
+    );
+    rec.mode = "plan";
+    rec.pendingPlanMessageTs = 4;
+    rec.planning = true;
+    await storage.save(rec);
+    release();
+    await generated(rec.id);
+    expect(JSON.stringify(mocks.complete.mock.calls)).not.toContain("PLAN_REQUEST_SENTINEL");
+    expect(JSON.stringify(mocks.complete.mock.calls)).not.toContain("PLAN_RESPONSE_SENTINEL");
+    expect((await storage.load(rec.id))!.memory!.sourceRevision).toBe(revision);
+    expect(await memory.creations(rec.id)).toEqual([expect.objectContaining({ messageTs: 2, status: "created" })]);
+  });
+
+  it("drops an automatic job whose final answer was removed instead of summarizing a replacement plan", async () => {
+    const rec = await chat();
+    const release = beginForeground(); releases.push(release);
+    memory.enqueue(rec.id, false, 2);
+    rec.messages = [
+      { role: "user", content: "Plan instead", mode: "plan", ts: 3 },
+      { role: "assistant", content: "Proposed plan", ts: 4 }
+    ];
+    await storage.save(rec);
+    release();
+    await vi.waitFor(async () => expect((await memory.list())[0].status).toBe("missing"));
+    expect(mocks.complete).not.toHaveBeenCalled();
+    expect((await storage.load(rec.id))!.memory).toBeUndefined();
+    expect(await memory.creations(rec.id)).toEqual([]);
+  });
+
   it("keeps a queued card attached to the completed answer during the next turn's tool calls", async () => {
     const rec = await chat();
     const release = beginForeground(); releases.push(release);
