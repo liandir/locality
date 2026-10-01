@@ -13,7 +13,7 @@
   --chat-message-gap: calc(3 * var(--chat-part-gap));
   --composer-radius: 16px;
   --composer-action-radius: 10px;
-  --surface-fill: color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
+  --surface-fill: color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
   --surface-fill-strong: color-mix(in srgb, var(--vscode-foreground) 16%, transparent);
   --surface-stroke: color-mix(in srgb, var(--vscode-foreground) 9%, transparent);
   --surface-stroke-strong: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
