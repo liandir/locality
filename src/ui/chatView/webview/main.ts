@@ -2150,6 +2150,7 @@ function syncQuestionOther(slot: HTMLElement, pendingDecision: ComposerDecision 
   if (document.activeElement !== other && other.value !== state.questionDraft) {
     other.value = state.questionDraft;
   }
+  resizeComposerInput(other, 6);
   const submit = slot.querySelector("[data-answer-submit], [data-plan-changes]") as HTMLButtonElement | null;
   if (submit) submit.disabled = other.value.trim() === "";
 }
@@ -2183,21 +2184,51 @@ function renderQuestionComposer(tc: ToolCard): string {
   // Use the chat's Markdown pipeline verbatim so fenced/indented code gets the
   // same syntax highlighting and delegated copy control as assistant output.
   const renderedQuestion = md.render(question || "Question");
+  const toolId = escapeHtml(tc.toolId);
   const options = suggestions
     .map(
-      s =>
-        `<button class="question-option" type="button" data-answer-option="${tc.toolId}" data-answer="${escapeHtml(s)}">${escapeHtml(s)}</button>`
+      (s, index) =>
+        `<button class="question-option" type="button" data-answer-option="${toolId}" data-answer="${escapeHtml(s)}">
+          <span class="question-option-badge">${String.fromCharCode(65 + index)}</span>
+          <span class="question-option-label">${escapeHtml(s)}</span>
+          <span class="question-option-arrow" aria-hidden="true">${sendIcon()}</span>
+        </button>`
     )
     .join("");
+  return renderQuestionLayout({
+    title: "Question", icon: questionIcon(), content: renderedQuestion, options,
+    submit: { attribute: `data-answer-submit="${toolId}"`, label: "Send" },
+    placeholder: "Or write your own response…", inputLabel: "Your answer"
+  });
+}
+
+/** Shared question/plan surface. Action attributes and content are rendered by the callers. */
+function renderQuestionLayout(config: {
+  title: string;
+  icon: string;
+  content: string;
+  options: string;
+  secondary?: { attribute: string; label: string };
+  submit: { attribute: string; label: string };
+  placeholder: string;
+  inputLabel: string;
+}): string {
   return `<div class="approval-composer question-composer">
-    <div class="approval-summary question-summary">
-      <span class="tool-icon" aria-hidden="true">${questionIcon()}</span>
-      <div class="assistant-markdown question-markdown">${renderedQuestion}</div>
+    <div class="question-header">
+      <span class="tool-icon" aria-hidden="true">${config.icon}</span>
+      <span>${escapeHtml(config.title)}</span>
     </div>
-    <div class="question-options">${options}</div>
-    <div class="question-other">
-      <textarea id="questionOther" class="question-other-input" rows="1" placeholder="Or type your own answer…"></textarea>
-      <button class="question-submit" type="button" data-answer-submit="${tc.toolId}" data-tip="Answer" aria-label="Answer" disabled>${sendIcon()}</button>
+    <div class="assistant-markdown question-markdown">${config.content}</div>
+    <div class="question-options">${config.options}</div>
+    <div class="question-footer">
+      <div class="question-other">
+        <span class="question-reply-icon" aria-hidden="true">${pencilIcon()}</span>
+        <textarea id="questionOther" class="question-other-input" rows="1" placeholder="${escapeHtml(config.placeholder)}" aria-label="${escapeHtml(config.inputLabel)}"></textarea>
+      </div>
+      <div class="question-actions">
+        ${config.secondary ? `<button class="question-action" type="button" ${config.secondary.attribute}>${escapeHtml(config.secondary.label)}</button>` : ""}
+        <button class="question-action question-send" type="button" ${config.submit.attribute} disabled>${escapeHtml(config.submit.label)}</button>
+      </div>
     </div>
   </div>`;
 }
@@ -2229,22 +2260,18 @@ function renderToolApprovalComposer(tc: ToolCard): string {
 }
 
 function renderPlanApprovalComposer(messageTs?: number): string {
-  return `<div class="approval-composer question-composer">
-    <div class="approval-summary question-summary">
-      <span class="tool-icon" aria-hidden="true">${scrollIcon()}</span>
-      <div class="assistant-markdown question-markdown"><p>${messageTs === undefined ? "Planning is paused." : "Accept this plan?"} Accepting switches to Act mode and starts implementation. Request changes to keep planning, or cancel planning to release queued messages.</p></div>
-    </div>
-    <div class="question-options">
-      <button class="question-option" type="button" data-accept-plan="${messageTs ?? ""}"${messageTs === undefined ? " disabled" : ""}>Accept plan</button>
-    </div>
-    <div class="question-other plan-feedback">
-      <textarea id="questionOther" class="question-other-input" rows="2" placeholder="Describe the changes (stays in Plan mode)…" aria-label="Suggest changes to the plan"></textarea>
-    </div>
-    <div class="plan-decision-actions">
-      <button class="question-option" type="button" data-plan-changes="${messageTs ?? ""}" disabled>Request changes</button>
-      <button class="question-option" type="button" data-cancel-planning="${messageTs ?? ""}">Cancel planning</button>
-    </div>
-  </div>`;
+  return renderQuestionLayout({
+    title: "Plan", icon: scrollIcon(),
+    content: `<p>${messageTs === undefined ? "Planning is paused. " : ""}Accepting the plan switches to Act mode and starts implementation. Request changes to stay in Plan mode, or cancel planning to release queued messages.</p>`,
+    options: `<button class="question-option" type="button" data-accept-plan="${messageTs ?? ""}"${messageTs === undefined ? " disabled" : ""}>
+      <span class="question-option-badge" aria-hidden="true">${pawnIcon()}</span>
+      <span class="question-option-label">Accept plan</span>
+      <span class="question-option-arrow" aria-hidden="true">${sendIcon()}</span>
+    </button>`,
+    secondary: { attribute: `data-cancel-planning="${messageTs ?? ""}"`, label: "Cancel planning" },
+    submit: { attribute: `data-plan-changes="${messageTs ?? ""}"`, label: "Request changes" },
+    placeholder: "Describe the changes…", inputLabel: "Suggest changes to the plan"
+  });
 }
 
 function submitPlanResponse(messageTs: number | undefined, feedback?: string): void {
@@ -3115,6 +3142,8 @@ function bindOnce(): void {
   window.addEventListener("resize", () => {
     const composerInput = root.querySelector("#input") as HTMLTextAreaElement | null;
     if (composerInput && composerInput.style.display !== "none") resizeComposerInput(composerInput);
+    const questionInput = root.querySelector("#questionOther") as HTMLTextAreaElement | null;
+    if (questionInput) resizeComposerInput(questionInput, 6);
   });
   // The ask_user_question "other" field is mounted dynamically, so its events are
   // handled by delegation: keep the draft in sync and submit on Enter.
@@ -3137,6 +3166,7 @@ function bindOnce(): void {
     }
     if (other?.id !== "questionOther") return;
     state.questionDraft = (other as HTMLTextAreaElement).value;
+    resizeComposerInput(other as HTMLTextAreaElement, 6);
     const submitBtn = root.querySelector("[data-answer-submit], [data-plan-changes]") as HTMLButtonElement | null;
     if (submitBtn) submitBtn.disabled = state.questionDraft.trim() === "";
   });

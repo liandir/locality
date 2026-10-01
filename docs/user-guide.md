@@ -162,7 +162,12 @@ affects future submissions; it does not change a running turn or messages alread
 in the queue. Editing or reordering queued messages preserves their modes.
 Editing and resending a previously sent message uses the current composer mode.
 
-After each completed Plan response, the approval field asks how to continue:
+Questions from the assistant appear in the composer with **A, B, C…** choices.
+Click a choice to answer immediately, or write your own response and click
+**Send** (Enter sends; Shift+Enter adds a line).
+
+After each completed Plan response, a matching composer with the **Plan** icon
+asks how to continue:
 
 - **Accept plan** switches to Act and sends “I accept your plan. Please implement.”
   as an Act message, with the Act icon, and starts implementation in Act mode.
