@@ -19,6 +19,8 @@ export function createFeatures(context: FeatureContext): FeatureRuntime[] {
     return { ...prepared, cwd };
   }
   return [new CommandRuntime(context, {
+    autoApprovalSetting: "autoapproveSafeCommands",
+    autoApprovalScope: "global",
     async prepare(args, root, settings) { await check(args, root, settings ?? readSettings()); },
     async launch(args, root, signal, output) {
       const prepared = await check(args, root, readSettings());

@@ -41,6 +41,8 @@ export interface HarnessSettings {
   autoapproveWebSearch?: boolean;
 }
 
+export type AutoApprovalSetting = Extract<keyof HarnessSettings, `autoapprove${string}`>;
+
 export function readSettings(): HarnessSettings {
   const cfg = vscode.workspace.getConfiguration(NS);
   return {
@@ -85,11 +87,18 @@ function clampNumber(value: number, min: number, max: number, fallback: number):
 
 export async function writeSetting<K extends keyof HarnessSettings>(
   key: K,
-  value: HarnessSettings[K]
+  value: HarnessSettings[K],
+  scope: "global" | "effective" = "global"
 ): Promise<void> {
   if (!SETTING_KEYS.includes(key)) throw new Error("Setting is unavailable in this edition.");
   const cfg = vscode.workspace.getConfiguration(NS);
-  await cfg.update(key, value, key === "memoryEnabled" || key === "memoryMaxCount" ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global);
+  let target = key === "memoryEnabled" || key === "memoryMaxCount" ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
+  if (scope === "effective") {
+    const inspected = cfg.inspect(key);
+    if (inspected?.workspaceFolderValue !== undefined) target = vscode.ConfigurationTarget.WorkspaceFolder;
+    else if (inspected?.workspaceValue !== undefined) target = vscode.ConfigurationTarget.Workspace;
+  }
+  await cfg.update(key, value, target);
 }
 
 /** Every harness setting key; maps 1:1 to the package.json configuration properties. */

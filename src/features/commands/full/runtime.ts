@@ -4,6 +4,7 @@ import type { FeatureContext, FeatureRuntime } from "../../../build/contracts.js
 
 export function createFeatures(context: FeatureContext): FeatureRuntime[] {
   return [new CommandRuntime(context, {
+    autoApprovalSetting: "autoapproveCommands",
     async prepare(args) {
       if (typeof args.command !== "string" || !args.command.trim()) throw new Error("command must be a non-empty string.");
       if (args.command.includes("\0")) throw new Error("command must not contain null bytes.");

@@ -18,6 +18,8 @@ vi.mock("../src/llm/client.js", () => ({ fetchServerMetadata: mocks.metadata }))
 interface FakeSession {
   emit(event: UiEvent): void;
   cancel: ReturnType<typeof vi.fn>;
+  approve: ReturnType<typeof vi.fn>;
+  approveFutureTools: ReturnType<typeof vi.fn>;
   shutdown: ReturnType<typeof vi.fn>;
   sent: string[];
   sentModes: ChatMode[];
@@ -34,6 +36,8 @@ vi.mock("../src/chat/session.js", () => ({
     private turn?: Promise<void>;
     emit: (event: UiEvent) => void;
     cancel = vi.fn(() => this.finish());
+    approve = vi.fn();
+    approveFutureTools = vi.fn(async () => undefined);
     shutdown = vi.fn(async () => { this.cancel(); });
     renameTitle = vi.fn(async (title: string) => { this.args.record.title = title; });
     constructor(private args: { record: ChatRecord; emit: (event: UiEvent) => void }) {
@@ -205,6 +209,23 @@ describe.each(["act", "review"] as const)("automatic %s memories", mode => {
 });
 
 describe("independent chat tabs", () => {
+  it("routes auto-approval to the active chat and ignores stale approval messages", async () => {
+    const { provider, send } = setup();
+    provider.openChat(record("a"));
+    const a = mocks.sessions.get("a")!;
+    await send({ type: "approveTool", toolId: "read-a", approved: true, autoApprove: true, chatId: "a" });
+    expect(a.approveFutureTools).toHaveBeenCalledWith("read-a");
+    expect(a.approve).not.toHaveBeenCalled();
+    await send({ type: "approveTool", toolId: "edit-a", approved: false, autoApprove: true, chatId: "a" });
+    expect(a.approve).toHaveBeenCalledWith("edit-a", false);
+    expect(a.approveFutureTools).toHaveBeenCalledOnce();
+    provider.openChat(record("b"));
+    const b = mocks.sessions.get("b")!;
+    await send({ type: "approveTool", toolId: "stale-a", approved: true, autoApprove: true, chatId: "a" });
+    expect(b.approveFutureTools).not.toHaveBeenCalled();
+    expect(a.approveFutureTools).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { mode: "act" as const, messageTs: 2, createsMemory: true },
     { mode: "review" as const, messageTs: 2, createsMemory: true },

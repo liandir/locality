@@ -4,15 +4,16 @@ const mocks = vi.hoisted(() => ({
   values: new Map<string, unknown>(),
   explicit: new Map<string, unknown>(),
   workspace: new Map<string, unknown>(),
+  folders: new Map<string, unknown>(),
   update: vi.fn()
 }));
 
 vi.mock("vscode", () => ({
-  ConfigurationTarget: { Global: 1, Workspace: 2 },
+  ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },
   workspace: {
     getConfiguration: () => ({
       get: (key: string) => mocks.values.get(key),
-      inspect: (key: string) => mocks.workspace.has(key) ? { workspaceValue: mocks.workspace.get(key) } : mocks.explicit.has(key)
+      inspect: (key: string) => mocks.folders.has(key) ? { workspaceFolderValue: mocks.folders.get(key) } : mocks.workspace.has(key) ? { workspaceValue: mocks.workspace.get(key) } : mocks.explicit.has(key)
         ? { globalValue: mocks.explicit.get(key) }
         : { defaultValue: mocks.values.get(key) },
       update: mocks.update
@@ -25,6 +26,7 @@ beforeEach(() => {
   mocks.values.clear();
   mocks.explicit.clear();
   mocks.workspace.clear();
+  mocks.folders.clear();
   mocks.update.mockClear();
   mocks.values.set("toolCallingMode", "compat-gemma4");
 });
@@ -78,6 +80,20 @@ describe("reasoning and model settings", () => {
   });
 });
 
+
+describe("approval setting scope", () => {
+  it.each(["autoapproveReads", "autoapproveWrites", "autoapproveCommands"] as const)("updates the effective override for %s", async key => {
+    const { writeSetting } = await import("../src/config/settings.js");
+    await writeSetting(key, true, "effective");
+    expect(mocks.update).toHaveBeenLastCalledWith(key, true, 1);
+    mocks.workspace.set(key, false);
+    await writeSetting(key, true, "effective");
+    expect(mocks.update).toHaveBeenLastCalledWith(key, true, 2);
+    mocks.folders.set(key, false);
+    await writeSetting(key, true, "effective");
+    expect(mocks.update).toHaveBeenLastCalledWith(key, true, 3);
+  });
+});
 
 describe("workspace memory setting", () => {
   it("defaults to ten memories, bounds the count, and saves it for the workspace", async () => {

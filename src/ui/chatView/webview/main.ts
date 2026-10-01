@@ -2231,6 +2231,7 @@ function renderToolApprovalComposer(tc: ToolCard): string {
   const isWrite = tc.category === "write";
   const approveText = isWrite ? "Accept changes" : "Approve";
   const rejectText = isWrite ? "Reject changes and suggest changes" : "Reject";
+  const autoApproveLabel = tc.category === "read" ? "reads" : isWrite ? "edits" : tc.category === "command" ? "commands" : tc.category === "search" ? "web searches" : undefined;
   const label = renderToolApprovalLabel(tc);
   return `<div class="approval-composer">
     <div class="approval-summary">
@@ -2241,6 +2242,7 @@ function renderToolApprovalComposer(tc: ToolCard): string {
     <div class="approval-actions">
       <button class="approve" data-approve="${tc.toolId}">${approveText}</button>
       <button class="reject" data-reject="${tc.toolId}">${rejectText}</button>
+      ${autoApproveLabel ? `<button class="approve" data-auto-approve="${tc.toolId}">Auto-approve future ${autoApproveLabel}</button>` : ""}
     </div>
   </div>`;
 }
@@ -3441,6 +3443,7 @@ function bindOnce(): void {
       const reviewTool = target.closest("[data-review-tool]") as HTMLElement | null;
       const openFile = target.closest("[data-open-file]") as HTMLElement | null;
       const approve = target.closest("[data-approve]") as HTMLElement | null;
+      const autoApprove = target.closest("[data-auto-approve]") as HTMLElement | null;
       const reject = target.closest("[data-reject]") as HTMLElement | null;
       const answerOption = target.closest("[data-answer-option]") as HTMLElement | null;
       const answerSubmit = target.closest("[data-answer-submit]") as HTMLElement | null;
@@ -3463,6 +3466,9 @@ function bindOnce(): void {
         const content = tc ? toolContent(tc) : undefined;
         if (path && content !== undefined) send({ type: "reviewProposedFile", path, content });
         else if (path) send({ type: "reviewFile", path });
+      }
+      else if (autoApprove) {
+        send({ type: "approveTool", toolId: autoApprove.dataset.autoApprove!, approved: true, autoApprove: true });
       }
       else if (approve) {
         const toolId = approve.dataset.approve!;

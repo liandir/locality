@@ -1,4 +1,4 @@
-import type { SecretStorage } from "vscode";
+import type { Disposable, SecretStorage } from "vscode";
 import { beginForeground } from "../llm/activity.js";
 import { searchMemories, recallMemory, memoryMetadata, type MemorySnapshot } from "./memory.js";
 import { MAX_MEMORY_COUNT } from "./memoryLimits.js";
@@ -43,7 +43,7 @@ import {
   type ReplaceRangeArgs
 } from "../tools/fsTools.js";
 import { assertInsideWorkspace } from "../tools/workspaceGuard.js";
-import { readSettings, type HarnessSettings } from "../config/settings.js";
+import { onSettingsChange, readSettings, writeSetting, type AutoApprovalSetting, type HarnessSettings } from "../config/settings.js";
 import { ChatStorage, VISION_TOKEN_RESERVE, modelMessages, appendChatMessage, type ChatAttachment, type ChatMessage, type ChatRecord } from "./storage.js";
 import { attachmentFileType, isImageAttachment, synthesizeAttachmentPrompt } from "./attachments.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "./attachmentLimits.js";
@@ -154,7 +154,11 @@ function toolNeedsApproval(category: ToolCategory, settings: HarnessSettings): b
 }
 
 interface PendingApproval {
-  resolve(v: { approved: boolean }): void;
+  resolve(v: { approved: boolean; explicit?: boolean }): void;
+  needsApproval(settings: HarnessSettings): boolean;
+  setting?: AutoApprovalSetting;
+  scope: "global" | "effective";
+  enablingAutoApproval?: boolean;
 }
 
 interface ToolCompletion extends ChatToolProcess, ChatToolResultDisplay {
@@ -177,6 +181,7 @@ export class ChatSession {
   private memoryVisibilityGeneration = 0;
   private memory?: WorkspaceMemory;
   private pending = new Map<string, PendingApproval>();
+  private settingsSubscription: Disposable;
   // ask_user_question parks the turn here until the user answers; the resolver
   // gets the chosen/typed answer, or null if the turn was cancelled first.
   private pendingQuestions = new Map<string, (answer: string | null) => void>();
@@ -274,6 +279,7 @@ export class ChatSession {
     });
     this.memory = args.memory;
     this.loadedChatContextPending = args.record.messages.length > 0;
+    this.settingsSubscription = onSettingsChange(() => this.refreshPendingApprovals());
   }
 
   getRecord(): ChatRecord { return this.record; }
@@ -534,6 +540,7 @@ export class ChatSession {
 
   async shutdown(): Promise<void> {
     this.disposed = true;
+    this.settingsSubscription.dispose();
     this.cancel();
     await this.activeTurn?.catch(() => undefined);
     await Promise.allSettled(this.compactTasks);
@@ -566,7 +573,33 @@ export class ChatSession {
     const p = this.pending.get(toolId);
     if (p) {
       this.pending.delete(toolId);
-      p.resolve({ approved });
+      p.resolve({ approved, explicit: true });
+    }
+  }
+
+  private refreshPendingApprovals(): void {
+    if (this.disposed || this.abort?.signal.aborted || this.pending.size === 0) return;
+    const settings = readSettings();
+    for (const [toolId, pending] of this.pending) {
+      if (!pending.enablingAutoApproval && !pending.needsApproval(settings)) {
+        this.pending.delete(toolId);
+        pending.resolve({ approved: true });
+      }
+    }
+  }
+
+  async approveFutureTools(toolId: string): Promise<void> {
+    const pending = this.pending.get(toolId);
+    if (!pending?.setting || pending.enablingAutoApproval || this.disposed || this.abort?.signal.aborted) return;
+    pending.enablingAutoApproval = true;
+    try {
+      await writeSetting(pending.setting, true, pending.scope);
+      this.approve(toolId, true);
+    } catch (error) {
+      this.emit({ kind: "notice", text: `Could not enable auto-approval: ${(error as Error).message}` });
+    } finally {
+      pending.enablingAutoApproval = false;
+      this.refreshPendingApprovals();
     }
   }
 
@@ -1827,8 +1860,9 @@ export class ChatSession {
       try { featureMetadata = await feature.prepare(e.name, args, readSettings()); }
       catch (error) { validationError = (error as Error).message; }
     }
-    const approvalRequired = !validationError && (feature && (category === "command" || category === "search")
-      ? feature.needsApproval(readSettings()) : toolNeedsApproval(category, s));
+    const needsApproval = (settings: HarnessSettings): boolean => feature && (category === "command" || category === "search")
+      ? feature.needsApproval(settings) : toolNeedsApproval(category, settings);
+    const approvalRequired = !validationError && needsApproval(readSettings());
     const processCommand = featureMetadata.processCommand;
     this.emit({
       kind: "toolCallProposed",
@@ -1923,9 +1957,16 @@ export class ChatSession {
     }
 
     // Wait for explicit approval when required by the settings or chat mode.
+    let explicitlyApproved = false;
     if (approvalRequired) {
-      const { approved } = await new Promise<{ approved: boolean }>(res => {
-        this.pending.set(toolId, { resolve: res });
+      const { approved, explicit } = await new Promise<{ approved: boolean; explicit?: boolean }>(res => {
+        if (this.disposed || this.abort?.signal.aborted) { res({ approved: false }); return; }
+        this.pending.set(toolId, {
+          resolve: res, needsApproval,
+          setting: category === "read" ? "autoapproveReads" : category === "write" ? "autoapproveWrites" : feature?.autoApprovalSetting,
+          scope: feature?.autoApprovalScope ?? "effective"
+        });
+        this.refreshPendingApprovals();
       });
       if (!approved) {
         const rejected = userRejectedToolDetails(e.name, e.argsJson);
@@ -1933,14 +1974,9 @@ export class ChatSession {
           toolId, toolName: e.name, argsJson: e.argsJson, content: rejected, callId: e.id, status: "rejected",
           fullResult: true
         });
-        if (category === "command") {
-          this.emit({
-            kind: "abort",
-            reason: "You rejected the command. The model is awaiting further instructions."
-          });
-        }
-        return "aborted";
+        return this.abort?.signal.aborted || this.disposed ? "aborted" : "executed";
       }
+      explicitlyApproved = explicit === true;
       this.emit({ kind: "toolCallResolved", toolId, status: "approved" });
     }
 
@@ -1956,6 +1992,10 @@ export class ChatSession {
     let processOutput: string | undefined;
     let processExitCode: number | undefined;
     try {
+      if (this.abort?.signal.aborted || this.disposed) throw new Error("Action cancelled.");
+      if (!explicitlyApproved && needsApproval(readSettings())) {
+        throw new Error("Approval settings changed. Request the action again for approval.");
+      }
       if (isMemoryToolName(e.name)) {
         if (!readSettings().memoryEnabled) throw new Error("Workspace memories are disabled.");
         const records = await this.storage.records();
@@ -2117,7 +2157,7 @@ export class ChatSession {
       } else if (feature) {
         if (this.abort?.signal.aborted || this.disposed) throw new Error("Action cancelled.");
         await feature.prepare(e.name, args, readSettings());
-        if (!approvalRequired && category !== "process" && feature.needsApproval(readSettings())) {
+        if (!explicitlyApproved && needsApproval(readSettings())) {
           throw new Error("Approval settings changed. Request the action again for approval.");
         }
         ({ result, displayResult, processJobId, processRunning, processOutput, processExitCode } = await feature.execute(e.name, args, toolId, this.abort?.signal));

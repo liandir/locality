@@ -1,5 +1,5 @@
 import type { SecretStorage } from "vscode";
-import type { HarnessSettings } from "../config/settings.js";
+import type { AutoApprovalSetting, HarnessSettings } from "../config/settings.js";
 import type { UiEvent } from "../chat/session.js";
 import type { ChatToolProcess, ChatToolResultDisplay } from "../ui/messaging.js";
 
@@ -15,6 +15,8 @@ export interface FeatureContext {
 
 export interface FeatureRuntime {
   tools: readonly string[];
+  autoApprovalSetting?: AutoApprovalSetting;
+  autoApprovalScope?: "global";
   category(name: string): "command" | "process" | "search";
   needsApproval(settings: HarnessSettings): boolean;
   prepare(name: string, args: Record<string, unknown>, settings: HarnessSettings): Promise<ChatToolProcess>;

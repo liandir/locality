@@ -82,6 +82,19 @@ describe("edition composition", () => {
     expect(registered).not.toContain("run_process");
     expect(registered.includes("run_command")).toBe(profile !== "no-commands");
     expect(registered.includes("web_search")).toBe(profile === "advanced");
+    const command = features.find(feature => feature.tools.includes("run_command"));
+    if (command) {
+      expect(command.autoApprovalSetting).toBe(profile === "safe-list" ? "autoapproveSafeCommands" : "autoapproveCommands");
+      expect(command.needsApproval(api.readSettings())).toBe(true);
+      await api.writeSetting(command.autoApprovalSetting!, true);
+      expect(command.needsApproval(api.readSettings())).toBe(false);
+    }
+    for (const feature of features.filter(feature => feature.category(feature.tools[0]) === "search")) {
+      expect(feature.autoApprovalSetting).toBe("autoapproveWebSearch");
+      expect(feature.autoApprovalScope).toBe("global");
+      await api.writeSetting(feature.autoApprovalSetting!, true);
+      expect(feature.needsApproval(api.readSettings())).toBe(false);
+    }
     const html = api.sideFeature.render(settings as unknown as Record<string, unknown>, (key, label) => `${key}:${label}`, value => value)
       + (api.sideFeature.renderSection?.(settings as unknown as Record<string, unknown>, (key, label) => `${key}:${label}`, value => value) ?? "");
     expect(html.includes("Auto-approve safe commands")).toBe(profile === "safe-list");

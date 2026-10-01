@@ -160,7 +160,7 @@ export type ChatToExt = (
   | { type: "forkChat"; throughUserMessageTs: number }
   | { type: "openChat"; id: string }
   | { type: "cancel" }
-  | { type: "approveTool"; toolId: string; approved: boolean }
+  | { type: "approveTool"; toolId: string; approved: boolean; autoApprove?: boolean }
   | { type: "answerQuestion"; toolId: string; answer: string }
   | { type: "featureAction"; id: string }
   | { type: "setChatMode"; mode: ChatMode }

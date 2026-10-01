@@ -7,6 +7,7 @@ import { searchRequest, searchWeb, searchUrl } from "./search.js";
 export function createSearchFeature(secrets?: SecretStorage): FeatureRuntime {
   const approvedDestinations = new WeakMap<Record<string, unknown>, string>();
   return {
+    autoApprovalSetting: "autoapproveWebSearch", autoApprovalScope: "global",
     tools: ["web_search"], category: () => "search", needsApproval: settings => settings.autoapproveWebSearch !== true,
     async prepare(_name, args, settings) {
       if (!settings.webToolsEnabled) throw new Error("Verify the Web search endpoint using Set in Settings before using web tools.");

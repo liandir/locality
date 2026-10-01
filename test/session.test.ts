@@ -1,9 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ChatRecord } from "../src/chat/storage.js";
-import type { UiEvent } from "../src/chat/session.js";
+import type { ChatSession, UiEvent } from "../src/chat/session.js";
 import type { WorkspaceMemory } from "../src/chat/workspaceMemory.js";
 
 const mocks = vi.hoisted(() => ({
@@ -34,16 +34,23 @@ const mocks = vi.hoisted(() => ({
   fetchServerContextSize: vi.fn(),
   supportsVision: true,
   runCommand: vi.fn(),
-  startCommand: vi.fn()
+  startCommand: vi.fn(),
+  updateSetting: vi.fn(),
+  configurationListeners: new Set<(event: { affectsConfiguration(key: string): boolean }) => void>()
 }));
 
 vi.mock("vscode", () => ({
+  ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },
   workspace: {
     getConfiguration: () => ({
       get: (key: string) => (mocks.settings as Record<string, unknown>)[key],
-      inspect: (key: string) => key === "memoryEnabled" ? { workspaceValue: mocks.settings.memoryEnabled } : undefined
+      inspect: (key: string) => key === "memoryEnabled" ? { workspaceValue: mocks.settings.memoryEnabled } : undefined,
+      update: mocks.updateSetting
     }),
-    onDidChangeConfiguration: vi.fn(() => ({ dispose: vi.fn() }))
+    onDidChangeConfiguration: (listener: (event: { affectsConfiguration(key: string): boolean }) => void) => {
+      mocks.configurationListeners.add(listener);
+      return { dispose: () => mocks.configurationListeners.delete(listener) };
+    }
   },
   window: {
     createTerminal: vi.fn(() => ({ show: vi.fn(), sendText: vi.fn(), exitStatus: undefined })),
@@ -77,6 +84,11 @@ vi.mock("../src/tools/terminalTool.js", () => ({
 }));
 
 beforeEach(() => {
+  mocks.configurationListeners.clear();
+  mocks.updateSetting.mockReset().mockImplementation(async (key: string, value: unknown) => {
+    (mocks.settings as Record<string, unknown>)[key] = value;
+    for (const listener of mocks.configurationListeners) listener({ affectsConfiguration: key => key === "locality" });
+  });
   mocks.streamChat.mockReset();
   mocks.tokenize.mockReset();
   mocks.complete.mockReset();
@@ -2640,11 +2652,12 @@ describe("ChatSession", () => {
     );
   });
 
-  it("does not execute a command when the user rejects it", async () => {
+  it("reports a rejected command to the model and continues through the legacy adapter", async () => {
     mocks.settings.autoapproveCommands = false;
-    mocks.streamChat.mockImplementation(async function* () {
-      yield { kind: "toolCall", name: "run_command", argsJson: '{"command":"npm publish"}', id: "call_rejected" };
-    });
+    mockLegacyFallback([
+      gemmaCall("run_command", "command:<|\"|>npm publish<|\"|>"),
+      "I will leave publishing to you."
+    ]);
 
     const { ChatSession } = await import("../src/chat/session.js");
     const events: UiEvent[] = [];
@@ -2671,10 +2684,11 @@ describe("ChatSession", () => {
       toolId,
       status: "rejected"
     }));
-    expect(events).toContainEqual({
-      kind: "abort",
-      reason: "You rejected the command. The model is awaiting further instructions."
-    });
+    expect(events.some(event => event.kind === "abort")).toBe(false);
+    expect(mocks.streamChat.mock.calls.at(-1)?.[1].messages).toContainEqual(expect.objectContaining({
+      role: "user", content: expect.stringContaining("[rejected by user]")
+    }));
+    expect(events).toContainEqual(expect.objectContaining({ kind: "text", delta: "I will leave publishing to you." }));
   });
 
   it("feeds back a malformed tool call so the model can re-emit it", async () => {
@@ -3359,6 +3373,148 @@ function newRecord(): ChatRecord {
     totalTokens: 0
   };
 }
+
+describe("live tool permissions", () => {
+  const cases = [
+    { name: "read_file", setting: "autoapproveReads", args: () => ({ path: "input.txt" }) },
+    { name: "create_file", setting: "autoapproveWrites", args: (index: number) => ({ path: `output-${index}.txt`, content: "created\n" }) },
+    { name: "run_command", setting: "autoapproveCommands", args: () => ({ command: "npm test" }) }
+  ] as const;
+  let workspaceRoot: string;
+  let session: ChatSession | undefined;
+
+  beforeEach(async () => {
+    workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "locality-live-permissions-"));
+    await fs.writeFile(path.join(workspaceRoot, "input.txt"), "input\n");
+  });
+
+  afterEach(async () => {
+    await session?.shutdown();
+    session = undefined;
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  async function setup(tool: typeof cases[number], calls: number, beforeCall?: (index: number) => void) {
+    mocks.settings[tool.setting] = false;
+    const proposals = Array.from({ length: calls }, () => {
+      let resolve!: (event: Extract<UiEvent, { kind: "toolCallProposed" }>) => void;
+      const promise = new Promise<Extract<UiEvent, { kind: "toolCallProposed" }>>(res => { resolve = res; });
+      return { promise, resolve };
+    });
+    let callIndex = 0;
+    let proposalIndex = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      const index = callIndex++;
+      if (index < calls) {
+        beforeCall?.(index);
+        yield { kind: "toolCall", name: tool.name, argsJson: JSON.stringify(tool.args(index)), id: `live-${index}` };
+      } else yield { kind: "text", text: "Done." };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never, workspaceRoot, record,
+      emit: event => {
+        events.push(event);
+        if (event.kind === "toolCallProposed") proposals[proposalIndex++].resolve(event);
+      }
+    });
+    return { session, record, events, proposed: (index: number) => proposals[index].promise };
+  }
+
+  it.each(cases)("applies changes immediately within a turn for $name", async tool => {
+    const fixture = await setup(tool, 4, index => {
+      if (index === 3) mocks.settings[tool.setting] = false;
+    });
+    const turn = fixture.session.sendUserMessage("repeat the action");
+    const first = await fixture.proposed(0);
+    expect(first.approvalRequired).toBe(true);
+    fixture.session.approve(first.toolId, true);
+    const waiting = await fixture.proposed(1);
+    expect(waiting.approvalRequired).toBe(true);
+    await mocks.updateSetting(tool.setting, true);
+    expect((await fixture.proposed(2)).approvalRequired).toBe(false);
+    const afterRevocation = await fixture.proposed(3);
+    expect(afterRevocation.approvalRequired).toBe(true);
+    fixture.session.approve(afterRevocation.toolId, true);
+    await turn;
+    expect(fixture.record.messages.filter(message => message.role === "tool").map(message => message.toolCall?.status))
+      .toEqual(["executed", "executed", "executed", "executed"]);
+  });
+
+  it.each(cases)("saves auto-approval and accepts the current $name", async tool => {
+    const fixture = await setup(tool, 2);
+    const turn = fixture.session.sendUserMessage("repeat the action");
+    const first = await fixture.proposed(0);
+    await fixture.session.approveFutureTools(first.toolId);
+    expect(mocks.updateSetting).toHaveBeenCalledWith(tool.setting, true, 1);
+    expect(mocks.settings[tool.setting]).toBe(true);
+    expect((await fixture.proposed(1)).approvalRequired).toBe(false);
+    await turn;
+    expect(fixture.record.messages.filter(message => message.role === "tool").map(message => message.toolCall?.status))
+      .toEqual(["executed", "executed"]);
+  });
+
+  it.each(cases)("reports rejection of $name and lets the model continue", async tool => {
+    const fixture = await setup(tool, 1);
+    const turn = fixture.session.sendUserMessage("perform the action");
+    const first = await fixture.proposed(0);
+    fixture.session.approve(first.toolId, false);
+    await turn;
+    expect(mocks.streamChat).toHaveBeenCalledTimes(2);
+    expect(mocks.streamChat.mock.calls[1][1].messages).toContainEqual(expect.objectContaining({
+      role: "tool", tool_call_id: "live-0", content: expect.stringContaining("[rejected by user]")
+    }));
+    expect(fixture.record.messages.filter(message => message.role === "tool").map(message => message.toolCall?.status))
+      .toEqual(["rejected"]);
+    expect(fixture.events.some(event => event.kind === "abort")).toBe(false);
+    expect(fixture.events).toContainEqual(expect.objectContaining({ kind: "text", delta: "Done." }));
+    expect(mocks.startCommand).not.toHaveBeenCalled();
+    if (tool.name === "create_file") await expect(fs.stat(path.join(workspaceRoot, "output-0.txt"))).rejects.toThrow();
+  });
+
+  it.each(cases)("still stops when Stop is pressed immediately after rejecting $name", async tool => {
+    const fixture = await setup(tool, 1);
+    const turn = fixture.session.sendUserMessage("perform the action");
+    const first = await fixture.proposed(0);
+    fixture.session.approve(first.toolId, false);
+    fixture.session.cancel();
+    await turn;
+    expect(mocks.streamChat).toHaveBeenCalledOnce();
+    expect(fixture.events).not.toContainEqual(expect.objectContaining({ kind: "text", delta: "Done." }));
+    expect(mocks.startCommand).not.toHaveBeenCalled();
+  });
+
+  it("keeps approval pending when the setting cannot be saved and ignores stale tool IDs", async () => {
+    const fixture = await setup(cases[0], 1);
+    await fixture.session.approveFutureTools("stale");
+    expect(mocks.updateSetting).not.toHaveBeenCalled();
+    const turn = fixture.session.sendUserMessage("read the file");
+    const first = await fixture.proposed(0);
+    mocks.updateSetting.mockRejectedValueOnce(new Error("settings are read-only"));
+    await fixture.session.approveFutureTools(first.toolId);
+    expect(fixture.record.messages.some(message => message.role === "tool")).toBe(false);
+    expect(fixture.events).toContainEqual({ kind: "notice", text: "Could not enable auto-approval: settings are read-only" });
+    fixture.session.approve(first.toolId, true);
+    await turn;
+    expect(mocks.settings.autoapproveReads).toBe(false);
+  });
+
+  it("does not execute a tool cancelled while its permission is being saved", async () => {
+    const fixture = await setup(cases[2], 1);
+    const turn = fixture.session.sendUserMessage("run tests");
+    const first = await fixture.proposed(0);
+    let finishSave!: () => void;
+    mocks.updateSetting.mockImplementationOnce(() => new Promise<void>(resolve => { finishSave = resolve; }));
+    const saving = fixture.session.approveFutureTools(first.toolId);
+    fixture.session.cancel();
+    finishSave();
+    await saving;
+    await turn;
+    expect(mocks.startCommand).not.toHaveBeenCalled();
+  });
+});
 
 describe("length-limited generation recovery", () => {
   function recoveryRecord(): ChatRecord {

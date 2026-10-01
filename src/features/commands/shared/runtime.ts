@@ -1,10 +1,12 @@
 import type { FeatureContext, FeatureRuntime } from "../../../build/contracts.js";
-import type { HarnessSettings } from "../../../config/settings.js";
+import type { AutoApprovalSetting, HarnessSettings } from "../../../config/settings.js";
 import type { ChatToolProcess } from "../../../ui/messaging.js";
 import type { CommandHandle, CommandProgress, CommandResult, CommandWaitResult } from "./process.js";
 import { toolCommandText } from "../../../ui/commandDisplay.js";
 
 export interface CommandPolicy {
+  autoApprovalSetting?: AutoApprovalSetting;
+  autoApprovalScope?: "global";
   prepare(args: Record<string, unknown>, root: string, settings?: HarnessSettings): Promise<void>;
   launch(args: Record<string, unknown>, root: string, signal: AbortSignal | undefined, output: (value: CommandProgress) => void): Promise<CommandHandle>;
   autoapprove(settings: HarnessSettings): boolean;
@@ -34,6 +36,8 @@ export class CommandRuntime implements FeatureRuntime {
   readonly tools = ["run_command", "wait_process", "stop_process"];
   private processJobs = new Map<string, ManagedProcessJob>();
   constructor(private context: FeatureContext, private policy: CommandPolicy) {}
+  get autoApprovalSetting(): AutoApprovalSetting | undefined { return this.policy.autoApprovalSetting; }
+  get autoApprovalScope(): "global" | undefined { return this.policy.autoApprovalScope; }
   category(name: string): "command" | "process" { return name === "run_command" ? "command" : "process"; }
   needsApproval(settings: HarnessSettings): boolean { return !this.policy.autoapprove(settings); }
   async prepare(name: string, args: Record<string, unknown>, settings: HarnessSettings): Promise<ChatToolProcess> {
