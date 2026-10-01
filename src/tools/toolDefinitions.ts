@@ -4,6 +4,8 @@ import { featureTools } from "../build/tools.js";
 import { objectParameters, type ToolSpec, type JsonSchema } from "./schema.js";
 export { asOpenAiTools, type JsonSchema, type ToolSpec, type OpenAiTool } from "./schema.js";
 
+const READ_FILE_DESCRIPTION = "Read a UTF-8 text file inside the open workspace, optionally only a line range. Each returned line is prefixed with its real 1-based line number in the file and a tab (e.g. `12\\t...`); that prefix is not part of the file. Prefer a range for large files; a range read is prefixed with `[lines X-Y of N]`.";
+
 export const ALL_TOOLS: ToolSpec[] = [
   {
     name: "search_memories",
@@ -29,7 +31,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "read_file",
-    description: "Read a UTF-8 text file inside the open workspace, optionally only a line range. Each returned line is prefixed with its real 1-based line number in the file and a tab (e.g. `12\\t...`); that prefix is not part of the file. Pass those numbers to insert_text and replace_range. Prefer a range for large files; a range read is prefixed with `[lines X-Y of N]`.",
+    description: `${READ_FILE_DESCRIPTION} Pass those numbers to insert_text and replace_range.`,
     parameters: objectParameters({
       path: { type: "string", description: "Workspace-relative path." },
       startLine: { type: "integer", minimum: 1, description: "Optional 1-based first line to read. Omit to read from the start." },
@@ -160,7 +162,9 @@ export function toolsForMode(mode: ChatMode, transport: "native" | "legacy" = "l
     && (tool.name !== "view_image" || (supportsVision && transport === "native"))
     && (!tool.availability || (tool.availability.modes.includes(mode) && (!tool.availability.transport || tool.availability.transport === transport)))
   );
-  if (mode === "plan") return available.filter(tool => PLAN_MODE_TOOL_NAMES.has(tool.name) || isMemoryToolName(tool.name) || !!tool.availability);
+  if (mode === "plan") return available
+    .filter(tool => PLAN_MODE_TOOL_NAMES.has(tool.name) || isMemoryToolName(tool.name) || !!tool.availability)
+    .map(tool => tool.name === "read_file" ? { ...tool, description: READ_FILE_DESCRIPTION } : tool);
   const excluded = transport === "native"
     ? new Set(["write_file"])
     : new Set(["create_file", "edit_file"]);

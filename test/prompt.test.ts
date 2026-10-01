@@ -452,6 +452,27 @@ describe("executable legacy prompt examples", () => {
   }
 });
 
+describe("Plan tool descriptions", () => {
+  it.each(["gemma4", "qwen3", "muse-glimmer", "gpt-oss"] as const)("keeps unavailable editing tools out of the %s Plan prompt", family => {
+    const prompt = buildSystemPrompt({ family, mode: "plan", workspaceRoot: "/tmp/ws" });
+    for (const name of ["write_file", "create_file", "edit_file", "insert_text", "replace_range"]) {
+      expect(prompt).not.toContain(name);
+    }
+    expect(prompt).toContain("1-based line number");
+    expect(prompt).toContain("[lines X-Y of N]");
+  });
+
+  it.each(["native", "legacy"] as const)("keeps %s Plan descriptions read-only without changing other modes", transport => {
+    const readTool = (mode: "act" | "plan" | "review") => toolsForMode(mode, transport).find(tool => tool.name === "read_file")!;
+    for (const name of ["insert_text", "replace_range"]) {
+      expect(readTool("plan").description).not.toContain(name);
+      expect(readTool("act").description).toContain(name);
+      expect(readTool("review").description).toContain(name);
+    }
+    expect(readTool("plan").parameters).toEqual(readTool("act").parameters);
+  });
+});
+
 describe("conditional memory tools", () => {
   for (const family of ["gemma4", "qwen3", "muse-glimmer", "gpt-oss"] as const) {
     for (const mode of ["act", "plan", "review"] as const) {
