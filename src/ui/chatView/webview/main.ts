@@ -2205,12 +2205,14 @@ function renderQuestionLayout(config: {
       <span>${escapeHtml(config.title)}</span>
     </div>
     <div class="assistant-markdown question-markdown">${config.content}</div>
-    <div class="question-options">${config.options}</div>
     <div class="question-footer">
-      <div class="question-other">
-        <span class="question-option-badge question-reply-icon" aria-hidden="true">${config.inputIcon ?? pencilIcon()}</span>
-        <textarea id="questionOther" class="question-other-input" rows="1" placeholder="${escapeHtml(config.placeholder)}" aria-label="${escapeHtml(config.inputLabel)}"></textarea>
-        <button class="question-option-arrow question-submit" type="button" ${config.submit.attribute} aria-label="${escapeHtml(config.submit.label)}" disabled>${sendIcon()}</button>
+      <div class="question-options">
+        ${config.options}
+        <div class="question-other">
+          <span class="question-option-badge question-reply-icon" aria-hidden="true">${config.inputIcon ?? pencilIcon()}</span>
+          <textarea id="questionOther" class="question-other-input" rows="1" placeholder="${escapeHtml(config.placeholder)}" aria-label="${escapeHtml(config.inputLabel)}"></textarea>
+          <button class="question-option-arrow question-submit" type="button" ${config.submit.attribute} aria-label="${escapeHtml(config.submit.label)}" disabled>${sendIcon()}</button>
+        </div>
       </div>
       ${config.secondary ? `<div class="question-actions">
         <button class="send-btn cancel-btn" type="button" ${config.secondary.attribute} aria-label="${escapeHtml(config.secondary.label)}">${stopIcon()}</button>
