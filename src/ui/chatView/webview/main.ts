@@ -1032,7 +1032,7 @@ function renderUserMessage(el: HTMLElement, m: Message): void {
     setHtml(el, html);
     return;
   }
-  const html = `<div class="bubble"><div class="user-message-body">${renderAttachmentsHtml(m.attachments ?? [])}${m.text ? md.render(m.text) : ""}</div>${renderMessageMode(m.mode)}</div>${renderMessageActionsHtml(m)}`;
+  const html = `<div class="bubble"><div class="user-message-body">${renderAttachmentsHtml(m.attachments ?? [])}${m.text ? md.render(m.text) : ""}</div></div>${renderMessageActionsHtml(m)}`;
   setHtml(el, html);
 }
 
@@ -1126,9 +1126,10 @@ function renderMessageActionsInnerHtml(m: Message): string {
   }
   const date = (m.role === "user" || m.role === "assistant") && m.recordTs !== undefined
     ? renderMessageDate(m.recordTs) : "";
-  if (actions.length === 0 && !date) return "";
+  const mode = m.role === "user" ? renderMessageMode(m.mode) : "";
+  if (actions.length === 0 && !date && !mode) return "";
   const hintClass = `message-action-hint${persistentHint ? " active" : ""}`;
-  return `${actions.join("")}${date ? `<span class="message-date">${date}</span>` : ""}<span class="${hintClass}" aria-hidden="true">${persistentHint}</span>`;
+  return `${actions.join("")}${mode}${date ? `<span class="message-date">${date}</span>` : ""}<span class="${hintClass}" aria-hidden="true">${persistentHint}</span>`;
 }
 
 function renderFileChangeSummary(parent: HTMLElement, m: Message): void {
@@ -2016,6 +2017,7 @@ function updateComposer(): void {
               ? `<textarea class="queued-message-input" rows="3" data-queued-edit-input="${escapeHtml(message.id)}" aria-label="Edit queued message">${escapeHtml(message.text)}</textarea>`
               : `<span class="queued-message-text">${escapeHtml(message.text)}</span>`}
           </span>
+          ${renderMessageMode(message.mode)}
           <span class="queued-message-actions">
             ${state.editingQueuedMessageId === message.id
               ? `<button class="queued-message-action save" type="button" data-save-queued="${escapeHtml(message.id)}" data-tip="Save" aria-label="Save queued message">${checkIcon()}</button>
@@ -2024,7 +2026,6 @@ function updateComposer(): void {
                  <button class="queued-message-action remove" type="button" data-remove-queued="${escapeHtml(message.id)}" data-tip="Remove" aria-label="Remove queued message">${trashIcon()}</button>`}
           </span>
         </div>
-        ${renderMessageMode(message.mode)}
       </div>`).join(""));
     const nextEditingInput = queue.querySelector("[data-queued-edit-input]") as HTMLTextAreaElement | null;
     if (nextEditingInput && nextEditingInput.value !== state.queuedMessageDraft) {
