@@ -7,6 +7,7 @@ import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import {
   fetchServerMetadata,
+  GenerationLengthError,
   MalformedNativeToolCallError,
   NativeToolsUnsupportedError,
   VisionUnsupportedError,
@@ -15,7 +16,7 @@ import {
   type LlmMessage
 } from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
-import type { ChatContextActivity, ChatContextState, ChatMemoryCreations, ChatPlanFinal, ChatPlanningState, ChatToolProcess, ChatToolResultDisplay, ChatTurnEnd, ChatTurnPreparation, ChatUserMessage } from "../ui/messaging.js";
+import type { ChatContextActivity, ChatContextState, ChatMemoryCreations, ChatPlanFinal, ChatPlanningState, ChatResponseDiscarded, ChatToolProcess, ChatToolResultDisplay, ChatTurnEnd, ChatTurnPreparation, ChatUserMessage } from "../ui/messaging.js";
 import { createFeatures } from "../build/runtime.js";
 import type { FeatureRuntime, FeatureResultUpdate } from "../build/contracts.js";
 import { loadRootAgentsMd } from "../llm/agentsMd.js";
@@ -90,6 +91,7 @@ export type UiEvent =
   | { kind: "abort"; reason: string }
   | { kind: "notice"; text: string }
   | ChatTurnEnd
+  | ChatResponseDiscarded
   | { kind: "tokens"; total: number; limit: number }
   | { kind: "titleChanged"; title: string; animate: boolean }
   | ({ kind: "chatLoaded"; record: ChatRecord } & ChatContextState)
@@ -125,6 +127,13 @@ type PreparedWriteArgs =
 const WRITE_TOOL_NAMES = new Set(["write_file", "create_file", "edit_file", "insert_text", "replace_range"]);
 const MAX_EMPTY_NATIVE_RETRIES = 1;
 const MAX_MALFORMED_NATIVE_RETRIES = 1;
+const MAX_LENGTH_RECOVERY_RETRIES = 1;
+const LENGTH_RECOVERY_NOTE =
+  "[harness recovery] The previous generation reached its output or context limit. " +
+  "Its unfinished text, reasoning, and incomplete tool call were discarded; incomplete calls were not executed. " +
+  "Continue the current user request from the recorded tool results and current workspace state. " +
+  "Preserve completed work. Keep reasoning and output concise, and use smaller localized edits. " +
+  "Emit the next complete tool call or final answer.";
 const EMPTY_NATIVE_REPAIR_NOTE =
   "[harness recovery] The previous generation ended after reasoning without a tool call or final response. " +
   "Continue from the current state by emitting one structured tool call or a final answer.";
@@ -473,7 +482,7 @@ export class ChatSession {
     const before = this.record.totalTokens;
     const beforeMessages = modelMessages(this.record).length;
     const compactId = `compact_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    if (this.disposed) return false;
+    if (this.disposed || (source === "auto" && this.abort?.signal.aborted)) return false;
     const ac = new AbortController();
     this.compactAborts.add(ac);
     this.completeContextIngestion();
@@ -904,7 +913,7 @@ export class ChatSession {
 
   private async buildPromptMessagesForRequest(
     s: HarnessSettings,
-    options: { reload: boolean; nativeRepairNote?: string }
+    options: { reload: boolean; repairNote?: string }
   ): Promise<PromptMessage[] | undefined> {
     if (!(await this.prepareContextForModelRequest(s, options))) return undefined;
 
@@ -917,7 +926,7 @@ export class ChatSession {
       return undefined;
     }
     let messages = await this.buildPromptMessages();
-    if (options.nativeRepairNote) messages = withNativeRepair(messages, options.nativeRepairNote);
+    if (options.repairNote) messages = withPromptRepair(messages, options.repairNote);
     // Count the tokens of the prompt that is ACTUALLY sent (system prompt +
     // re-rendered tool calls + wrapped results), not the sum of stored
     // messages, using llama.cpp's tokenizer. This is the number the server
@@ -927,7 +936,7 @@ export class ChatSession {
       const compacted = await this.runCompact("auto", options);
       if (compacted) {
         messages = await this.buildPromptMessages();
-        if (options.nativeRepairNote) messages = withNativeRepair(messages, options.nativeRepairNote);
+        if (options.repairNote) messages = withPromptRepair(messages, options.repairNote);
         promptTok = await promptTokens(s.endpoint, this.messagesForTokenCount(messages), s.templateOverheadTokensPerMessage, s.model);
       }
     }
@@ -1158,8 +1167,9 @@ export class ChatSession {
     let ranAnyTool = false;
     let emptyNativeRetries = 0;
     let malformedNativeRetries = 0;
+    let lengthRecoveryRetries = 0;
     let disabledReasoningNoticeShown = false;
-    let nativeRepairNote: string | undefined;
+    let repairNote: string | undefined;
     let serverUsageTotal: number | undefined;
     this.completedCallIds.clear();
     // Events are stamped with wall-clock time so the webview can restore
@@ -1193,9 +1203,9 @@ export class ChatSession {
       this.writeRanThisPass = false;
       const messages = await this.buildPromptMessagesForRequest(s, {
         reload: false,
-        nativeRepairNote
+        repairNote
       });
-      nativeRepairNote = undefined;
+      repairNote = undefined;
       if (!messages) {
         break;
       }
@@ -1406,6 +1416,43 @@ export class ChatSession {
           toolLoop = toolLoop || (continueAfterTail.toolLoop ?? false);
         }
       } catch (e) {
+        if (e instanceof GenerationLengthError && readSettings().autoCompact
+          && !this.abort.signal.aborted && !this.disposed && !toolLoop
+          && lengthRecoveryRetries < MAX_LENGTH_RECOVERY_RETRIES) {
+          lengthRecoveryRetries++;
+          // Completed tool passes are already persisted. Drop only this
+          // unfinished generation, without flushing its partial parser state.
+          this.emit({
+            kind: "responseDiscarded", messageId,
+            textChars: assistantBuf.length, thoughtChars: thoughtBuf.length,
+            toolIds: [...this.streamingTools.values()].map(tool => tool.toolId)
+          });
+          this.streamingTools.clear();
+          this.lastProgressEmitAt.clear();
+          this.streamingFileState.clear();
+          assistantBuf = "";
+          thoughtBuf = "";
+          turnEvents.length = 0;
+          serverUsageTotal = undefined;
+          this.emitLiveTokenEstimate("");
+          const canCompact = compactAvailableForMessageCount(modelMessages(this.record).length);
+          this.emit({
+            kind: "notice",
+            text: canCompact
+              ? "The model reached a generation limit. Compacting context and retrying once…"
+              : "The model reached a generation limit. Retrying once with a shorter continuation…"
+          });
+          const recovered = !canCompact || await this.runCompact("auto", { reload: false });
+          if (this.abort.signal.aborted || this.disposed) {
+            this.emit({ kind: "abort", reason: "Cancelled." });
+            aborted = true;
+            break;
+          }
+          if (recovered) {
+            repairNote = LENGTH_RECOVERY_NOTE;
+            continue;
+          }
+        }
         if (e instanceof VisionUnsupportedError) {
           const muse = compatibilityFamily(this.record.toolCallingMode) === "muse-glimmer";
           this.emit({
@@ -1446,7 +1493,7 @@ export class ChatSession {
           && malformedNativeRetries < MAX_MALFORMED_NATIVE_RETRIES
         ) {
           malformedNativeRetries++;
-          nativeRepairNote = MALFORMED_NATIVE_REPAIR_NOTE;
+          repairNote = MALFORMED_NATIVE_REPAIR_NOTE;
           console.warn(
             `[harness] server rejected native tool-call JSON; retry=${malformedNativeRetries}/${MAX_MALFORMED_NATIVE_RETRIES}`
           );
@@ -1502,7 +1549,7 @@ export class ChatSession {
         && emptyNativeRetries < MAX_EMPTY_NATIVE_RETRIES
       ) {
         emptyNativeRetries++;
-        nativeRepairNote = EMPTY_NATIVE_REPAIR_NOTE;
+        repairNote = EMPTY_NATIVE_REPAIR_NOTE;
         console.warn(
           `[harness] native empty turn after reasoning; retry=${emptyNativeRetries}/${MAX_EMPTY_NATIVE_RETRIES} ` +
           `finish_reason=${finishReason ?? "none"}`
@@ -2379,7 +2426,7 @@ function asThoughtEvents(events: ParsedEvent[]): ParsedEvent[] {
     : event);
 }
 
-function withNativeRepair(messages: PromptMessage[], note: string): PromptMessage[] {
+function withPromptRepair(messages: PromptMessage[], note: string): PromptMessage[] {
   const repaired = messages.map(message => ({ ...message }));
   for (let index = repaired.length - 1; index >= 0; index--) {
     const message = repaired[index];

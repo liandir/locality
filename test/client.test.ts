@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   complete,
+  GenerationLengthError,
   fetchServerMetadata,
   fetchServerModels,
   MalformedNativeToolCallError,
@@ -362,6 +363,21 @@ describe("OpenAI-compatible client", () => {
     expect(chunks).toEqual([
       { kind: "toolCall", name: "read_file", argsJson: "{\"path\":\"a.ts\"}", id: "call_read" }
     ]);
+  });
+
+  it.each(['{"path":"a.ts","content":"partial"}', '{"path":"a.ts","content":"partial'])("never emits a tool call cut off by a generation limit (%s)", async args => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "cut-off", function: { name: "create_file", arguments: args } }] } }] })}`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "length" }] })}`,
+      "data: [DONE]"
+    ])));
+    const chunks: LlmStreamChunk[] = [];
+    await expect((async () => {
+      for await (const chunk of streamChat("http://127.0.0.1:8080", { messages: [{ role: "user", content: "create file" }] }, new AbortController().signal)) {
+        chunks.push(chunk);
+      }
+    })()).rejects.toBeInstanceOf(GenerationLengthError);
+    expect(chunks.some(chunk => chunk.kind === "toolCall")).toBe(false);
   });
 
   it("throws when the server reports a length-limited generation", async () => {

@@ -84,6 +84,15 @@ export interface ChatTurnEnd {
   messageTs?: number;
 }
 
+/** Remove only the unfinished output of a generation that will be retried. */
+export interface ChatResponseDiscarded {
+  kind: "responseDiscarded";
+  messageId: string;
+  textChars: number;
+  thoughtChars: number;
+  toolIds: string[];
+}
+
 // --- Side view (welcome / chats / settings) ---
 
 export type SideTab = "welcome" | "chats" | "settings";

@@ -273,6 +273,14 @@ window is. When it gets close to full:
   you can compact manually before the next request gets too large.
 - You can also click the context ring at any time to compact immediately.
 
+With **Auto-compact** enabled, a response cut short by a generation limit gets
+one recovery attempt per turn. The harness discards that unfinished response,
+compacts the saved context when enough history is available, and continues with
+a request for a shorter response or smaller edits. Completed tool results and
+file changes are retained. If compaction fails or the retry reaches the limit
+again, the error remains visible. A server output limit or excessive reasoning
+can still cause this failure even when context has room.
+
 Compaction summarizes older details in the model's context so it has room to
 keep working. The saved chat and visible history retain the original messages
 and file attachments. The model receives the summary and recent context;

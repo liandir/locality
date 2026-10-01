@@ -7,6 +7,7 @@ import type { UiEvent } from "../src/chat/session.js";
 import type { WorkspaceMemory } from "../src/chat/workspaceMemory.js";
 
 const mocks = vi.hoisted(() => ({
+  GenerationLengthError: class GenerationLengthError extends Error {},
   MalformedNativeToolCallError: class MalformedNativeToolCallError extends Error {},
   NativeToolsUnsupportedError: class NativeToolsUnsupportedError extends Error {},
   VisionUnsupportedError: class VisionUnsupportedError extends Error {},
@@ -56,6 +57,7 @@ vi.mock("vscode", () => ({
 }));
 
 vi.mock("../src/llm/client.js", () => ({
+  GenerationLengthError: mocks.GenerationLengthError,
   MalformedNativeToolCallError: mocks.MalformedNativeToolCallError,
   NativeToolsUnsupportedError: mocks.NativeToolsUnsupportedError,
   VisionUnsupportedError: mocks.VisionUnsupportedError,
@@ -3357,6 +3359,146 @@ function newRecord(): ChatRecord {
     totalTokens: 0
   };
 }
+
+describe("length-limited generation recovery", () => {
+  function recoveryRecord(): ChatRecord {
+    const record = newRecord();
+    record.title = "Existing chat";
+    record.messages = Array.from({ length: 6 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" as const : "assistant" as const,
+      content: `history ${index}`, ts: index + 1
+    }));
+    return record;
+  }
+
+  it.each(["native", "legacy"])("discards unfinished %s output, compacts, and continues the same turn", async protocol => {
+    mocks.settings.autoCompact = true;
+    const record = recoveryRecord();
+    record.toolCallingMode = protocol === "native" ? "native" : "compat-gemma4";
+    const events: UiEvent[] = [];
+    let requestCount = 0;
+    let generation = 0;
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: { messages: unknown[] }) {
+      if (requestCount++ === 0 && protocol === "legacy") throw new mocks.NativeToolsUnsupportedError("requires --jinja");
+      if (generation++ === 0) {
+        yield { kind: "thought", text: "UNFINISHED_THOUGHT_SENTINEL" };
+        yield { kind: "text", text: "UNFINISHED_TEXT_SENTINEL" };
+        if (protocol === "native") {
+          yield { kind: "toolCallProgress", name: "create_file", path: "unfinished.ts", contentBytes: 5, contentLines: 1 };
+        } else {
+          yield { kind: "text", text: '<|tool_call>call:write_file{path:<|"|>unfinished.ts<|"|>,content:<|"|>partial' };
+        }
+        throw new mocks.GenerationLengthError("Generation limit");
+      }
+      const prompt = JSON.stringify(request.messages);
+      expect(prompt).toContain("CURRENT_REQUEST_SENTINEL");
+      expect(prompt).toContain("[context summary]");
+      expect(prompt).toContain("[harness recovery]");
+      expect(prompt).not.toContain("UNFINISHED_");
+      expect(prompt).not.toContain("unfinished.ts");
+      yield { kind: "text", text: "Completed answer" };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const session = new ChatSession({ storage: { save: vi.fn() } as never, workspaceRoot: "/tmp/workspace", record, emit: e => events.push(e) });
+    await session.sendUserMessage("CURRENT_REQUEST_SENTINEL");
+
+    expect(generation).toBe(2);
+    expect(events).toContainEqual(expect.objectContaining({ kind: "compactEnd", status: "executed" }));
+    const progress = events.find(event => event.kind === "toolCallProgress");
+    expect(progress?.kind).toBe("toolCallProgress");
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: "responseDiscarded", textChars: "UNFINISHED_TEXT_SENTINEL".length,
+      thoughtChars: "UNFINISHED_THOUGHT_SENTINEL".length,
+      toolIds: [progress?.kind === "toolCallProgress" ? progress.toolId : "missing"]
+    }));
+    expect(events.some(event => event.kind === "abort" || event.kind === "toolCallProposed" || event.kind === "toolCallResolved")).toBe(false);
+    expect(events.filter(event => event.kind === "turnEnd")).toEqual([
+      expect.objectContaining({ messageTs: expect.any(Number) })
+    ]);
+    expect(record.messages.at(-1)?.content).toBe("Completed answer");
+    expect(JSON.stringify(record.messages)).not.toContain("UNFINISHED_");
+    expect(JSON.stringify(mocks.complete.mock.calls)).not.toContain("UNFINISHED_");
+  });
+
+  it("preserves a completed file write and its tool result through recovery", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-recovery-"));
+    try {
+      mocks.settings.autoCompact = true;
+      mocks.settings.autoapproveWrites = true;
+      const record = recoveryRecord();
+      record.toolCallingMode = "native";
+      const events: UiEvent[] = [];
+      let pass = 0;
+      mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: { messages: { role: string; content: string; tool_call_id?: string }[] }) {
+        if (pass++ === 0) {
+          yield { kind: "toolCall", name: "create_file", id: "completed-write", argsJson: JSON.stringify({ path: "done.ts", content: "export const done = true;" }) };
+        } else if (pass === 2) {
+          yield { kind: "thought", text: "unfinished reasoning" };
+          throw new mocks.GenerationLengthError("Generation limit");
+        } else {
+          expect(request.messages).toContainEqual(expect.objectContaining({ role: "tool", tool_call_id: "completed-write" }));
+          yield { kind: "text", text: "Done" };
+        }
+      });
+      const { ChatSession } = await import("../src/chat/session.js");
+      const session = new ChatSession({ storage: { save: vi.fn() } as never, workspaceRoot: ws, record, emit: e => events.push(e) });
+      await session.sendUserMessage("Create done.ts");
+      expect(await fs.readFile(path.join(ws, "done.ts"), "utf8")).toBe("export const done = true;");
+      expect(record.messages.filter(message => message.role === "tool")).toHaveLength(1);
+      expect(events.filter(event => event.kind === "toolCallProposed")).toHaveLength(1);
+      expect(events).toContainEqual(expect.objectContaining({ kind: "fileChanges", changes: [expect.objectContaining({ path: "done.ts" })] }));
+      expect(events.some(event => event.kind === "abort")).toBe(false);
+    } finally { await fs.rm(ws, { recursive: true, force: true }); }
+  });
+
+  it.each(["auto-disabled", "compaction-failed", "cancelled", "cancelled-before-summary", "repeated-limit"])("stops safely on %s", async outcome => {
+    mocks.settings.autoCompact = outcome !== "auto-disabled";
+    const record = recoveryRecord();
+    record.toolCallingMode = "native";
+    const events: UiEvent[] = [];
+    mocks.streamChat.mockImplementation(async function* () {
+      yield { kind: "thought", text: "unfinished reasoning" };
+      throw new mocks.GenerationLengthError("Generation limit");
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const session = new ChatSession({ storage: { save: vi.fn() } as never, workspaceRoot: "/tmp/workspace", record, emit: e => events.push(e) });
+    if (outcome === "compaction-failed") mocks.complete.mockRejectedValue(new Error("Summary failed"));
+    if (outcome === "cancelled") mocks.complete.mockImplementation(async (_endpoint, _request, signal: AbortSignal) => {
+      session.cancel();
+      signal.throwIfAborted();
+      return "unreachable";
+    });
+    if (outcome === "cancelled-before-summary") mocks.fetchServerContextSize.mockImplementation(async () => {
+      if (events.some(event => event.kind === "responseDiscarded")) session.cancel();
+      return 32768;
+    });
+    await session.sendUserMessage("Continue");
+    expect(mocks.streamChat).toHaveBeenCalledTimes(outcome === "repeated-limit" ? 2 : 1);
+    expect(events.filter(event => event.kind === "compactStart")).toHaveLength(outcome === "auto-disabled" || outcome === "cancelled-before-summary" ? 0 : 1);
+    expect(events).toContainEqual({ kind: "abort", reason: outcome.startsWith("cancelled") ? "Cancelled." : "Generation limit" });
+    expect(events.filter(event => event.kind === "turnEnd")).toEqual([expect.objectContaining({ messageTs: undefined })]);
+    expect(record.messages.at(-1)?.role).toBe("user");
+  });
+
+  it("retries once without compaction when only a short conversation exists", async () => {
+    mocks.settings.autoCompact = true;
+    const record = newRecord();
+    record.title = "Existing title";
+    record.toolCallingMode = "native";
+    const events: UiEvent[] = [];
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* () {
+      if (pass++ === 0) throw new mocks.GenerationLengthError("Generation limit");
+      yield { kind: "text", text: "Concise answer" };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const session = new ChatSession({ storage: { save: vi.fn() } as never, workspaceRoot: "/tmp/workspace", record, emit: e => events.push(e) });
+    await session.sendUserMessage("Answer briefly");
+    expect(mocks.streamChat).toHaveBeenCalledTimes(2);
+    expect(events.some(event => event.kind === "compactStart" || event.kind === "abort")).toBe(false);
+    expect(record.messages.at(-1)?.content).toBe("Concise answer");
+  });
+});
 
 describe("separate transcript and model context", () => {
   it.each(["complete", "cancel", "error"])("attributes an idle manual compaction to the next prompt, including %s", async outcome => {

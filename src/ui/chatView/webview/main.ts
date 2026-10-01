@@ -11,6 +11,7 @@ import { renderMemoryContents, renderMemoryCreation, renderMemoryResult } from "
 import { CARD_SEPARATOR_HTML, renderToolOutputSurface } from "./toolOutputSurface.js";
 import { parseQuestionPayload, renderQuestionResult } from "./questionResult.js";
 import { copyableAssistantText } from "./messageCopy.js";
+import { discardResponseParts } from "./responseRecovery.js";
 import { ScrollFollow } from "./scrollFollow.js";
 import MarkdownIt from "markdown-it";
 import type { RenderRule } from "markdown-it/lib/renderer.mjs";
@@ -4398,6 +4399,17 @@ function handleHostMessage(msg: ExtToChat): void {
       const m = getOrCreateMsg(msg.messageId, "assistant");
       m.thought += msg.delta;
       appendPartText(m, "thought", msg.delta);
+      render(false);
+      break;
+    }
+    case "responseDiscarded": {
+      const m = state.messages.find(message => message.id === msg.messageId);
+      if (m) {
+        m.parts = discardResponseParts(m.parts, msg);
+        m.text = m.text.slice(0, Math.max(0, m.text.length - msg.textChars));
+        m.thought = m.thought.slice(0, Math.max(0, m.thought.length - msg.thoughtChars));
+        m.toolCards = m.toolCards.filter(card => !msg.toolIds.includes(card.toolId));
+      }
       render(false);
       break;
     }
