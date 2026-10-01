@@ -759,11 +759,6 @@ function mountShell(): void {
       <div class="composer-row">
         <div id="approvalSlot"></div>
         <textarea id="input" rows="3"></textarea>
-        <button id="attachFiles" class="composer-attach" type="button" aria-label="Attach files" data-tip="Attach files">${paperclipIcon()}</button>
-        <div id="composerAttachment" class="composer-attachment" hidden></div>
-        <span id="sendSlot"></span>
-      </div>
-      <div class="composer-toggles">
         <span class="composer-mode-controls">
           <span class="mode-selector chat-mode-group">
             <button id="chatMode" class="mode-pill mode-icon-toggle" type="button" aria-label="Mode (Act)" aria-haspopup="menu" aria-controls="chatModeMenu" aria-expanded="false" data-tip="Mode (Act)"><span id="chatModeIcon">${pawnIcon()}</span></button>
@@ -774,11 +769,16 @@ function mountShell(): void {
             </span>
           </span>
         </span>
+        <div id="composerAttachment" class="composer-attachment" hidden></div>
+        <button id="attachFiles" class="composer-attach" type="button" aria-label="Attach files" data-tip="Attach files">${paperclipIcon()}</button>
+        <span id="sendSlot"></span>
+      </div>
+      <div class="composer-toggles">
         <span class="compact-group">
-          <span id="compactHint" class="inline-hint compact-hint"></span>
           <button id="compact" class="ctx-pill" type="button" aria-label="Compact context">
             <span id="ctxIcon"></span><span id="ctxPct"></span>
           </button>
+          <span id="compactHint" class="inline-hint compact-hint"></span>
           <div id="compactMenu" class="compact-menu" role="menu" hidden>
             <p>Agent is currently active.</p>
             <button type="button" data-compact-action="interrupt">Interrupt chat and compact</button>
