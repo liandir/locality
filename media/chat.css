@@ -100,12 +100,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .user-edit-input { width: 100%; min-height: 72px; resize: vertical; padding: 4px 6px; background: transparent; color: var(--vscode-input-foreground); border: 0; border-radius: 0; outline: none; font: inherit; line-height: 1.45; box-sizing: border-box; }
 .user-edit-input:focus { border-color: transparent; outline: none; }
 .user-edit-actions { display: flex; justify-content: flex-end; gap: 6px; }
-.user-edit-actions button { padding: 4px 11px; border-radius: var(--control-radius); font: inherit; cursor: pointer; }
-.user-edit-cancel { background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; }
-.user-edit-cancel:hover { background: var(--surface-fill); color: var(--vscode-foreground); }
-.user-edit-submit { background: var(--surface-fill-strong); color: var(--vscode-foreground); border: 1px solid transparent; }
-.user-edit-submit:hover:not(:disabled) { background: color-mix(in srgb, var(--vscode-foreground) 22%, transparent); }
-.user-edit-submit:disabled { opacity: 0.5; cursor: default; }
 .msg.assistant .bubble { padding: 4px 0; }
 .assistant-markdown { color: var(--vscode-foreground); line-height: 1.55; padding: 2px 0; }
 .msg.assistant .card.answer { padding: 8px 11px; }
@@ -709,8 +703,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .question-option:disabled { opacity: 0.5; cursor: default; }
 .question-option-badge { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 20px; height: 20px; background: var(--surface-fill); color: var(--vscode-descriptionForeground); border-radius: var(--control-radius); font-size: 0.85em; }
 .question-option-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.question-option-arrow { display: inline-flex; flex: 0 0 auto; color: var(--vscode-descriptionForeground); opacity: 0; transform: rotate(90deg); transition: opacity 0.12s; }
-[data-accept-plan] .question-option-arrow { transform: none; }
+.question-option-arrow { display: inline-flex; flex: 0 0 auto; color: var(--vscode-descriptionForeground); opacity: 0; transition: opacity 0.12s; }
 .question-option:hover:not(:disabled) .question-option-arrow, .question-option:focus-visible:not(:disabled) .question-option-arrow { opacity: 1; }
 .question-footer { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 6px 10px; }
 .question-other { display: flex; align-items: flex-start; flex: 1 1 190px; min-width: 0; border-radius: var(--control-radius); }
@@ -724,10 +717,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .question-composer .question-other-input:focus { background: transparent; border-color: transparent; }
 .question-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; margin-left: auto; }
-.question-action { background: var(--surface-fill); color: var(--vscode-foreground); border: 1px solid transparent; cursor: pointer; outline: none; }
-.question-action:hover:not(:disabled), .question-action:focus-visible:not(:disabled) { background: var(--surface-fill-strong); }
-.question-send { background: var(--surface-fill-strong); }
-.question-action:disabled { opacity: 0.5; cursor: default; }
 #sendSlot { position: absolute; right: 10px; bottom: 10px; display: inline-flex; gap: 5px; }
 .composer-attach { position: absolute; left: 10px; bottom: 13px; width: var(--icon-action-size); height: var(--icon-action-size); display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: var(--control-radius); cursor: pointer; outline: none; }
 .composer-attach svg { display: block; }

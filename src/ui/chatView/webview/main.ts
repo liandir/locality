@@ -1025,8 +1025,8 @@ function renderUserMessage(el: HTMLElement, m: Message): void {
       ${renderAttachmentsHtml(attachments, true, "data-edit-remove-attachment")}
       <textarea class="user-edit-input" rows="3" data-edit-input="${m.recordTs}">${escapeHtml(state.editDraft)}</textarea>
       <div class="user-edit-actions">
-        <button class="user-edit-cancel" type="button" data-edit-cancel>Cancel</button>
-        <button class="user-edit-submit" type="button" data-edit-submit="${m.recordTs}"${state.editDraft.trim() || attachments.length ? "" : " disabled"}>Send</button>
+        <button class="send-btn cancel-btn" type="button" data-edit-cancel data-tip="Cancel" aria-label="Cancel">${stopIcon()}</button>
+        <button class="send-btn" type="button" data-edit-submit="${m.recordTs}" data-tip="Send" aria-label="Send"${state.editDraft.trim() || attachments.length ? "" : " disabled"}>${sendIcon()}</button>
       </div>
     </div>`;
     setHtml(el, html);
@@ -2189,7 +2189,6 @@ function renderQuestionLayout(config: {
   options: string;
   secondary?: { attribute: string; label: string };
   submit: { attribute: string; label: string };
-  iconActions?: boolean;
   placeholder: string;
   inputLabel: string;
 }): string {
@@ -2206,8 +2205,8 @@ function renderQuestionLayout(config: {
         <textarea id="questionOther" class="question-other-input" rows="1" placeholder="${escapeHtml(config.placeholder)}" aria-label="${escapeHtml(config.inputLabel)}"></textarea>
       </div>
       <div class="question-actions">
-        ${config.secondary ? `<button class="${config.iconActions ? "send-btn cancel-btn" : "question-action"}" type="button" ${config.secondary.attribute} data-tip="${escapeHtml(config.secondary.label)}" aria-label="${escapeHtml(config.secondary.label)}">${config.iconActions ? stopIcon() : escapeHtml(config.secondary.label)}</button>` : ""}
-        <button class="${config.iconActions ? "send-btn" : "question-action question-send"}" type="button" ${config.submit.attribute} data-tip="${escapeHtml(config.submit.label)}" aria-label="${escapeHtml(config.submit.label)}" disabled>${config.iconActions ? sendIcon() : escapeHtml(config.submit.label)}</button>
+        ${config.secondary ? `<button class="send-btn cancel-btn" type="button" ${config.secondary.attribute} data-tip="${escapeHtml(config.secondary.label)}" aria-label="${escapeHtml(config.secondary.label)}">${stopIcon()}</button>` : ""}
+        <button class="send-btn" type="button" ${config.submit.attribute} data-tip="${escapeHtml(config.submit.label)}" aria-label="${escapeHtml(config.submit.label)}" disabled>${sendIcon()}</button>
       </div>
     </div>
   </div>`;
@@ -2250,7 +2249,6 @@ function renderPlanApprovalComposer(messageTs?: number): string {
     </button>`,
     secondary: { attribute: `data-cancel-planning="${messageTs ?? ""}"`, label: "Cancel planning" },
     submit: { attribute: `data-plan-changes="${messageTs ?? ""}"`, label: "Request changes" },
-    iconActions: true,
     placeholder: "Describe the changes…", inputLabel: "Suggest changes to the plan"
   });
 }

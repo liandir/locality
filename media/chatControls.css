@@ -10,7 +10,7 @@
 }
 
 /* Use the Settings/Welcome button geometry for question and plan actions too. */
-.welcome-button, .wide-button, .question-option, .question-action {
+.welcome-button, .wide-button, .question-option {
   min-height: 30px;
   padding: 4px 12px;
   box-sizing: border-box;
