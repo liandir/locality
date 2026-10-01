@@ -10,6 +10,7 @@ import { auditStage, auditArchive } from "./verify-build-isolation.mjs";
 
 const require = createRequire(import.meta.url);
 const base = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
+const artifactName = `${base.name}-harness`;
 const selected = process.argv.find(arg => arg.startsWith("--profile="))?.slice(10);
 if (selected) assertProfile(selected);
 const targets = selected ? [selected] : profiles;
@@ -75,7 +76,7 @@ for (const profile of targets) {
   await writeFile(path.join(stage, "README.md"), `# ${manifest.displayName}\n\n${instructions}${search}\n\nConfigure the local/LAN model endpoint in Settings. Commit-message generation uses the same VS Code Git integration in every edition. Installing another Locality edition replaces this extension while preserving chats and shared preferences.\n\nChats and attachments are stored in ~/.locality/.\n`);
   await cp(path.join(root, "LICENSE"), path.join(stage, "LICENSE"));
   await auditStage(profile, stage, metadata);
-  const filename = `${base.name}-${base.version}-${profile}.vsix`;
+  const filename = `${artifactName}-${base.version}-${profile}.vsix`;
   const candidate = path.join(pending, filename);
   await rm(candidate, { force: true });
   await runVsce(stage, candidate);
@@ -88,7 +89,7 @@ if (!selected) {
   }
 }
 for (const profile of targets) {
-  const filename = `${base.name}-${base.version}-${profile}.vsix`;
+  const filename = `${artifactName}-${base.version}-${profile}.vsix`;
   await rm(path.join(output, filename), { force: true });
   await rename(path.join(pending, filename), path.join(output, filename));
 }

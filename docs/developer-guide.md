@@ -38,7 +38,7 @@ npm run package:vsix
 
 Packaging audits the bundles, staged contents, and actual VSIX archives before
 placing the packages in `artifacts/`. Local filenames include the version from
-`package.json`, such as `locality-2.0.2-safe-list.vsix`.
+`package.json`, such as `locality-harness-2.0.2-safe-list.vsix`.
 
 To package one edition during development:
 
@@ -49,7 +49,7 @@ npm run package:vsix -- --profile=safe-list
 Install the resulting package with the VS Code CLI:
 
 ```bash
-code --install-extension artifacts/locality-2.0.2-safe-list.vsix
+code --install-extension artifacts/locality-harness-2.0.2-safe-list.vsix
 ```
 
 Alternatively, use **Extensions: Install from VSIX…** in VS Code's Command
@@ -79,10 +79,10 @@ After tests, checks, packaging, and isolation audits, the workflow copies the
 four versioned files from `artifacts/` into `.build/release-assets/` with stable
 names:
 
-- `locality-no-commands.vsix`
-- `locality-safe-list.vsix`
-- `locality-commands.vsix`
-- `locality-advanced.vsix`
+- `locality-harness-no-commands.vsix`
+- `locality-harness-safe-list.vsix`
+- `locality-harness-commands.vsix`
+- `locality-harness-advanced.vsix`
 
 Only these copies are uploaded to the GitHub release. Local build filenames and
 the version inside each VSIX stay unchanged. All four copies must be prepared

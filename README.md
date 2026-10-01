@@ -53,10 +53,10 @@ a model or server, and does not require Node.js.
 You can also install from the terminal, using your downloaded filename:
 
 ```bash
-code --install-extension locality-safe-list.vsix
+code --install-extension locality-harness-safe-list.vsix
 ```
 
-Downloads use stable names such as `locality-safe-list.vsix`. The links below
+Downloads use stable names such as `locality-harness-safe-list.vsix`. The links below
 always follow the release marked **Latest** on GitHub; the release tag and the
 extension's version identify the version you are installing.
 
@@ -67,10 +67,10 @@ file reading and editing. The level determines the assistant's additional tools.
 
 | Edition | Command execution | Built-in web tools | Latest download |
 | --- | --- | --- | --- |
-| **No commands** | None; work through workspace file tools | None | [Download VSIX](https://github.com/liandir/locality/releases/latest/download/locality-no-commands.vsix) |
-| **Safe list** | Only commands matching your configured rules, with workspace checks for built-ins | None | [Download VSIX](https://github.com/liandir/locality/releases/latest/download/locality-safe-list.vsix) |
-| **Commands** | General command execution for builds, tests, and other programs | None | [Download VSIX](https://github.com/liandir/locality/releases/latest/download/locality-commands.vsix) |
-| **Advanced** | Same as Commands | Brave Search or SearXNG, plus public webpage reading | [Download VSIX](https://github.com/liandir/locality/releases/latest/download/locality-advanced.vsix) |
+| **No commands** | None; work through workspace file tools | None | [Download VSIX](https://github.com/liandir/locality/releases/latest/download/locality-harness-no-commands.vsix) |
+| **Safe list** | Only commands matching your configured rules, with workspace checks for built-ins | None | [Download VSIX](https://github.com/liandir/locality/releases/latest/download/locality-harness-safe-list.vsix) |
+| **Commands** | General command execution for builds, tests, and other programs | None | [Download VSIX](https://github.com/liandir/locality/releases/latest/download/locality-harness-commands.vsix) |
+| **Advanced** | Same as Commands | Brave Search or SearXNG, plus public webpage reading | [Download VSIX](https://github.com/liandir/locality/releases/latest/download/locality-harness-advanced.vsix) |
 
 File edits and commands require approval by default; file reads are auto-approved.
 General commands and custom safe-list programs run with your OS permissions and
