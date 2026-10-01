@@ -677,7 +677,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   cursor: pointer;
   transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
-.approval-actions .reject:hover, .approval-actions .reject:focus-visible { color: var(--error-highlight-foreground); border-color: transparent; }
+.approval-actions .reject { background: transparent; }
+.approval-actions .reject:hover, .approval-actions .reject:focus-visible { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--error-highlight-foreground); border-color: transparent; }
 
 /* Questions and plan approval share a compact composer surface. */
 .question-composer { justify-content: flex-start; gap: 10px; padding: 10px 12px; }

@@ -20,11 +20,11 @@
 }
 
 /* Decision controls keep a gray fill at rest, half the hover/focus strength. */
-.approval-actions button, .question-option, .question-other, .question-submit,
+.approval-actions .approve, .question-option, .question-other, .question-submit,
 .question-composer .question-actions .cancel-btn {
   background: color-mix(in srgb, var(--surface-fill-strong) 50%, transparent);
 }
-.approval-actions button:is(:hover, :focus-visible):not(:disabled),
+.approval-actions .approve:is(:hover, :focus-visible):not(:disabled),
 :is(.question-option, .question-submit):is(:hover, :focus-visible):not(:disabled),
 .question-other:is(:hover, :focus-within),
 .question-composer .question-actions .cancel-btn:is(:hover, :focus-visible):not(:disabled) {
