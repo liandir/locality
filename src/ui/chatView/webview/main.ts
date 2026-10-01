@@ -44,14 +44,6 @@ import mdKatex from "@vscode/markdown-it-katex";
 import type { ChatToExt, ExtToChat, UiAttachment, UiQueuedMessage, WorkspacePathType } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
 import type { ChatMode } from "../../../chat/mode.js";
-import {
-  DEFAULT_REASONING_EFFORT,
-  DEFAULT_REASONING_EFFORTS,
-  reasoningEffortChoices,
-  reasoningEffortLabel,
-  type ReasoningEffort,
-  type ReasoningEfforts
-} from "../../../chat/reasoningEffort.js";
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
 import { normalizeToolArgsForDisplay } from "./toolArgs.js";
 import { restoredCreatesNewFile, restoredToolFileChanges, restoredToolStatus } from "./toolHistory.js";
@@ -243,9 +235,6 @@ interface State {
   limit: number;
   mode: ChatMode;
   chatModeMenuOpen: boolean;
-  reasoningEffort: ReasoningEffort;
-  reasoningEfforts: ReasoningEfforts;
-  reasoningEffortMenuOpen: boolean;
   serverPending?: ChatTurnPreparation["reason"];
   contextActivityIds: Set<string>;
   showThinking: boolean;
@@ -318,9 +307,6 @@ const state: State = {
   limit: 32768,
   mode: "act",
   chatModeMenuOpen: false,
-  reasoningEffort: DEFAULT_REASONING_EFFORT,
-  reasoningEfforts: { ...DEFAULT_REASONING_EFFORTS },
-  reasoningEffortMenuOpen: false,
   serverPending: undefined,
   contextActivityIds: new Set(),
   showThinking: false,
@@ -784,12 +770,6 @@ function mountShell(): void {
               <button type="button" role="menuitemradio" data-chat-mode="act"><span class="mode-select-check"></span><span class="mode-select-option-icon">${pawnIcon()}</span><span>Act mode</span></button>
               <button type="button" role="menuitemradio" data-chat-mode="plan"><span class="mode-select-check"></span><span class="mode-select-option-icon">${scrollIcon()}</span><span>Plan mode</span></button>
               <button type="button" role="menuitemradio" data-chat-mode="review"><span class="mode-select-check"></span><span class="mode-select-option-icon">${searchIcon()}</span><span>Review mode</span></button>
-            </span>
-          </span>
-          <span class="mode-selector reasoning-effort-group">
-            <button id="reasoningEffort" class="mode-pill mode-icon-toggle" type="button" aria-label="Reasoning effort (Default)" aria-haspopup="menu" aria-controls="reasoningEffortMenu" aria-expanded="false" data-tip="Reasoning effort (Default)">${brainIcon()}</button>
-            <span id="reasoningEffortMenu" class="mode-select-menu reasoning-effort-menu" role="menu" hidden>
-              ${reasoningEffortMenuHtml()}
             </span>
           </span>
         </span>
@@ -2104,7 +2084,6 @@ function updateComposer(): void {
   }
   if (sendSlot) sendSlot.style.display = pendingDecision ? "none" : "";
   updateChatModeControl();
-  updateReasoningEffortControl();
   updateScrollDownButton();
 }
 
@@ -2341,24 +2320,6 @@ function updateChatModeControl(): void {
   });
 }
 
-function updateReasoningEffortControl(): void {
-  const toggle = root.querySelector("#reasoningEffort") as HTMLButtonElement | null;
-  const hint = `Reasoning effort (${reasoningEffortLabel(state.reasoningEffort, state.reasoningEfforts)})`;
-  toggle?.classList.toggle("active", state.reasoningEffortMenuOpen);
-  toggle?.setAttribute("aria-expanded", String(state.reasoningEffortMenuOpen));
-  toggle?.setAttribute("aria-label", hint);
-  if (toggle) toggle.dataset.tip = hint;
-  const menu = root.querySelector("#reasoningEffortMenu") as HTMLElement | null;
-  if (menu) {
-    setHtml(menu, reasoningEffortMenuHtml());
-    menu.hidden = !state.reasoningEffortMenuOpen;
-  }
-  root.querySelectorAll<HTMLElement>("[data-reasoning-effort]").forEach(option => {
-    const selected = option.dataset.reasoningEffort === state.reasoningEffort;
-    updateModeMenuOption(option, selected);
-  });
-}
-
 function updateModeMenuOption(option: HTMLElement, selected: boolean): void {
   option.classList.toggle("selected", selected);
   option.setAttribute("aria-checked", String(selected));
@@ -2369,12 +2330,6 @@ function updateModeMenuOption(option: HTMLElement, selected: boolean): void {
     check.dataset.html = html;
     check.innerHTML = html;
   }
-}
-
-function reasoningEffortMenuHtml(): string {
-  return reasoningEffortChoices(state.reasoningEfforts).map(choice =>
-    `<button type="button" role="menuitemradio" data-reasoning-effort="${escapeHtml(choice.effort)}"><span class="mode-select-check"></span><span>${escapeHtml(choice.label)}</span></button>`
-  ).join("");
 }
 
 function showCompactUnavailable(): void {
@@ -3062,20 +3017,17 @@ function bindOnce(): void {
     tabs.scrollLeft += event.deltaY * scale;
     if (tabs.scrollLeft !== previous) event.preventDefault();
   }, { passive: false });
-  // Close either drop-up before an outside click is handled. Pointerdown also
+  // Close the mode drop-up before an outside click is handled. Pointerdown also
   // catches clicks outside #app while allowing the eventual click to keep its
   // normal behavior without selecting or changing a menu option.
   document.addEventListener("pointerdown", e => {
     const target = e.target as HTMLElement | null;
     if (!target) return;
     const next = modeMenusAfterPointerDown(state, {
-      inChatModeGroup: !!target.closest(".chat-mode-group"),
-      inReasoningEffortGroup: !!target.closest(".reasoning-effort-group")
+      inChatModeGroup: !!target.closest(".chat-mode-group")
     });
-    const changed = next.chatModeMenuOpen !== state.chatModeMenuOpen ||
-      next.reasoningEffortMenuOpen !== state.reasoningEffortMenuOpen;
+    const changed = next.chatModeMenuOpen !== state.chatModeMenuOpen;
     state.chatModeMenuOpen = next.chatModeMenuOpen;
-    state.reasoningEffortMenuOpen = next.reasoningEffortMenuOpen;
     if (changed) render();
   });
   const body = chatBody();
@@ -3185,10 +3137,9 @@ function bindOnce(): void {
       }
       return;
     }
-    if (e.key === "Escape" && (state.chatModeMenuOpen || state.reasoningEffortMenuOpen)) {
+    if (e.key === "Escape" && state.chatModeMenuOpen) {
       e.preventDefault();
       state.chatModeMenuOpen = false;
-      state.reasoningEffortMenuOpen = false;
       render();
       return;
     }
@@ -3327,15 +3278,6 @@ function bindOnce(): void {
       render();
       return;
     }
-    const reasoningOption = target.closest("[data-reasoning-effort]") as HTMLElement | null;
-    if (reasoningOption) {
-      const effort = reasoningOption.dataset.reasoningEffort as ReasoningEffort;
-      state.reasoningEffort = effort;
-      state.reasoningEffortMenuOpen = false;
-      send({ type: "setReasoningEffort", effort });
-      render();
-      return;
-    }
     const memorySource = target.closest("[data-open-memory]") as HTMLElement | null;
     if (memorySource) {
       e.preventDefault();
@@ -3437,13 +3379,6 @@ function bindOnce(): void {
     else if (target.closest("#plus")) send({ type: "newChat" });
     else if (target.closest("#chatMode")) {
       state.chatModeMenuOpen = !state.chatModeMenuOpen;
-      state.reasoningEffortMenuOpen = false;
-      state.compactMenuOpen = false;
-      render();
-    }
-    else if (target.closest("#reasoningEffort")) {
-      state.reasoningEffortMenuOpen = !state.reasoningEffortMenuOpen;
-      state.chatModeMenuOpen = false;
       state.compactMenuOpen = false;
       render();
     }
@@ -3453,7 +3388,6 @@ function bindOnce(): void {
         showCompactUnavailable();
       } else if (state.busy) {
         state.chatModeMenuOpen = false;
-        state.reasoningEffortMenuOpen = false;
         state.compactMenuOpen = !state.compactMenuOpen;
         render();
       } else {
@@ -4250,8 +4184,6 @@ function handleHostMessage(msg: ExtToChat): void {
     }
     if (msg.type === "settings") {
       state.mode = msg.mode;
-      state.reasoningEffort = msg.reasoningEffort;
-      state.reasoningEfforts = msg.reasoningEfforts;
       state.showThinking = msg.showThinking;
       state.autoCompact = msg.autoCompact;
       state.autoCompactThresholdPercent = msg.autoCompactThresholdPercent;
@@ -4390,7 +4322,6 @@ function handleHostMessage(msg: ExtToChat): void {
       scrollFollow.reset(true, chatBody()!);
       state.compactMenuOpen = false;
       state.chatModeMenuOpen = false;
-      state.reasoningEffortMenuOpen = false;
       state.compactActivity = undefined;
       state.compactHintOverride = undefined;
       state.compactNudge = false;
@@ -4428,7 +4359,6 @@ function handleHostMessage(msg: ExtToChat): void {
       state.serverPending ??= "server";
       state.compactMenuOpen = false;
       state.chatModeMenuOpen = false;
-      state.reasoningEffortMenuOpen = false;
       {
         const m = getOrCreateMsg(msg.messageId, "assistant");
         const lastUser = [...state.messages].reverse().find(message => message.role === "user");
@@ -4706,7 +4636,6 @@ function handleHostMessage(msg: ExtToChat): void {
       state.serverPending = undefined;
       state.compactMenuOpen = false;
       state.chatModeMenuOpen = false;
-      state.reasoningEffortMenuOpen = false;
       {
         const activity: CompactActivity = {
           id: msg.compactId,
@@ -4758,7 +4687,6 @@ function handleHostMessage(msg: ExtToChat): void {
       render();
       break;
     case "chatModeChanged": state.mode = msg.mode; render(); break;
-    case "reasoningEffortChanged": state.reasoningEffort = msg.effort; render(); break;
   }
 }
 window.addEventListener("message", ev => handleHostMessage(ev.data as ExtToChat));

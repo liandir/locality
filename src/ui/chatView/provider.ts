@@ -174,16 +174,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   pushSettings(): void {
     const s = readSettings();
     void this.refreshVisionCapability();
-    const reasoningEffort = availableReasoningEffort(
-      this.session?.getRecord().reasoningEffort ?? this.workspaceReasoningEffort(),
-      s.reasoningEfforts
-    );
     if (this.memory) this.refreshMemoryVisibility();
     this.post({
       type: "settings",
       mode: this.session?.getRecord().mode ?? "act",
-      reasoningEffort,
-      reasoningEfforts: s.reasoningEfforts,
       showThinking: s.showThinking,
       autoCompact: s.autoCompact,
       autoCompactThresholdPercent: s.autoCompactThresholdPercent,
@@ -440,7 +434,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.session?.setMode(mode);
   }
 
-  private async setReasoningEffort(effort: ReasoningEffort): Promise<void> {
+  getReasoningEffort(): ReasoningEffort {
+    return availableReasoningEffort(
+      this.session?.getRecord().reasoningEffort ?? this.workspaceReasoningEffort(),
+      readSettings().reasoningEfforts
+    );
+  }
+
+  async setReasoningEffort(effort: ReasoningEffort): Promise<void> {
     const available = availableReasoningEffort(effort, readSettings().reasoningEfforts);
     if (this.session) {
       // Apply synchronously so a message sent while workspaceState is flushing
@@ -449,10 +450,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       await this.context.workspaceState.update(WORKSPACE_REASONING_EFFORT_KEY, available);
       return;
     }
-    // New-chat construction reads this preference, so persist it before asking
-    // the extension host to create the first record.
+    // Keep the preference for the next chat without creating one from Settings.
     await this.context.workspaceState.update(WORKSPACE_REASONING_EFFORT_KEY, available);
-    await this.onCreateChat();
   }
 
   private workspaceReasoningEffort(): ReasoningEffort {
@@ -621,7 +620,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "answerQuestion": this.session?.answerQuestion(m.toolId, m.answer); break;
       case "featureAction": await this.session?.handleFeatureAction(m.id); break;
       case "setChatMode": await this.setChatMode(m.mode); break;
-      case "setReasoningEffort": await this.setReasoningEffort(m.effort); break;
       case "compactNow": await this.compactNow(); break;
       case "compactInterruptAndRun": await this.compactAfterInterrupt(); break;
       case "newChat":

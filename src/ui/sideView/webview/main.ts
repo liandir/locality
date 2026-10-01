@@ -8,6 +8,13 @@ import { renderMemoryDate } from "../../memoryDate.js";
 import { DEFAULT_MEMORY_MAX_COUNT, MAX_MEMORY_COUNT } from "../../../chat/memoryLimits.js";
 import type { ExtToSide, SideToExt } from "../../messaging.js";
 import type { SideTab } from "../../messaging.js";
+import {
+  DEFAULT_REASONING_EFFORT,
+  availableReasoningEffort,
+  normalizeReasoningEfforts,
+  reasoningEffortChoices,
+  type ReasoningEffort
+} from "../../../chat/reasoningEffort.js";
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: SideToExt): void;
@@ -22,6 +29,8 @@ interface State {
   search: string;
   chats: { id: string; title: string; updatedAt: number }[];
   settings: Record<string, unknown>;
+  reasoningEffort: ReasoningEffort;
+  reasoningEffortError?: string;
   endpointMsg?: { ok: boolean; text: string };
   endpointMetadata?: { modelAlias: string; contextSize: number; supportsVision: boolean };
   serverModels: { id: string }[];
@@ -37,6 +46,7 @@ const state: State = {
   search: "",
   chats: [],
   settings: {},
+  reasoningEffort: DEFAULT_REASONING_EFFORT,
   serverModels: [],
   openTabs: [],
   memories: [],
@@ -211,6 +221,8 @@ function renderSettings(): string {
   const topK = String(s["topK"] ?? 40);
   const topP = String(s["topP"] ?? 0.95);
   const reasoningBudget = String(s["reasoningBudget"] ?? -1);
+  const reasoningEfforts = normalizeReasoningEfforts(s["reasoningEfforts"]);
+  const reasoningEffort = availableReasoningEffort(state.reasoningEffort, reasoningEfforts);
   const showThinking = s["showThinking"] === true;
   const autoCompact = !!s["autoCompact"];
   const autoCompactPct = clampPercent(Number(s["autoCompactThresholdPercent"] ?? 80));
@@ -264,9 +276,21 @@ function renderSettings(): string {
             <input id="topP" type="number" min="0" max="1" step="0.05" value="${esc(topP)}" />
           </div>
         </div>
-        <label class="field-label" for="reasoningBudget">Reasoning budget</label>
-        <input id="reasoningBudget" type="number" min="-1" step="1" value="${esc(reasoningBudget)}" />
-        <p class="setting-help">Use -1 for unlimited reasoning, 0 for an instant answer, or a positive number for a token threshold.</p>
+        <div class="field-row">
+          <div class="field-cell">
+            <label class="field-label" for="reasoningEffort">Reasoning effort</label>
+            <select id="reasoningEffort" aria-describedby="reasoningEffortHelp">
+              ${reasoningEffortChoices(reasoningEfforts).map(choice => `<option value="${esc(choice.effort)}" ${choice.effort === reasoningEffort ? "selected" : ""}>${esc(choice.label)}</option>`).join("")}
+            </select>
+            <p id="reasoningEffortHelp" class="setting-help">Reasoning effort levels can be customized in user settings.</p>
+            ${state.reasoningEffortError ? `<p class="validation err" role="alert">${esc(state.reasoningEffortError)}</p>` : ""}
+          </div>
+          <div class="field-cell">
+            <label class="field-label" for="reasoningBudget">Reasoning budget</label>
+            <input id="reasoningBudget" type="number" min="-1" step="1" value="${esc(reasoningBudget)}" />
+            <p class="setting-help">Use -1 for unlimited reasoning, 0 for an instant answer, or a positive number for a token threshold.</p>
+          </div>
+        </div>
       </section>
 
       <section class="panel-section">
@@ -345,6 +369,11 @@ function bind(): void {
   bindSetting("topK", "change", v => Number(v));
   bindSetting("topP", "change", v => Number(v));
   bindSetting("reasoningBudget", "change", v => Math.round(Number(v)));
+  root.querySelector<HTMLSelectElement>("#reasoningEffort")?.addEventListener("change", event => {
+    const effort = (event.currentTarget as HTMLSelectElement).value as ReasoningEffort;
+    state.reasoningEffort = effort;
+    send({ type: "setReasoningEffort", effort });
+  });
   bindSetting("memoryEnabled", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("memoryMaxCount", "change", v => Math.floor(Math.max(1, Math.min(MAX_MEMORY_COUNT, Number(v) || DEFAULT_MEMORY_MAX_COUNT))));
   root.querySelector("#summarizeMemories")?.addEventListener("click", () => send({ type: "summarizeExistingChats" }));
@@ -493,11 +522,13 @@ window.addEventListener("message", ev => {
     }
     case "settingSaved":
       if ((msg.key === "memoryEnabled" || msg.key === "memoryMaxCount") && !msg.ok) { state.memorySettingError = msg.error; render(); }
+      if (msg.key === "reasoningEffort" && !msg.ok) { state.reasoningEffortError = msg.error; render(); }
       break;
     case "memories": state.memories = msg.memories; render(); break;
     case "memoryError": state.memoryError = msg.error; render(); break;
     case "appInfo": state.version = msg.version; render(); break;
-    case "settings": state.settings = msg.settings; state.memorySettingError = undefined; render(); break;
+    case "settings": state.settings = msg.settings; state.reasoningEffort = msg.reasoningEffort; state.memorySettingError = undefined; render(); break;
+    case "reasoningEffort": state.reasoningEffort = msg.effort; state.reasoningEffortError = undefined; render(); break;
     case "chats": state.chats = msg.chats; render(); break;
     case "focusTab": state.tab = msg.tab; render(); break;
     case "endpointValidation":

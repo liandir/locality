@@ -5,7 +5,7 @@ import type { MemoryCreation, MemoryListItem } from "../chat/memory.js";
  */
 import type { UiEvent } from "../chat/session.js";
 import type { ChatAttachment } from "../chat/storage.js";
-import type { ReasoningEffort, ReasoningEfforts } from "../chat/reasoningEffort.js";
+import type { ReasoningEffort } from "../chat/reasoningEffort.js";
 import type { ChatMode } from "../chat/mode.js";
 
 /** Model-context size sent with chatLoaded, independently of the visible transcript. */
@@ -101,6 +101,7 @@ export type SideToExt =
   | { type: "openTab"; tab: SideTab }
   | { type: "openGithub" }
   | { type: "saveSetting"; key: string; value: unknown }
+  | { type: "setReasoningEffort"; effort: ReasoningEffort }
   | { type: "validateEndpoint"; url: string }
   | { type: "validateWebSearch"; endpoint: string; apiKey: string }
   | { type: "editUserSettingsJson" }
@@ -118,7 +119,8 @@ export type ExtToSide =
   | { type: "revealMemory"; id: string }
   | { type: "memories"; memories: MemoryListItem[] }
   | { type: "memoryError"; error: string }
-  | { type: "settings"; settings: Record<string, unknown> }
+  | { type: "settings"; settings: Record<string, unknown>; reasoningEffort: ReasoningEffort }
+  | { type: "reasoningEffort"; effort: ReasoningEffort }
   | { type: "webSearchSettings"; endpoint: string; apiKey: string; verified: boolean; error?: string; reset?: boolean }
   | { type: "webSearchValidation"; ok: boolean; error?: string; endpoint?: string }
   | { type: "appInfo"; version: string }
@@ -153,7 +155,6 @@ export type ChatToExt = (
   | { type: "answerQuestion"; toolId: string; answer: string }
   | { type: "featureAction"; id: string }
   | { type: "setChatMode"; mode: ChatMode }
-  | { type: "setReasoningEffort"; effort: ReasoningEffort }
   | { type: "compactNow" }
   | { type: "compactInterruptAndRun" }
   | { type: "newChat" }
@@ -176,7 +177,7 @@ export type ChatToExt = (
 export type ExtToChat = UiEvent
   | { type: "chatTabs"; tabs: ChatTab[]; activeId?: string }
   | { type: "chatSnapshot"; id: string; events: ExtToChat[]; busy: boolean; draft: string }
-  | { type: "settings"; mode: ChatMode; reasoningEffort: ReasoningEffort; reasoningEfforts: ReasoningEfforts; showThinking: boolean; autoCompact: boolean; autoCompactThresholdPercent: number; workspaceRoot?: string }
+  | { type: "settings"; mode: ChatMode; showThinking: boolean; autoCompact: boolean; autoCompactThresholdPercent: number; workspaceRoot?: string }
   | { type: "attachmentSelected"; attachment: UiAttachment }
   | { type: "attachmentText"; attachmentId: string; requestId: number; text?: string; error?: string }
   | { type: "attachmentImportState"; pending: boolean }

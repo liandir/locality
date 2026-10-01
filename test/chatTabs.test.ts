@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as vscode from "vscode";
 import type { ChatMode } from "../src/chat/mode.js";
+import { WORKSPACE_REASONING_EFFORT_KEY, type ReasoningEffort } from "../src/chat/reasoningEffort.js";
 import type { ChatAttachment, ChatRecord, ChatStorage } from "../src/chat/storage.js";
 import type { WorkspaceMemory } from "../src/chat/workspaceMemory.js";
 import type { UiEvent } from "../src/chat/session.js";
@@ -49,6 +50,10 @@ vi.mock("../src/chat/session.js", () => ({
       this.args.record.mode = mode;
       this.emit({ kind: "chatModeChanged", mode });
     }
+    setReasoningEffort(effort: ReasoningEffort) {
+      this.args.record.reasoningEffort = effort;
+      this.emit({ kind: "reasoningEffortChanged", effort });
+    }
     resolvePlan(messageTs: number | undefined, mode: "act" | "plan") {
       if (this.active || !this.isPlanning() || this.args.record.pendingPlanMessageTs !== messageTs) return false;
       if (mode === "act" && messageTs === undefined) return false;
@@ -95,21 +100,75 @@ import { ChatViewProvider } from "../src/ui/chatView/provider.js";
 const record = (id: string) => ({ id, title: id, messages: [], reasoningEffort: "default", mode: "act" } as unknown as ChatRecord);
 function setup(memory?: WorkspaceMemory) {
   const storage = { list: vi.fn().mockResolvedValue([]), load: vi.fn(), save: vi.fn(), delete: vi.fn(), deleteAll: vi.fn(), deleteAttachment: vi.fn(), importAttachment: vi.fn(), importAttachmentBytes: vi.fn(), attachmentPath: (id: string) => `/workspace/${id}/image.png` };
+  const preferences = new Map<string, unknown>();
+  const workspaceState = {
+    get: vi.fn((key: string) => preferences.get(key)),
+    update: vi.fn(async (key: string, value: unknown) => { preferences.set(key, value); })
+  };
+  const createChat = vi.fn();
   const provider = new ChatViewProvider(
-    { workspaceState: { get: vi.fn() } } as unknown as vscode.ExtensionContext,
-    () => storage as unknown as ChatStorage, () => "/workspace", vi.fn(), vi.fn(), vi.fn(), vi.fn(), memory
+    { workspaceState } as unknown as vscode.ExtensionContext,
+    () => storage as unknown as ChatStorage, () => "/workspace", vi.fn(), vi.fn(), createChat, vi.fn(), memory
   );
   const posted: ExtToChat[] = [];
   (provider as unknown as { view: unknown }).view = { webview: { postMessage: (message: ExtToChat) => posted.push(message), asWebviewUri: (path: string) => path } };
   const send = (message: ChatToExt) => (provider as unknown as { onMessage(message: ChatToExt): Promise<void> }).onMessage(message);
   const snapshot = () => [...posted].reverse().find(message => "type" in message && message.type === "chatSnapshot") as Extract<ExtToChat, { type: "chatSnapshot" }>;
-  return { provider, storage, posted, send, snapshot };
+  return { provider, storage, posted, send, snapshot, workspaceState, createChat };
 }
 beforeEach(() => {
   mocks.sessions.clear();
   vi.clearAllMocks();
   mocks.settings.model = "model-a";
+  mocks.settings.reasoningEfforts = {};
   mocks.metadata.mockReset().mockResolvedValue({ modelAlias: "model-a", contextSize: 32768, supportsVision: false });
+});
+
+describe("reasoning effort from Settings", () => {
+  it("saves a preference without opening a chat", async () => {
+    mocks.settings.reasoningEfforts = { Deep: "xhigh" };
+    const { provider, workspaceState, createChat } = setup();
+    await provider.setReasoningEffort("effort:xhigh");
+    expect(workspaceState.update).toHaveBeenCalledWith(WORKSPACE_REASONING_EFFORT_KEY, "effort:xhigh");
+    expect(provider.getReasoningEffort()).toBe("effort:xhigh");
+    expect(createChat).not.toHaveBeenCalled();
+    expect(provider.getTabs()).toEqual([]);
+  });
+
+  it("changes only the active chat and restores each tab's saved choice", async () => {
+    mocks.settings.reasoningEfforts = { Deep: "xhigh" };
+    const { provider, workspaceState } = setup();
+    const a = record("a");
+    const b = { ...record("b"), reasoningEffort: "none" as const };
+    provider.openChat(a);
+    provider.openChat(b);
+    expect(provider.getReasoningEffort()).toBe("none");
+    const session = mocks.sessions.get("b")!;
+    session.emit({ kind: "turnPreparing", reason: "server" });
+    let finishPersistence!: () => void;
+    workspaceState.update.mockReturnValueOnce(new Promise<void>(resolve => { finishPersistence = resolve; }));
+    const saving = provider.setReasoningEffort("effort:xhigh");
+    expect(b.reasoningEffort).toBe("effort:xhigh");
+    expect(a.reasoningEffort).toBe("default");
+    expect(session.cancel).not.toHaveBeenCalled();
+    finishPersistence();
+    await saving;
+    expect(provider.getReasoningEffort()).toBe("effort:xhigh");
+    await provider.openChatById("a");
+    expect(provider.getReasoningEffort()).toBe("default");
+  });
+
+  it("falls back to Default when a custom level is removed", async () => {
+    mocks.settings.reasoningEfforts = { Deep: "xhigh" };
+    const { provider, workspaceState } = setup();
+    provider.openChat({ ...record("a"), reasoningEffort: "effort:xhigh" });
+    expect(provider.getReasoningEffort()).toBe("effort:xhigh");
+    mocks.settings.reasoningEfforts = {};
+    expect(provider.getReasoningEffort()).toBe("default");
+    await provider.setReasoningEffort("effort:xhigh");
+    expect(provider.getCurrentRecord()?.reasoningEffort).toBe("default");
+    expect(workspaceState.update).toHaveBeenCalledWith(WORKSPACE_REASONING_EFFORT_KEY, "default");
+  });
 });
 
 describe("independent chat tabs", () => {

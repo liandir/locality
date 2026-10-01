@@ -94,7 +94,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .msg { display: flex; flex-direction: column; gap: var(--chat-part-gap); }
 .msg.user .bubble { align-self: flex-end; background: var(--surface-fill); border: 1px solid transparent; padding: 0; border-radius: var(--control-radius); max-width: 90%; }
 .user-message-body { padding: 8px 11px; }
-.message-mode { display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding: 4px 11px 5px; color: var(--vscode-descriptionForeground); font-size: 11px; line-height: 18px; }
+.message-mode { display: flex; align-items: center; justify-content: flex-start; gap: 4px; padding: 4px 11px 5px; color: var(--vscode-descriptionForeground); font-size: 11px; line-height: 18px; }
 .message-mode-icon { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 18px; flex: 0 0 auto; }
 .user-edit-card { align-self: flex-end; width: min(90%, 680px); display: flex; flex-direction: column; gap: 7px; padding: 9px; background: var(--surface-fill); border: 1px solid transparent; border-radius: var(--control-radius); box-sizing: border-box; }
 .user-edit-input { width: 100%; min-height: 72px; resize: vertical; padding: 4px 6px; background: transparent; color: var(--vscode-input-foreground); border: 0; border-radius: 0; outline: none; font: inherit; line-height: 1.45; box-sizing: border-box; }
@@ -614,7 +614,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   box-sizing: border-box;
 }
 
-.composer { position: relative; border-top: 0; padding: 10px; background: var(--vscode-sideBar-background, var(--vscode-editor-background)); }
+.composer { position: relative; border-top: 0; padding: 10px 10px 6px; background: var(--vscode-sideBar-background, var(--vscode-editor-background)); }
 .message-queue { display: flex; flex-direction: column; gap: 5px; max-height: min(42vh, 360px); margin: 0 3px 5px; overflow-y: auto; }
 .message-queue[hidden] { display: none; }
 .queued-message { display: flex; flex-direction: column; flex: 0 0 auto; min-width: 0; background: var(--surface-fill); border: 1px solid transparent; border-radius: var(--control-radius); color: var(--vscode-descriptionForeground); }
@@ -784,7 +784,7 @@ body.image-preview-open .chat-body { overflow: hidden; }
 .send-btn:disabled { opacity: 0.55; cursor: default; }
 .send-btn.cancel-btn { background: var(--accent-reject-fill); border-color: transparent; color: var(--error-foreground); }
 .send-btn.cancel-btn:hover, .send-btn.cancel-btn:focus-visible { color: var(--error-highlight-foreground); background: color-mix(in srgb, var(--vscode-errorForeground) 26%, transparent); border-color: transparent; }
-.composer-toggles { display: flex; gap: 8px; margin-top: 8px; font-size: 0.88em; color: var(--vscode-descriptionForeground); align-items: center; min-width: 0; }
+.composer-toggles { display: flex; gap: 8px; margin-top: 6px; font-size: 0.88em; color: var(--vscode-descriptionForeground); align-items: center; min-width: 0; }
 .mode-pill, .ctx-pill { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 26px; box-sizing: border-box; line-height: 1; white-space: nowrap; flex: 0 0 auto; background: transparent; color: var(--vscode-descriptionForeground); border: 0; padding: 2px 9px; border-radius: var(--control-radius); cursor: pointer; font: inherit; transition: background 0.12s, color 0.12s; }
 .mode-pill:hover, .ctx-pill:hover { background: var(--surface-fill); color: var(--vscode-foreground); }
 .mode-pill:focus-visible, .ctx-pill:focus-visible { outline: none; background: var(--surface-fill); color: var(--vscode-foreground); }
