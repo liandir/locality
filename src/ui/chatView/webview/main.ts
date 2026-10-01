@@ -4,7 +4,8 @@ import type { MemoryCreation, MemorySnapshot } from "../../../chat/memory.js";
 import { installChatContextMenu } from "../../chatContextMenu.js";
 import type { ChatTab, ChatToolProcess, ChatTurnPreparation } from "../../messaging.js";
 import { chatFeature } from "../../../build/chat.js";
-import { cloudIcon } from "../../icons.js";
+import { cloudIcon, pawnIcon, scrollIcon, searchIcon } from "../../icons.js";
+import { chatModeIcon, chatModeLabel, renderMessageMode } from "./messageMode.js";
 import { renderMessageDate } from "../../memoryDate.js";
 import { renderMemoryContents, renderMemoryCreation, renderMemoryResult } from "./memoryResults.js";
 import { CARD_SEPARATOR_HTML, renderToolOutputSurface } from "./toolOutputSurface.js";
@@ -40,7 +41,7 @@ import yaml from "@shikijs/langs/yaml";
 import darkPlus from "@shikijs/themes/dark-plus";
 import lightPlus from "@shikijs/themes/light-plus";
 import mdKatex from "@vscode/markdown-it-katex";
-import type { ChatToExt, ExtToChat, UiAttachment, WorkspacePathType } from "../../messaging.js";
+import type { ChatToExt, ExtToChat, UiAttachment, UiQueuedMessage, WorkspacePathType } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
 import type { ChatMode } from "../../../chat/mode.js";
 import {
@@ -200,14 +201,13 @@ interface Message {
   id: string;
   role: "user" | "assistant" | "tool" | "system";
   recordTs?: number;
+  mode?: ChatMode;
   responseToTs?: number;
   parts: MessagePart[];
   text: string;
   thought: string;
   toolCards: ToolCard[];
   summary?: string;
-  isPlan?: boolean;
-  planResolved?: "accepted" | "rejected";
   aborted?: string;
   workStartedAt?: number;
   workEndedAt?: number;
@@ -221,7 +221,7 @@ interface Message {
 
 type ComposerDecision =
   | { kind: "tool"; tool: ToolCard }
-  | { kind: "plan"; message: Message };
+  | { kind: "plan"; messageTs: number };
 
 interface CompactActivity {
   id: string;
@@ -237,7 +237,7 @@ interface CompactActivity {
 
 interface State {
   messages: Message[];
-  queuedMessages: { id: string; text: string; attachments?: UiAttachment[] }[];
+  queuedMessages: UiQueuedMessage[];
   notices: { id: string; text: string }[];
   tokens: number;
   limit: number;
@@ -257,7 +257,7 @@ interface State {
   draftAttachments: UiAttachment[];
   attachmentPastePending: boolean;
   supportsVision: boolean;
-  // The free-text "other" answer typed into a pending ask_user_question box,
+  // Free-text feedback for plan approval or a pending ask_user_question box,
   // kept here so it survives composer re-renders like the main draft does.
   questionDraft: string;
   chatTitle: string;
@@ -267,7 +267,7 @@ interface State {
   autoScroll: boolean;
   savedScrollTop: number;
   scrollDownOpacity: number;
-  pendingPlanRejection: boolean;
+  pendingPlanMessageTs?: number;
   compactAvailable: boolean;
   compactCurrentMessages: number;
   compactMinMessages: number;
@@ -338,7 +338,7 @@ const state: State = {
   autoScroll: true,
   savedScrollTop: 0,
   scrollDownOpacity: 1,
-  pendingPlanRejection: false,
+  pendingPlanMessageTs: undefined,
   compactAvailable: false,
   compactCurrentMessages: 0,
   compactMinMessages: 6,
@@ -1050,7 +1050,7 @@ function renderUserMessage(el: HTMLElement, m: Message): void {
     setHtml(el, html);
     return;
   }
-  const html = `<div class="bubble">${renderAttachmentsHtml(m.attachments ?? [])}${m.text ? md.render(m.text) : ""}</div>${renderMessageActionsHtml(m)}`;
+  const html = `<div class="bubble"><div class="user-message-body">${renderAttachmentsHtml(m.attachments ?? [])}${m.text ? md.render(m.text) : ""}</div>${renderMessageMode(m.mode)}</div>${renderMessageActionsHtml(m)}`;
   setHtml(el, html);
 }
 
@@ -2025,21 +2025,24 @@ function updateComposer(): void {
     queue.hidden = state.queuedMessages.length === 0;
     setHtml(queue, state.queuedMessages.map((message, index) => `
       <div class="queued-message${state.editingQueuedMessageId === message.id ? " editing" : ""}" data-queued-message-id="${escapeHtml(message.id)}">
-        <button class="queued-message-drag" type="button" draggable="true" data-drag-queued="${escapeHtml(message.id)}" data-tip="Drag to reorder" aria-label="Reorder queued message ${index + 1}">${dragHandleIcon()}</button>
-        <span class="queued-message-order">${index + 1}</span>
-        <span class="queued-message-content">
-          ${renderQueuedAttachmentThumbnails(message.attachments ?? [])}
-          ${state.editingQueuedMessageId === message.id
-            ? `<textarea class="queued-message-input" rows="3" data-queued-edit-input="${escapeHtml(message.id)}" aria-label="Edit queued message">${escapeHtml(message.text)}</textarea>`
-            : `<span class="queued-message-text">${escapeHtml(message.text)}</span>`}
-        </span>
-        <span class="queued-message-actions">
-          ${state.editingQueuedMessageId === message.id
-            ? `<button class="queued-message-action save" type="button" data-save-queued="${escapeHtml(message.id)}" data-tip="Save" aria-label="Save queued message">${checkIcon()}</button>
-               <button class="queued-message-action" type="button" data-cancel-queued-edit data-tip="Cancel" aria-label="Cancel editing">&times;</button>`
-            : `<button class="queued-message-action" type="button" data-edit-queued="${escapeHtml(message.id)}" data-tip="Edit" aria-label="Edit queued message">${pencilIcon()}</button>
-               <button class="queued-message-action remove" type="button" data-remove-queued="${escapeHtml(message.id)}" data-tip="Remove" aria-label="Remove queued message">${trashIcon()}</button>`}
-        </span>
+        <div class="queued-message-row">
+          <button class="queued-message-drag" type="button" draggable="true" data-drag-queued="${escapeHtml(message.id)}" data-tip="Drag to reorder" aria-label="Reorder queued message ${index + 1}">${dragHandleIcon()}</button>
+          <span class="queued-message-order">${index + 1}</span>
+          <span class="queued-message-content">
+            ${renderQueuedAttachmentThumbnails(message.attachments ?? [])}
+            ${state.editingQueuedMessageId === message.id
+              ? `<textarea class="queued-message-input" rows="3" data-queued-edit-input="${escapeHtml(message.id)}" aria-label="Edit queued message">${escapeHtml(message.text)}</textarea>`
+              : `<span class="queued-message-text">${escapeHtml(message.text)}</span>`}
+          </span>
+          <span class="queued-message-actions">
+            ${state.editingQueuedMessageId === message.id
+              ? `<button class="queued-message-action save" type="button" data-save-queued="${escapeHtml(message.id)}" data-tip="Save" aria-label="Save queued message">${checkIcon()}</button>
+                 <button class="queued-message-action" type="button" data-cancel-queued-edit data-tip="Cancel" aria-label="Cancel editing">&times;</button>`
+              : `<button class="queued-message-action" type="button" data-edit-queued="${escapeHtml(message.id)}" data-tip="Edit" aria-label="Edit queued message">${pencilIcon()}</button>
+                 <button class="queued-message-action remove" type="button" data-remove-queued="${escapeHtml(message.id)}" data-tip="Remove" aria-label="Remove queued message">${trashIcon()}</button>`}
+          </span>
+        </div>
+        ${renderMessageMode(message.mode)}
       </div>`).join(""));
     const nextEditingInput = queue.querySelector("[data-queued-edit-input]") as HTMLTextAreaElement | null;
     if (nextEditingInput && nextEditingInput.value !== state.queuedMessageDraft) {
@@ -2062,13 +2065,11 @@ function updateComposer(): void {
     const active = document.activeElement === input;
     const placeholder = state.busy
       ? "Follow-up message..."
-      : state.pendingPlanRejection
-        ? "Suggest changes to the plan…"
-        : state.mode === "plan"
-          ? "Plan mode — reads only"
-          : state.mode === "review"
-            ? "Review mode — no writes"
-            : "Message…";
+      : state.mode === "plan"
+        ? "Plan mode — reads only"
+        : state.mode === "review"
+          ? "Review the workspace…"
+          : "Message…";
     if (input.placeholder !== placeholder) input.placeholder = placeholder;
     if (!active && input.value !== state.draft) input.value = state.draft;
     input.style.display = pendingDecision ? "none" : "";
@@ -2141,13 +2142,13 @@ function resizeComposerInput(input: HTMLTextAreaElement, maxLines = MAX_COMPOSER
  */
 function syncQuestionOther(slot: HTMLElement, pendingDecision: ComposerDecision | undefined): void {
   const isQuestion = pendingDecision?.kind === "tool" && pendingDecision.tool.category === "question";
-  if (!isQuestion) return;
+  if (!isQuestion && pendingDecision?.kind !== "plan") return;
   const other = slot.querySelector("#questionOther") as HTMLTextAreaElement | null;
   if (!other) return;
   if (document.activeElement !== other && other.value !== state.questionDraft) {
     other.value = state.questionDraft;
   }
-  const submit = slot.querySelector("[data-answer-submit]") as HTMLButtonElement | null;
+  const submit = slot.querySelector("[data-answer-submit], [data-plan-changes]") as HTMLButtonElement | null;
   if (submit) submit.disabled = other.value.trim() === "";
 }
 
@@ -2163,16 +2164,14 @@ function findPendingComposerDecision(): ComposerDecision | undefined {
       }
     }
   }
-  for (const m of state.messages) {
-    if (m.isPlan && !m.planResolved && !state.busy) {
-      return { kind: "plan", message: m };
-    }
+  if (state.pendingPlanMessageTs !== undefined && !state.busy) {
+    return { kind: "plan", messageTs: state.pendingPlanMessageTs };
   }
   return undefined;
 }
 
 function renderApprovalComposer(decision: ComposerDecision): string {
-  if (decision.kind === "plan") return renderPlanApprovalComposer(decision.message);
+  if (decision.kind === "plan") return renderPlanApprovalComposer(decision.messageTs);
   if (decision.tool.category === "question") return renderQuestionComposer(decision.tool);
   return renderToolApprovalComposer(decision.tool);
 }
@@ -2227,18 +2226,31 @@ function renderToolApprovalComposer(tc: ToolCard): string {
   </div>`;
 }
 
-function renderPlanApprovalComposer(m: Message): string {
-  return `<div class="approval-composer">
-    <div class="approval-summary">
+function renderPlanApprovalComposer(messageTs: number): string {
+  return `<div class="approval-composer question-composer">
+    <div class="approval-summary question-summary">
       <span class="tool-icon" aria-hidden="true">${scrollIcon()}</span>
-      <strong>Plan ready</strong>
-      <span>Review the plan above, then choose how to continue.</span>
+      <div class="assistant-markdown question-markdown"><p>Accept this plan? Accepting switches to Act mode and starts implementation. Suggest changes below to stay in Plan mode.</p></div>
     </div>
-    <div class="approval-actions">
-      <button class="approve" data-accept-plan="${m.id}">Accept plan and execute</button>
-      <button class="reject" data-reject-plan="${m.id}">Reject plan and suggest changes</button>
+    <div class="question-options">
+      <button class="question-option" type="button" data-accept-plan="${messageTs}">Accept plan and switch to Act</button>
+    </div>
+    <div class="question-other">
+      <textarea id="questionOther" class="question-other-input" rows="1" placeholder="Suggest changes (stays in Plan mode)…" aria-label="Suggest changes to the plan"></textarea>
+      <button class="question-submit" type="button" data-plan-changes="${messageTs}" data-tip="Suggest changes in Plan mode" aria-label="Suggest changes in Plan mode" disabled>${sendIcon()}</button>
     </div>
   </div>`;
+}
+
+function submitPlanResponse(messageTs: number, feedback?: string): void {
+  if (state.busy || state.pendingPlanMessageTs !== messageTs || (feedback !== undefined && !feedback.trim())) return;
+  state.mode = feedback === undefined ? "act" : "plan";
+  state.busy = true;
+  state.serverPending = "server";
+  state.questionDraft = "";
+  if (feedback === undefined) send({ type: "acceptPlan", messageTs });
+  else send({ type: "revisePlan", messageTs, text: feedback.trim() });
+  render();
 }
 
 function updateContextPill(): void {
@@ -2269,15 +2281,16 @@ function updateContextPill(): void {
 
 function updateChatModeControl(): void {
   const toggle = root.querySelector("#chatMode") as HTMLButtonElement | null;
-  const selectedLabel = state.mode === "act" ? "Act" : state.mode === "plan" ? "Plan" : "Review";
+  const selectedLabel = chatModeLabel(state.mode);
   const hint = `Mode (${selectedLabel})`;
+  if (toggle) toggle.disabled = state.pendingPlanMessageTs !== undefined;
   toggle?.classList.toggle("active", state.chatModeMenuOpen);
   toggle?.setAttribute("aria-expanded", String(state.chatModeMenuOpen));
   toggle?.setAttribute("aria-label", hint);
   if (toggle) toggle.dataset.tip = hint;
   const icon = root.querySelector("#chatModeIcon") as HTMLElement | null;
   if (icon) {
-    const html = state.mode === "plan" ? scrollIcon() : state.mode === "review" ? searchIcon() : pawnIcon();
+    const html = chatModeIcon(state.mode);
     if (icon.dataset.html !== html) {
       icon.dataset.html = html;
       icon.innerHTML = html;
@@ -3114,7 +3127,7 @@ function bindOnce(): void {
     }
     if (other?.id !== "questionOther") return;
     state.questionDraft = (other as HTMLTextAreaElement).value;
-    const submitBtn = root.querySelector("[data-answer-submit]") as HTMLButtonElement | null;
+    const submitBtn = root.querySelector("[data-answer-submit], [data-plan-changes]") as HTMLButtonElement | null;
     if (submitBtn) submitBtn.disabled = state.questionDraft.trim() === "";
   });
   root.addEventListener("keydown", e => {
@@ -3167,9 +3180,10 @@ function bindOnce(): void {
     }
     if (other?.id !== "questionOther" || e.key !== "Enter" || e.shiftKey) return;
     e.preventDefault();
-    const submitBtn = root.querySelector("[data-answer-submit]") as HTMLButtonElement | null;
+    const submitBtn = root.querySelector("[data-answer-submit], [data-plan-changes]") as HTMLButtonElement | null;
     const toolId = submitBtn?.dataset.answerSubmit;
     if (toolId) submitQuestionAnswer(toolId, state.questionDraft.trim());
+    else if (submitBtn?.dataset.planChanges) submitPlanResponse(Number(submitBtn.dataset.planChanges), state.questionDraft);
   });
   installTooltips();
   window.addEventListener("resize", () => {
@@ -3265,6 +3279,7 @@ function bindOnce(): void {
     }
     const modeOption = target.closest("[data-chat-mode]") as HTMLElement | null;
     if (modeOption) {
+      if (state.pendingPlanMessageTs !== undefined) return;
       const mode = modeOption.dataset.chatMode as ChatMode;
       state.mode = mode;
       state.chatModeMenuOpen = false;
@@ -3449,7 +3464,7 @@ function bindOnce(): void {
       const answerOption = target.closest("[data-answer-option]") as HTMLElement | null;
       const answerSubmit = target.closest("[data-answer-submit]") as HTMLElement | null;
       const acceptPlan = target.closest("[data-accept-plan]") as HTMLElement | null;
-      const rejectPlan = target.closest("[data-reject-plan]") as HTMLElement | null;
+      const planChanges = target.closest("[data-plan-changes]") as HTMLElement | null;
       if (openFile) {
         e.preventDefault();
         const lineAttr = openFile.dataset.openLine;
@@ -3486,19 +3501,9 @@ function bindOnce(): void {
         if (answer) submitQuestionAnswer(answerSubmit.dataset.answerSubmit!, answer);
       }
       else if (acceptPlan) {
-        const id = acceptPlan.dataset.acceptPlan!;
-        const m = state.messages.find(x => x.id === id);
-        if (m) m.planResolved = "accepted";
-        state.pendingPlanRejection = false;
-        send({ type: "acceptPlan" });
-        render();
-      } else if (rejectPlan) {
-        const id = rejectPlan.dataset.rejectPlan!;
-        const m = state.messages.find(x => x.id === id);
-        if (m) m.planResolved = "rejected";
-        state.pendingPlanRejection = true;
-        render();
-        (root.querySelector("#input") as HTMLTextAreaElement | null)?.focus();
+        submitPlanResponse(Number(acceptPlan.dataset.acceptPlan));
+      } else if (planChanges) {
+        submitPlanResponse(Number(planChanges.dataset.planChanges), state.questionDraft);
       }
     }
   });
@@ -3732,7 +3737,7 @@ function submitMessageEdit(): void {
   if (messageTs === undefined || (!text && retainedAttachments.length === 0) || state.busy) return;
   state.editingMessageTs = undefined;
   state.editDraft = "";
-  send({ type: "editMessage", messageTs, text, removeAttachmentIds: [...state.editingRemovedAttachmentIds] });
+  send({ type: "editMessage", messageTs, text, mode: state.mode, removeAttachmentIds: [...state.editingRemovedAttachmentIds] });
   state.editingRemovedAttachmentIds = new Set();
   render();
 }
@@ -3806,15 +3811,16 @@ function submit(): void {
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   const text = input?.value.trim();
   const attachments = state.draftAttachments;
+  const mode = state.mode;
   if (!text && attachments.length === 0) return;
   if (state.busy) {
     const id = `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    state.queuedMessages.push({ id, text: text ?? "", attachments });
+    state.queuedMessages.push({ id, text: text ?? "", mode, attachments });
     state.draft = "";
     send({ type: "saveDraft", text: "" });
     if (input) input.value = "";
     state.draftAttachments = [];
-    send({ type: "queueMessage", id, text: text ?? "", attachmentIds: attachments.map(attachment => attachment.id) });
+    send({ type: "queueMessage", id, text: text ?? "", mode, attachmentIds: attachments.map(attachment => attachment.id) });
     render();
     return;
   }
@@ -3824,8 +3830,7 @@ function submit(): void {
   send({ type: "saveDraft", text: "" });
   state.draftAttachments = [];
   if (input) input.value = "";
-  state.pendingPlanRejection = false;
-  send({ type: "send", text: text ?? "", attachmentIds: attachments.map(attachment => attachment.id) });
+  send({ type: "send", text: text ?? "", mode, attachmentIds: attachments.map(attachment => attachment.id) });
   render();
 }
 
@@ -3940,13 +3945,6 @@ function checkIcon(): string {
   </svg>`;
 }
 
-function searchIcon(): string {
-  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <circle cx="10.5" cy="10.5" r="5.75"/>
-    <path d="m15 15 4.5 4.5"/>
-  </svg>`;
-}
-
 function folderIcon(): string {
   return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <g transform="translate(0 1.2) scale(1 .9)">
@@ -4036,21 +4034,6 @@ function chevronIcon(): string {
   </svg>`;
 }
 
-function scrollIcon(): string {
-  return `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <path d="M8 21h12a2 2 0 0 0 2-2v-2H10v2a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v3h4"/>
-    <path d="M19 17V5a2 2 0 0 0-2-2H4"/>
-  </svg>`;
-}
-
-function pawnIcon(): string {
-  return `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" shape-rendering="geometricPrecision" aria-hidden="true" focusable="false">
-    <circle cx="12" cy="5.2" r="2.7"/>
-    <path d="M9.5 8.2h5c.05 2.55 1.15 4.45 2.85 5.95H6.65c1.7-1.5 2.8-3.4 2.85-5.95Z"/>
-    <path d="M6.7 14.15h10.6l1.25 3.1a1.05 1.05 0 0 1-.98 1.45H6.43a1.05 1.05 0 0 1-.98-1.45Z"/>
-  </svg>`;
-}
-
 function checklistIcon(): string {
   return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <path d="m3 6 1.5 1.5L7 5"/>
@@ -4095,6 +4078,11 @@ function circleIcon(ratio: number): string {
 }
 
 function loadFromRecord(rec: ChatRecord): void {
+  state.pendingPlanMessageTs = rec.pendingPlanMessageTs;
+  if (state.pendingPlanMessageTs !== undefined) {
+    state.mode = "plan";
+    state.chatModeMenuOpen = false;
+  }
   state.messages = [];
   state.notices = [];
   const fileChanges = restoredToolFileChanges(rec);
@@ -4107,6 +4095,7 @@ function loadFromRecord(rec: ChatRecord): void {
         id,
         role: "user",
         recordTs: m.ts,
+        mode: m.mode,
         parts: [],
         text: m.content,
         thought: "",
@@ -4332,6 +4321,7 @@ function handleHostMessage(msg: ExtToChat): void {
       activeChatId = undefined;
       state.draft = "";
       state.questionDraft = "";
+      state.pendingPlanMessageTs = undefined;
       state.memories = [];
       state.memoryCreations = [];
       closeImagePreview(false);
@@ -4401,10 +4391,12 @@ function handleHostMessage(msg: ExtToChat): void {
       render();
       break;
     case "userMessage": {
+      state.pendingPlanMessageTs = undefined;
       state.messages.push({
         id: msg.messageId,
         role: "user",
         recordTs: msg.messageTs,
+        mode: msg.mode,
         parts: [],
         text: msg.text,
         thought: "",
@@ -4598,9 +4590,11 @@ function handleHostMessage(msg: ExtToChat): void {
     }
     case "planFinal": {
       // Plan output streams as ordinary text parts (same renderer as a normal
-      // answer); planFinal only flags the turn so Accept/Reject is offered.
+      // answer); the host retains the pending approval across reloads.
       const m = getOrCreateMsg(msg.messageId, "assistant");
-      m.isPlan = true;
+      state.pendingPlanMessageTs = msg.messageTs;
+      state.mode = "plan";
+      state.chatModeMenuOpen = false;
       finalizeLiveThoughts(m);
       if (!m.text && msg.markdown) {
         m.text = msg.markdown;

@@ -37,6 +37,8 @@ export interface ChatAttachment {
 export interface ChatMessage {
   role: Role;
   content: string;
+  /** Mode selected when a user message was submitted; absent in older history. */
+  mode?: ChatMode;
   /** Native model reasoning associated with this assistant response. */
   reasoningContent?: string;
   /** Parser events captured during this assistant turn (text, thought, toolCall, summary). */
@@ -76,6 +78,8 @@ export interface ChatRecord {
   title: string;
   toolCallingMode: ToolCallingProfile;
   mode: ChatMode;
+  /** Completed plan awaiting an explicit acceptance or revision request. */
+  pendingPlanMessageTs?: number;
   reasoningEffort: ReasoningEffort;
   /** Complete saved transcript; compaction never rewrites these messages. */
   messages: ChatMessage[];
@@ -329,6 +333,9 @@ export class ChatStorage {
     forked.mode = rec.mode;
     forked.reasoningEffort = normalizeReasoningEffort(rec.reasoningEffort);
     forked.messages = structuredClone(rec.messages.slice(0, end));
+    if (forked.messages.some(message => message.role === "assistant" && message.ts === rec.pendingPlanMessageTs)) {
+      forked.pendingPlanMessageTs = rec.pendingPlanMessageTs;
+    }
     // A historical fork must not inherit a summary containing later turns.
     if (end === rec.messages.length && rec.contextMessages) {
       forked.contextMessages = structuredClone(rec.contextMessages);

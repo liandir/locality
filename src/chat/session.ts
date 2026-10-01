@@ -15,7 +15,7 @@ import {
   type LlmMessage
 } from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
-import type { ChatContextActivity, ChatContextState, ChatMemoryCreations, ChatToolProcess, ChatToolResultDisplay, ChatTurnEnd, ChatTurnPreparation } from "../ui/messaging.js";
+import type { ChatContextActivity, ChatContextState, ChatMemoryCreations, ChatPlanFinal, ChatToolProcess, ChatToolResultDisplay, ChatTurnEnd, ChatTurnPreparation, ChatUserMessage } from "../ui/messaging.js";
 import { createFeatures } from "../build/runtime.js";
 import type { FeatureRuntime, FeatureResultUpdate } from "../build/contracts.js";
 import { loadRootAgentsMd } from "../llm/agentsMd.js";
@@ -68,7 +68,7 @@ import {
 
 /** Events the session emits to the chat webview. */
 export type UiEvent =
-  | { kind: "userMessage"; messageId: string; messageTs: number; text: string; attachments?: ChatAttachment[] }
+  | ChatUserMessage
   | { kind: "visionCapability"; supported: boolean; endpoint?: string; model?: string }
   | ChatTurnPreparation
   | ChatContextActivity
@@ -85,7 +85,7 @@ export type UiEvent =
   | ({ kind: "processJobState"; toolId: string; jobId: string; running: boolean; resultPreview?: string; status?: "failed" } & ChatToolProcess)
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
   | { kind: "summary"; messageId: string; text: string }
-  | { kind: "planFinal"; messageId: string; markdown: string }
+  | ChatPlanFinal
   | { kind: "abort"; reason: string }
   | { kind: "notice"; text: string }
   | ChatTurnEnd
@@ -103,8 +103,8 @@ export type UiEvent =
 export type ToolCategory =
   | "read"      // gray, auto-approve via setting
   | "write"     // gray + approval, auto via setting
-  | "todos"     // gray, no approval — UI/state only, allowed in plan mode
-  | "command"   // purple, auto-approve via setting in Act mode
+  | "todos"     // gray, no approval — UI/state only, available in Act and Review
+  | "command"   // purple, auto-approve via setting in Act and Review
   | "question"  // gray, interactive — asks the user and waits for an answer
   | "search"    // external reference lookup
   | "process"   // gray, controls a previously approved chat-owned process
@@ -390,9 +390,17 @@ export class ChatSession {
   }
 
   setMode(mode: ChatMode): void {
+    if (this.record.pendingPlanMessageTs !== undefined) mode = "plan";
     this.record.mode = mode;
     this.emit({ kind: "chatModeChanged", mode });
     void this.saveRecord();
+  }
+
+  resolvePlan(messageTs: number, mode: "act" | "plan"): boolean {
+    if (this.disposed || this.activeTurn || this.record.pendingPlanMessageTs !== messageTs) return false;
+    delete this.record.pendingPlanMessageTs;
+    this.setMode(mode);
+    return true;
   }
 
   setReasoningEffort(effort: ReasoningEffort): void {
@@ -543,15 +551,19 @@ export class ChatSession {
     this.emit({ kind: "toolCallResolved", toolId, status: "executed", diffPreview });
   }
 
-  async sendUserMessage(text: string, attachments: ChatAttachment[] = []): Promise<void> {
+  async sendUserMessage(text: string, attachments: ChatAttachment[] = [], mode: ChatMode = this.record.mode): Promise<void> {
     if (this.disposed) return;
+    if (this.record.pendingPlanMessageTs !== undefined && mode !== "plan") {
+      this.emit({ kind: "notice", text: "Accept the plan to switch to Act mode, or suggest changes to continue in Plan mode." });
+      return;
+    }
     if (this.activeTurn) {
       this.emit({ kind: "notice", text: "A chat turn is already running. Wait for it to finish or cancel it before sending another message." });
       return;
     }
 
     this.activeTurnModes = {
-      mode: this.record.mode,
+      mode,
       reasoningEffort: this.record.reasoningEffort
     };
     const turn = this.runForegroundTurn((ready, waitingForMemory) =>
@@ -568,15 +580,16 @@ export class ChatSession {
     }
   }
 
-  async editUserMessage(messageTs: number, text: string, removeAttachmentIds: string[] = []): Promise<void> {
+  async editUserMessage(messageTs: number, text: string, removeAttachmentIds: string[] = [], mode: ChatMode = this.record.mode): Promise<void> {
     if (this.disposed) return;
+    if (this.record.pendingPlanMessageTs !== undefined) mode = "plan";
     if (this.activeTurn) {
       this.emit({ kind: "notice", text: "Wait for the current response to finish before editing an earlier message." });
       return;
     }
 
     this.activeTurnModes = {
-      mode: this.record.mode,
+      mode,
       reasoningEffort: this.record.reasoningEffort
     };
     const turn = this.runForegroundTurn(async (ready, waitingForMemory) => {
@@ -639,9 +652,11 @@ export class ChatSession {
       this.toolProtocol = "native";
     }
     const ts = Date.now();
-    appendChatMessage(this.record, { role: "user", content: text, attachments: attachments.length ? attachments : undefined, ts });
+    const mode = this.turnMode();
+    delete this.record.pendingPlanMessageTs;
+    appendChatMessage(this.record, { role: "user", content: text, mode, attachments: attachments.length ? attachments : undefined, ts });
     await this.saveRecord();
-    this.emit({ kind: "userMessage", messageId: `u_${ts}`, messageTs: ts, text, attachments: attachments.length ? attachments : undefined });
+    this.emit({ kind: "userMessage", messageId: `u_${ts}`, messageTs: ts, text, mode, attachments: attachments.length ? attachments : undefined });
     await ready();
     if (waitingForMemory) this.emit({ kind: "turnPreparing", reason: "server" });
     this.emit({ kind: "turnWorkStarted", messageId, startedAt: Date.now() });
@@ -669,6 +684,8 @@ export class ChatSession {
     const attachmentsBefore = this.record.messages.flatMap(message => message.attachments ?? []);
     const edited = this.record.messages[index];
     edited.content = text;
+    edited.mode = this.turnMode();
+    delete this.record.pendingPlanMessageTs;
     if (removeAttachmentIds.length && edited.attachments) {
       const removed = new Set(removeAttachmentIds);
       const retained = edited.attachments.filter(attachment => !removed.has(attachment.id));
@@ -1470,9 +1487,7 @@ export class ChatSession {
       // Done — flush the final assistant message, or report an empty turn.
       const fileChanges = summarizeFileChanges(fileWrites.values());
       if (assistantBuf.trim()) {
-        if (this.turnMode() === "plan") {
-          this.emit({ kind: "planFinal", messageId, markdown: assistantBuf });
-        } else {
+        if (this.turnMode() !== "plan") {
           this.emit({ kind: "summary", messageId, text: extractSummary(assistantBuf) });
         }
         const assistantMessage: ChatMessage = {
@@ -1485,6 +1500,11 @@ export class ChatSession {
         if (fileChanges.length > 0) assistantMessage.fileChanges = fileChanges;
         appendChatMessage(this.record, assistantMessage);
         responseTs = assistantMessage.ts;
+        if (this.turnMode() === "plan") {
+          this.record.pendingPlanMessageTs = responseTs;
+          this.setMode("plan");
+          this.emit({ kind: "planFinal", messageId, messageTs: responseTs, markdown: assistantBuf });
+        }
       } else {
         // The model ended its turn with no visible reply — it stopped after
         // thinking, emitted an incomplete tool call, or hit a stop-token /
@@ -1660,8 +1680,7 @@ export class ChatSession {
       category = "unknown";
       reason = unknownToolReason(e.name, availableToolNames);
     } else if (
-      (this.turnMode() === "plan" && (isWriteToolName(e.name) || (feature && feature.category(e.name) !== "search")))
-      || (this.turnMode() === "review" && isWriteToolName(e.name))
+      this.turnMode() === "plan" && (isWriteToolName(e.name) || (feature && feature.category(e.name) !== "search"))
     ) {
       category = "modeViolation";
       reason = modeViolationReason(this.turnMode(), e.name, args);
@@ -1730,8 +1749,8 @@ export class ChatSession {
       try { featureMetadata = await feature.prepare(e.name, args, readSettings()); }
       catch (error) { validationError = (error as Error).message; }
     }
-    const approvalRequired = !validationError && ((category === "command" && this.turnMode() === "review")
-      || (feature && (category === "command" || category === "search") ? feature.needsApproval(readSettings()) : toolNeedsApproval(category, s)));
+    const approvalRequired = !validationError && (feature && (category === "command" || category === "search")
+      ? feature.needsApproval(readSettings()) : toolNeedsApproval(category, s));
     const processCommand = featureMetadata.processCommand;
     this.emit({
       kind: "toolCallProposed",
@@ -2926,7 +2945,7 @@ function modeViolationReason(mode: ChatMode, toolName: string, args: Record<stri
   return [
     `In ${mode} mode, "${toolName}" is not allowed.`,
     `Arguments: ${JSON.stringify(args)}`,
-    `Use a tool available in the current mode, or switch to act mode to perform the requested changes.`
+    `Use a tool available in the current mode. The user must accept the plan before changes can be made.`
   ].join("\n");
 }
 

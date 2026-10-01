@@ -495,20 +495,14 @@ describe("OpenAI-compatible client", () => {
     expect(command.description).not.toContain("approval");
   });
 
-  it("offers read and command tools but no mutations in review mode", () => {
-    const legacyNames = toolsForMode("review").map(tool => tool.name);
-    expect(legacyNames).toEqual([
-      "read_file", "list_dir", "glob", "run_command", "wait_process", "stop_process", "ask_user_question"
-    ]);
-
-    const nativeNames = toolsForMode("review", "native").map(tool => tool.name);
-    expect(nativeNames).toEqual([
-      "read_file", "list_dir", "glob", "run_command", "wait_process", "stop_process", "ask_user_question"
-    ]);
-    expect(nativeNames).not.toContain("create_file");
-    expect(nativeNames).not.toContain("edit_file");
-    expect(nativeNames).not.toContain("insert_text");
-    expect(nativeNames).not.toContain("replace_range");
+  it.each(["legacy", "native"] as const)("offers the same tools in Review and Act (%s)", transport => {
+    const tools = toolsForMode("review", transport);
+    expect(tools).toEqual(toolsForMode("act", transport));
+    const names = tools.map(tool => tool.name);
+    expect(names).toContain("run_command");
+    expect(names).toContain(transport === "native" ? "create_file" : "write_file");
+    expect(names).toContain("insert_text");
+    expect(names).toContain("replace_range");
   });
 
   it("reports an explicit server rejection so a compatibility profile can use its legacy adapter", async () => {

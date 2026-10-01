@@ -9,7 +9,7 @@ import * as fs from "node:fs/promises";
 import { ChatSession, type UiEvent } from "../../chat/session.js";
 import { ChatStorage, MAX_ATTACHMENT_BYTES, type ChatAttachment, type ChatRecord } from "../../chat/storage.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "../../chat/attachmentLimits.js";
-import type { ChatMode } from "../../chat/mode.js";
+import { normalizeChatMode, type ChatMode } from "../../chat/mode.js";
 import { readSettings, onSettingsChange } from "../../config/settings.js";
 import {
   DEFAULT_REASONING_EFFORT,
@@ -27,7 +27,7 @@ import { classifyWorkspacePath } from "./workspacePathTypes.js";
 interface ChatRuntime {
   session?: ChatSession;
   storage?: ChatStorage;
-  queuedMessages: { id: string; text: string; attachments?: ChatAttachment[] }[];
+  queuedMessages: { id: string; text: string; mode: ChatMode; attachments?: ChatAttachment[] }[];
   stagedAttachmentIds: Set<string>;
   pendingAttachments: Map<string, ChatAttachment>;
   messageLoopRunning: boolean;
@@ -496,7 +496,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             this.sessionCreationPending = false;
           }
         }
-        await this.sendAndDrainQueue(this.active, m.text, this.takeStagedAttachments(m.attachmentIds));
+        await this.sendAndDrainQueue(this.active, m.text, this.takeStagedAttachments(m.attachmentIds), normalizeChatMode(m.mode));
         break;
       case "selectAttachment":
         await this.selectAttachment();
@@ -553,7 +553,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (this.queuedMessages.some(message => message.id === m.id)) break;
         const attachments = this.takeStagedAttachments(m.attachmentIds);
         if (!text && attachments.length === 0) break;
-        this.queuedMessages.push({ id: m.id, text, attachments: attachments.length ? attachments : undefined });
+        this.queuedMessages.push({ id: m.id, text, mode: normalizeChatMode(m.mode), attachments: attachments.length ? attachments : undefined });
         this.pushMessageQueue();
         this.drainMessageQueueIfIdle();
         break;
@@ -587,7 +587,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       case "editMessage": {
         const runtime = this.active;
-        await runtime.session?.editUserMessage(m.messageTs, m.text, m.removeAttachmentIds ?? []);
+        await runtime.session?.editUserMessage(m.messageTs, m.text, m.removeAttachmentIds ?? [], normalizeChatMode(m.mode));
         if (runtime.session && !runtime.removed) this.onChatOpened(runtime.session.getRecord());
         this.onChatListChanged();
         await this.pushRecentChats();
@@ -627,10 +627,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.onOpenSideTab("settings");
         await vscode.commands.executeCommand("workbench.view.extension.locality");
         break;
-      case "acceptPlan": {
+      case "acceptPlan":
+      case "revisePlan": {
         const runtime = this.active;
-        runtime.session?.setMode("act");
-        await this.sendAndDrainQueue(runtime, "I accept your plan. Please implement.");
+        const mode = m.type === "acceptPlan" ? "act" : "plan";
+        const text = m.type === "acceptPlan" ? "I accept your plan. Please implement." : m.text.trim();
+        if (!text || !runtime.session?.resolvePlan(m.messageTs, mode)) {
+          if (runtime.session) this.activateRuntime(runtime, true);
+          break;
+        }
+        await this.sendAndDrainQueue(runtime, text, [], mode, true);
         break;
       }
       case "classifyWorkspacePaths": {
@@ -666,40 +672,44 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async sendAndDrainQueue(runtime: ChatRuntime, firstMessage?: string, firstAttachments: ChatAttachment[] = []): Promise<void> {
+  private async sendAndDrainQueue(runtime: ChatRuntime, firstMessage?: string, firstAttachments: ChatAttachment[] = [], firstMode: ChatMode = "act", priority = false): Promise<void> {
     const session = runtime.session;
     if (!session || runtime.removed) return;
-    if (runtime.messageLoopRunning) {
+    if (runtime.messageLoopRunning || session.isTurnActive() || session.getRecord().pendingPlanMessageTs !== undefined) {
       const text = firstMessage?.trim() ?? "";
       if (text || firstAttachments.length) {
-        runtime.queuedMessages.push({
+        const message = {
           id: `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           text,
+          mode: firstMode,
           attachments: firstAttachments.length ? firstAttachments : undefined
-        });
+        };
+        if (priority) runtime.queuedMessages.unshift(message);
+        else runtime.queuedMessages.push(message);
         this.pushMessageQueue(runtime);
       }
       return;
     }
     runtime.messageLoopRunning = true;
-    let pending: { text: string; attachments?: ChatAttachment[] } | undefined =
+    let pending: { text: string; mode: ChatMode; attachments?: ChatAttachment[] } | undefined =
       firstMessage !== undefined || firstAttachments.length
-        ? { text: firstMessage?.trim() ?? "", attachments: firstAttachments.length ? firstAttachments : undefined }
+        ? { text: firstMessage?.trim() ?? "", mode: firstMode, attachments: firstAttachments.length ? firstAttachments : undefined }
         : undefined;
     try {
       while (!runtime.removed) {
+        if (session.getRecord().pendingPlanMessageTs !== undefined || session.isTurnActive()) return;
         if (!pending) {
           const next = runtime.queuedMessages.shift();
           this.pushMessageQueue(runtime);
-          pending = next ? { text: next.text, attachments: next.attachments } : undefined;
+          pending = next;
         }
         if (!pending || (!pending.text && !pending.attachments?.length)) return;
-        const { text, attachments = [] } = pending;
+        const { text, mode, attachments = [] } = pending;
         for (const attachment of attachments) {
           runtime.stagedAttachmentIds.delete(attachment.id);
           runtime.pendingAttachments.delete(attachment.id);
         }
-        await session.sendUserMessage(text, attachments);
+        await session.sendUserMessage(text, attachments, mode);
         pending = undefined;
         if (runtime.removed) return;
         this.onChatOpened(session.getRecord());
@@ -716,7 +726,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private drainMessageQueueIfIdle(runtime = this.active): void {
     const session = runtime.session;
-    if (runtime.removed || !session || !shouldDrainMessageQueue({
+    if (runtime.removed || !session || session.getRecord().pendingPlanMessageTs !== undefined || !shouldDrainMessageQueue({
       queueLength: runtime.queuedMessages.length,
       messageLoopRunning: runtime.messageLoopRunning,
       sessionCreationPending: runtime.sessionCreationPending,
@@ -732,6 +742,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       messages: runtime.queuedMessages.map(message => ({
         id: message.id,
         text: message.text,
+        mode: message.mode,
         attachments: message.attachments?.map(attachment => this.toUiAttachment(attachment))
       }))
     });

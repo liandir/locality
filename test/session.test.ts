@@ -712,6 +712,84 @@ describe("ChatSession", () => {
     expect(requests[2].reasoning_effort).toBeUndefined();
     expect(requests[2].chat_template_kwargs).toEqual({ enable_thinking: false });
     expect(requests[2].tools?.some(tool => tool.function.name === "create_file")).toBe(false);
+    expect(record.messages.filter(message => message.role === "user").map(message => message.mode)).toEqual(["act", "plan"]);
+  });
+
+  it.each(["act", "plan", "review"] as const)("executes a submitted %s message independently of the composer mode", async mode => {
+    mocks.settings.toolCallingMode = "native";
+    const requests: Array<{ tools?: Array<{ function: { name: string } }> }> = [];
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: typeof requests[number]) {
+      requests.push(request);
+      yield { kind: "text", text: "Done" };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    record.mode = mode === "act" ? "plan" : "act";
+    const composerMode = record.mode;
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record,
+      emit: event => events.push(event)
+    });
+
+    await session.sendUserMessage("Use my submitted mode", [], mode);
+
+    expect(record.mode).toBe(mode === "plan" ? "plan" : composerMode);
+    expect(record.messages[0]).toMatchObject({ role: "user", mode });
+    expect(events).toContainEqual(expect.objectContaining({ kind: "userMessage", mode }));
+    expect(requests[0].tools?.some(tool => tool.function.name === "create_file")).toBe(mode !== "plan");
+    expect(requests[0].tools?.some(tool => tool.function.name === "run_command")).toBe(mode !== "plan");
+  });
+
+  it("retains plan approval after reload and keeps revisions in Plan until acceptance", async () => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-plan-approval-"));
+    mocks.settings.toolCallingMode = "native";
+    const requests: Array<{ tools?: Array<{ function: { name: string } }> }> = [];
+    mocks.streamChat.mockImplementation(async function* (_endpoint: string, request: typeof requests[number]) {
+      requests.push(request);
+      yield { kind: "text", text: "A concrete plan or completed response." };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const { ChatStorage } = await import("../src/chat/storage.js");
+    const storage = new ChatStorage(ws, path.join(ws, "chats"));
+    const record = storage.newRecord("native");
+    let session = new ChatSession({ storage, workspaceRoot: ws, record, emit: () => undefined });
+    try {
+      await session.sendUserMessage("Plan it", [], "plan");
+      await session.shutdown();
+      const loaded = (await storage.load(record.id))!;
+      const firstPlan = loaded.pendingPlanMessageTs!;
+      expect(firstPlan).toBe(loaded.messages.at(-1)?.ts);
+      expect(loaded.mode).toBe("plan");
+      const events: UiEvent[] = [];
+      session = new ChatSession({ storage, workspaceRoot: ws, record: loaded, emit: event => events.push(event) });
+      session.setMode("review");
+      expect(loaded.mode).toBe("plan");
+      await session.sendUserMessage("Do not bypass approval", [], "act");
+      expect(requests).toHaveLength(1);
+      expect(session.resolvePlan(firstPlan - 1, "act")).toBe(false);
+      expect(session.resolvePlan(firstPlan, "plan")).toBe(true);
+      await session.sendUserMessage("Include validation", [], "plan");
+      expect(loaded.pendingPlanMessageTs).toBe(loaded.messages.at(-1)?.ts);
+      expect(loaded.mode).toBe("plan");
+      expect(requests[1].tools?.some(tool => tool.function.name === "create_file" || tool.function.name === "run_command")).toBe(false);
+
+      const revisedPlan = loaded.pendingPlanMessageTs!;
+      expect(session.resolvePlan(revisedPlan, "act")).toBe(true);
+      expect(session.resolvePlan(revisedPlan, "act")).toBe(false);
+      await session.sendUserMessage("I accept your plan. Please implement.", [], "act");
+      expect(loaded.mode).toBe("act");
+      expect(loaded.pendingPlanMessageTs).toBeUndefined();
+      expect(requests[2].tools?.some(tool => tool.function.name === "create_file")).toBe(true);
+      expect(loaded.messages.filter(message => message.role === "user").map(message => message.mode)).toEqual(["plan", "plan", "act"]);
+      expect(events).toContainEqual(expect.objectContaining({ kind: "userMessage", mode: "act", text: "I accept your plan. Please implement." }));
+      expect((await storage.load(record.id))?.pendingPlanMessageTs).toBeUndefined();
+    } finally {
+      await session.shutdown();
+      await fs.rm(ws, { recursive: true, force: true });
+    }
   });
 
   it("persists successful file-creation metadata for restored tool labels", async () => {
@@ -2167,13 +2245,15 @@ describe("ChatSession", () => {
     await session.sendUserMessage("first request");
     const firstUserTs = record.messages.find(message => message.role === "user")!.ts;
     await session.sendUserMessage("second request");
-    await session.editUserMessage(firstUserTs, "edited first request");
+    await session.editUserMessage(firstUserTs, "edited first request", [], "review");
 
     expect(record.messages.map(message => [message.role, message.content])).toEqual([
       ["user", "edited first request"],
       ["assistant", "regenerated answer"]
     ]);
     expect(events.some(event => event.kind === "chatLoaded")).toBe(true);
+    expect(record.messages[0].mode).toBe("review");
+    expect(record.mode).toBe("act");
     expect(events).toContainEqual({
       kind: "titleChanged",
       title: "Edit earlier request",
@@ -2357,9 +2437,11 @@ describe("ChatSession", () => {
     expect(record.messages.find(message => message.role === "tool")?.content).toContain("Approval settings changed");
   });
 
-  it.each(["native", "compat-gemma4"] as const)("requires explicit approval for review-mode commands with %s", async profile => {
+  it.each([
+    ["native", false], ["native", true], ["compat-gemma4", false], ["compat-gemma4", true]
+  ] as const)("uses configured command approval in Review (%s, autoapprove=%s)", async (profile, autoapprove) => {
     mocks.settings.toolCallingMode = profile;
-    mocks.settings.autoapproveCommands = true;
+    mocks.settings.autoapproveCommands = autoapprove;
     mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "ok", stderr: "", truncated: false });
     if (profile === "native") {
       let pass = 0;
@@ -2398,49 +2480,46 @@ describe("ChatSession", () => {
     const proposed = events.find(
       (event): event is Extract<UiEvent, { kind: "toolCallProposed" }> => event.kind === "toolCallProposed"
     );
-    expect(proposed).toMatchObject({ category: "command", approvalRequired: true });
-    expect(mocks.runCommand).not.toHaveBeenCalled();
-
-    session.approve(toolId, true);
+    expect(proposed).toMatchObject({ category: "command", approvalRequired: !autoapprove });
+    if (!autoapprove) {
+      expect(mocks.runCommand).not.toHaveBeenCalled();
+      session.approve(toolId, true);
+    }
     await turn;
     expect(mocks.runCommand).toHaveBeenCalledOnce();
     expect(events.some(event => event.kind === "planFinal")).toBe(false);
     expect(events.some(event => event.kind === "summary")).toBe(true);
   });
 
-  it("rejects write calls in review mode even when write auto-approval is enabled", async () => {
-    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-review-"));
+  it.each(["plan", "review"] as const)("blocks file creation only in Plan (%s)", async mode => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-modes-"));
     mocks.settings.toolCallingMode = "native";
     mocks.settings.autoapproveWrites = true;
+    let pass = 0;
     mocks.streamChat.mockImplementation(async function* () {
-      yield {
-        kind: "toolCall",
-        name: "create_file",
-        argsJson: '{"path":"blocked.txt","content":"nope"}',
-        id: "call_review_write"
+      if (pass++ === 0) yield {
+        kind: "toolCall", name: "create_file",
+        argsJson: '{"path":"test.txt","content":"test code"}', id: "call_mode_write"
       };
+      else yield { kind: "text", text: "Done" };
     });
-
     const { ChatSession } = await import("../src/chat/session.js");
     const record = newRecord();
-    record.mode = "review";
+    record.mode = mode;
     const events: UiEvent[] = [];
     const session = new ChatSession({
       storage: { save: vi.fn(async () => undefined) } as never,
-      workspaceRoot: ws,
-      record,
-      emit: event => events.push(event)
+      workspaceRoot: ws, record, emit: event => events.push(event)
     });
-
-    await session.sendUserMessage("review this without changing it");
-
-    expect(events).toContainEqual(expect.objectContaining({
-      kind: "toolCallProposed",
-      category: "modeViolation",
-      approvalRequired: false
-    }));
-    expect(events).toContainEqual(expect.objectContaining({ kind: "toolCallResolved", status: "rejected" }));
-    await expect(fs.stat(path.join(ws, "blocked.txt"))).rejects.toThrow();
+    try {
+      await session.sendUserMessage("Inspect the code");
+      expect(events).toContainEqual(expect.objectContaining({
+        kind: "toolCallProposed", category: mode === "plan" ? "modeViolation" : "write", approvalRequired: false
+      }));
+      expect(events).toContainEqual(expect.objectContaining({ kind: "toolCallResolved", status: mode === "plan" ? "rejected" : "executed" }));
+      if (mode === "plan") await expect(fs.stat(path.join(ws, "test.txt"))).rejects.toThrow();
+      else await expect(fs.readFile(path.join(ws, "test.txt"), "utf8")).resolves.toBe("test code");
+    } finally { await fs.rm(ws, { recursive: true, force: true }); }
   });
 
   it("still requires approval for a command when autoapproveCommands is off", async () => {

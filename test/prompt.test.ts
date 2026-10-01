@@ -207,7 +207,7 @@ describe("system prompt policy", () => {
     }
   });
 
-  it("offers update_todos in act mode only, with guidance", () => {
+  it("offers update_todos outside plan mode, with implementation guidance in Act", () => {
     expect(normal).toContain("update_todos");
     expect(normal).toContain("Use update_todos for substantial work with several meaningful stages");
     // Not a read-only tool, so it is absent from the plan-mode tool list.
@@ -337,16 +337,16 @@ describe("system prompt policy", () => {
     expect(plan).not.toContain("You work step by step");
   });
 
-  it("review mode allows inspection and approved commands but asks for a direct review", () => {
+  it("review mode keeps the normal tools and approval rules while asking for a direct review", () => {
     expect(review).toContain("You are in review mode");
-    expect(review).toContain("Commands are optional");
-    expect(review).toContain("always require the user's explicit approval");
+    expect(review).not.toContain("always require the user's explicit approval");
+    expect(review).not.toContain("Do not modify the workspace");
     expect(review).toContain("review findings, not an implementation plan");
     expect(review).toContain("ordered by severity");
     expect(review).toContain("run_command");
-    expect(review).not.toContain('"name": "write_file"');
-    expect(review).not.toContain('"name": "insert_text"');
-    expect(review).not.toContain('"name": "update_todos"');
+    expect(review).toContain('"name": "write_file"');
+    expect(review).toContain('"name": "insert_text"');
+    expect(review).toContain('"name": "update_todos"');
     expect(review).not.toContain("You work step by step");
   });
 });

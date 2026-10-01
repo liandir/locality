@@ -152,17 +152,27 @@ The mode menu in the chat composer offers three ways to work:
 - **Plan mode** restricts the assistant to read-only tools. It can browse and read
   files but cannot write or run commands, and it finishes with an implementation
   plan.
-- **Review mode** disables file edits and focuses on answers. It can inspect files and
-  answer questions about the workspace without producing an implementation plan.
-  It may propose commands when they help validate a review, but every command
-  requires explicit approval even when command auto-approval is enabled.
+- **Review mode** focuses on answers and review findings. It has the same tools and
+  approval settings as Act mode, including file tools and commands available in
+  your edition.
 
-Once a Plan-mode response is rendered, you'll see two buttons:
+Each message uses the mode selected when you send or queue it. Its bubble shows
+the mode's icon and label beneath an inset divider. Changing the composer mode
+affects future submissions; it does not change a running turn or messages already
+in the queue. Editing or reordering queued messages preserves their modes.
+Editing and resending a previously sent message uses the current composer mode.
 
-- **Accept plan and execute** — turns plan mode off and asks the assistant
-  to carry out what it just proposed.
-- **Reject plan and suggest changes** — keeps plan mode on and lets you
-  type feedback so the assistant can revise.
+After each completed Plan response, the approval field asks how to continue:
+
+- **Accept plan and switch to Act** sends “I accept your plan. Please implement.”
+  as an Act message, with the Act icon, and starts implementation in Act mode.
+- **Suggest changes** lets you type feedback directly in the approval field.
+  Submit it with Enter or the send button; Shift+Enter adds a new line. Your
+  feedback appears as a Plan message, and the revised plan needs acceptance again.
+
+The chat stays in Plan mode and queued work pauses until you respond. Pending
+approval survives reopening the chat. The mode selector remains in Plan until
+acceptance; submitting revisions keeps the same read-only restrictions.
 
 Use plan mode for anything non-trivial. It gives you a chance to redirect
 before files are touched.
@@ -280,8 +290,8 @@ Only settings supported by the installed edition are available.
 | `autoCompactThresholdPercent` | `80` | Context usage percentage that triggers auto-compaction. |
 | `autoapproveReads` | `true` | Skip approval for read-only file tools. |
 | `autoapproveWrites` | `false` | Skip approval for file-edit tool calls. Off by default. |
-| `autoapproveCommands` | `false` | Commands and Advanced: skip command approval in Act mode. Review always asks. |
-| `autoapproveSafeCommands` | `false` | Safe list: skip approval for every matching command in Act mode. Review always asks. |
+| `autoapproveCommands` | `false` | Commands and Advanced: skip command approval in Act and Review modes. |
+| `autoapproveSafeCommands` | `false` | Safe list: skip approval for every matching command in Act and Review modes. |
 | `safeCommandPatterns` | Built-in regex list | Safe list: whole-command patterns in user settings; empty means deny all. |
 | `webSearchEndpoint` | `https://api.search.brave.com/res/v1/web/search` | Advanced: Brave Web Search URL or SearXNG base URL, configured and tested in Settings. Empty or unverified omits both web tools. |
 | `autoapproveWebSearch` | `false` | Advanced: auto-approve searches and page reads in Act, Plan, and Review modes. User settings only. |
@@ -348,7 +358,7 @@ trash icon. Deleting cannot be undone.
   **Auto-approve web requests** skips those prompts when enabled. General commands run with your normal
   permissions and can fetch URLs, call APIs, install packages, or access files
   outside the workspace. Command approval is required by default; enabling
-  **Auto-approve commands** permits these actions without a prompt in Act mode.
+  **Auto-approve commands** permits these actions without a prompt in Act and Review modes.
 
 ## Workspace memory
 

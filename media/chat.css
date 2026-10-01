@@ -92,7 +92,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .todo-item.completed .todo-box::after { transform: translate(-50%, -50%) rotate(-45deg); }
 
 .msg { display: flex; flex-direction: column; gap: var(--chat-part-gap); }
-.msg.user .bubble { align-self: flex-end; background: var(--surface-fill); border: 1px solid transparent; padding: 8px 11px; border-radius: var(--control-radius); max-width: 90%; }
+.msg.user .bubble { align-self: flex-end; background: var(--surface-fill); border: 1px solid transparent; padding: 0; border-radius: var(--control-radius); max-width: 90%; }
+.user-message-body { padding: 8px 11px; }
+.message-mode { display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding: 4px 11px 5px; color: var(--vscode-descriptionForeground); font-size: 11px; line-height: 18px; }
+.message-mode-icon { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 18px; flex: 0 0 auto; }
 .user-edit-card { align-self: flex-end; width: min(90%, 680px); display: flex; flex-direction: column; gap: 7px; padding: 9px; background: var(--surface-fill); border: 1px solid transparent; border-radius: var(--control-radius); box-sizing: border-box; }
 .user-edit-input { width: 100%; min-height: 72px; resize: vertical; padding: 4px 6px; background: transparent; color: var(--vscode-input-foreground); border: 0; border-radius: 0; outline: none; font: inherit; line-height: 1.45; box-sizing: border-box; }
 .user-edit-input:focus { border-color: transparent; outline: none; }
@@ -614,7 +617,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .composer { position: relative; border-top: 0; padding: 10px; background: var(--vscode-sideBar-background, var(--vscode-editor-background)); }
 .message-queue { display: flex; flex-direction: column; gap: 5px; max-height: min(42vh, 360px); margin: 0 3px 5px; overflow-y: auto; }
 .message-queue[hidden] { display: none; }
-.queued-message { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; min-width: 0; padding: 7px 7px; background: var(--surface-fill); border: 1px solid transparent; border-radius: var(--control-radius); color: var(--vscode-descriptionForeground); }
+.queued-message { display: flex; flex-direction: column; flex: 0 0 auto; min-width: 0; background: var(--surface-fill); border: 1px solid transparent; border-radius: var(--control-radius); color: var(--vscode-descriptionForeground); }
+.queued-message-row { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 7px; }
 .queued-message.dragging { opacity: 0.55; background: var(--surface-fill-strong); }
 .queued-message-drag { width: 22px; height: 28px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: var(--control-radius); cursor: grab; }
 .queued-message-drag:active { cursor: grabbing; }
@@ -623,7 +627,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .queued-message-content { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; }
 .queued-message-text { flex: 1 1 auto; min-width: 0; max-height: 4.1em; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.35; }
 .queued-message-actions { display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; }
-.queued-message.editing { align-items: flex-start; }
+.queued-message.editing .queued-message-row { align-items: flex-start; }
 .queued-message.editing .queued-message-content { flex-direction: column; align-items: stretch; }
 .queued-message.editing .queued-message-images { align-self: flex-start; }
 .queued-message-images { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto; }

@@ -39,7 +39,7 @@ to enable them and manage saved summaries.
 ## Edit tools
 
 Create or change workspace files and maintain task progress. These tools are
-included in every edition and available only in Act mode. File edits require
+included in every edition and available in Act and Review modes. File edits require
 approval by default and offer a diff preview. `update_todos` changes only the
 chat's checklist and needs no approval.
 
@@ -100,11 +100,11 @@ for connection setup, credentials, and request limits.
 | --- | --- | --- | --- | --- |
 | Act | Yes | Yes | In command-capable editions; approval by default | Advanced; approval by default |
 | Plan | Yes | No | No | Advanced; approval by default |
-| Review | Yes | No | In command-capable editions; explicit approval always required | Advanced; approval by default |
+| Review | Yes | Yes | In command-capable editions; approval by default | Advanced; approval by default |
 
 Image and memory prerequisites still apply. The web-request approval setting
-applies in every mode. Review's commands can change files or access the network
-when approved, even though its file-edit tools are disabled.
+applies in every mode. Act and Review share the same file-edit and command
+approval settings.
 
 ## How tool calls work
 
@@ -127,8 +127,7 @@ call which appears as a small card in the chat. Cards are color-coded:
   permitted program directly. The assistant can decide when a command would help
   and propose it directly. Every command requires manual approval by default. Turning on
   **Auto-approve commands** (or **Auto-approve safe commands**) skips the prompt
-  in Act mode for commands permitted by that edition.
-  Review mode always requires explicit approval.
+  in Act and Review modes for commands permitted by that edition.
   **Checking process** cards show the original command and offer the same Stop
   control as **Running command** while the process is running. The command also
   remains visible in saved **Checked process** cards.
@@ -140,10 +139,9 @@ call which appears as a small card in the chat. Cards are color-coded:
 ## Command approval
 
 In Commands and Advanced, **Auto-approve commands** controls approval for all
-`run_command` calls in Act mode. It is off by
+`run_command` calls in Act and Review modes. It is off by
 default, so each command waits for you to approve or reject it. Turning it on
-lets commands run without an approval prompt. Review mode always requires
-explicit command approval, and Plan mode cannot run commands.
+lets commands run without an approval prompt. Plan mode cannot run commands.
 
 Safe list uses **Auto-approve safe commands** with the same approval behavior
 for every matching command. Nonmatching commands always fail. No commands

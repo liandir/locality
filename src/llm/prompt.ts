@@ -75,8 +75,8 @@ function policySections(opts: PromptOptions): string[] {
     );
   } else if (mode === "review") {
     sections.push([
-      `You are in review mode. Inspect the workspace and answer the user's question with evidence from the code. Use the available tools to gather evidence. Do not modify the workspace.`,
-      `End with a direct answer or review findings, not an implementation plan or execution checklist. For code reviews, lead with concrete bugs, risks, regressions, and missing tests ordered by severity, cite relevant files and lines, then briefly note assumptions or residual risk. If no issues are found, say so clearly. Do not modify the workspace.`
+      `You are in review mode. Inspect the workspace and answer the user's question with evidence from the code. Use the available tools to gather evidence.`,
+      `End with a direct answer or review findings, not an implementation plan or execution checklist. For code reviews, lead with concrete bugs, risks, regressions, and missing tests ordered by severity, cite relevant files and lines, then briefly note assumptions or residual risk. If no issues are found, say so clearly.`
     ].join("\n\n"));
   } else {
     const editPolicy = opts.nativeTools

@@ -13,6 +13,29 @@ export interface ChatContextState {
   contextMessageCount?: number;
 }
 
+export interface ChatUserMessage {
+  kind: "userMessage";
+  messageId: string;
+  messageTs: number;
+  text: string;
+  mode: ChatMode;
+  attachments?: ChatAttachment[];
+}
+
+export interface ChatPlanFinal {
+  kind: "planFinal";
+  messageId: string;
+  messageTs: number;
+  markdown: string;
+}
+
+export interface UiQueuedMessage {
+  id: string;
+  text: string;
+  mode: ChatMode;
+  attachments?: UiAttachment[];
+}
+
 export interface ChatTurnPreparation {
   kind: "turnPreparing";
   /** Memory preparation is silent; its creation card remains visible above the new message. */
@@ -102,12 +125,12 @@ export type ExtToSide =
 export type ChatToExt = (
   | { type: "openMemory"; id: string }
   | { type: "ready" }
-  | { type: "send"; text: string; attachmentIds?: string[] }
-  | { type: "queueMessage"; id: string; text: string; attachmentIds?: string[] }
+  | { type: "send"; text: string; mode: ChatMode; attachmentIds?: string[] }
+  | { type: "queueMessage"; id: string; text: string; mode: ChatMode; attachmentIds?: string[] }
   | { type: "updateQueuedMessage"; id: string; text: string }
   | { type: "reorderQueuedMessages"; ids: string[] }
   | { type: "removeQueuedMessage"; id: string }
-  | { type: "editMessage"; messageTs: number; text: string; removeAttachmentIds?: string[] }
+  | { type: "editMessage"; messageTs: number; text: string; mode: ChatMode; removeAttachmentIds?: string[] }
   | { type: "selectAttachment" }
   | { type: "pasteAttachments"; files: { fileName: string; dataUrl: string }[] }
   | { type: "pasteText"; text: string }
@@ -128,7 +151,8 @@ export type ChatToExt = (
   | { type: "newChat" }
   | { type: "openChats" }
   | { type: "openSettings" }
-  | { type: "acceptPlan" }
+  | { type: "acceptPlan"; messageTs: number }
+  | { type: "revisePlan"; messageTs: number; text: string }
   | { type: "classifyWorkspacePaths"; requestId: number; paths: string[] }
   | { type: "openFile"; path: string; line?: number }
   | { type: "reviewFile"; path: string }
@@ -150,7 +174,7 @@ export type ExtToChat = UiEvent
   | { type: "attachmentPasteFailed"; error: string }
   | { type: "attachmentCleared" }
   | { type: "workspacePathTypes"; requestId: number; entries: { path: string; pathType: WorkspacePathType }[] }
-  | { type: "messageQueue"; messages: { id: string; text: string; attachments?: UiAttachment[] }[] }
+  | { type: "messageQueue"; messages: UiQueuedMessage[] }
   | { type: "recentChats"; chats: { id: string; title: string; updatedAt: number }[]; totalCount: number };
 
 export type UiAttachment = ChatAttachment & { previewUri: string };

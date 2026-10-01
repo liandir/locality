@@ -148,13 +148,6 @@ export const ALL_TOOLS: ToolSpec[] = [
 ];
 
 const PLAN_MODE_TOOL_NAMES = new Set(["view_image", "read_file", "list_dir", "glob", "ask_user_question"]);
-const REVIEW_MODE_TOOL_NAMES = new Set([
-  "view_image",
-  "read_file",
-  "list_dir",
-  "glob",
-  "ask_user_question",
-]);
 
 export function isMemoryToolName(name: string): boolean {
   return name === "search_memories" || name === "recall_memory";
@@ -171,10 +164,7 @@ export function toolsForMode(mode: ChatMode, transport: "native" | "legacy" = "l
   const excluded = transport === "native"
     ? new Set(["write_file"])
     : new Set(["create_file", "edit_file"]);
-  return available.filter(tool =>
-    !excluded.has(tool.name)
-    && (mode !== "review" || REVIEW_MODE_TOOL_NAMES.has(tool.name) || isMemoryToolName(tool.name) || !!tool.availability)
-  );
+  return available.filter(tool => !excluded.has(tool.name));
 }
 
 export function validateToolArguments(toolName: string, value: unknown): string | undefined {

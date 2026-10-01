@@ -18,6 +18,39 @@ afterEach(async () => {
 });
 
 describe("ChatStorage", () => {
+  it("retains pending plan approval only in forks containing that plan", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const rec = storage.newRecord("native");
+    rec.mode = "plan";
+    rec.messages = [
+      { role: "user", content: "Earlier request", mode: "act", ts: 1 },
+      { role: "assistant", content: "Earlier response", ts: 2 },
+      { role: "user", content: "Plan this", mode: "plan", ts: 3 },
+      { role: "assistant", content: "The plan", ts: 4 }
+    ];
+    rec.pendingPlanMessageTs = 4;
+    const full = await storage.fork(rec);
+    expect((await storage.load(full.id))?.pendingPlanMessageTs).toBe(4);
+    const earlier = await storage.fork(rec, 1);
+    expect((await storage.load(earlier.id))?.pendingPlanMessageTs).toBeUndefined();
+  });
+
+  it("retains message modes on reload and fork without guessing modes for older messages", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const rec = storage.newRecord("native");
+    rec.mode = "review";
+    rec.messages = [
+      { role: "user", content: "Earlier request", ts: 1 },
+      { role: "user", content: "Plan", mode: "plan", ts: 2 },
+      { role: "user", content: "Implement", mode: "act", ts: 3 }
+    ];
+    await storage.save(rec);
+    const loaded = (await storage.load(rec.id))!;
+    expect(loaded.messages.map(message => message.mode)).toEqual([undefined, "plan", "act"]);
+    const forked = await storage.fork(loaded);
+    expect((await storage.load(forked.id))?.messages.map(message => message.mode)).toEqual([undefined, "plan", "act"]);
+  });
+
   it("imports validated images as chat-owned assets without embedding bytes in the record", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
     const rec = storage.newRecord("compat-muse-glimmer");

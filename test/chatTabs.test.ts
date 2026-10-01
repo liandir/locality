@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as vscode from "vscode";
-import type { ChatRecord, ChatStorage } from "../src/chat/storage.js";
+import type { ChatMode } from "../src/chat/mode.js";
+import type { ChatAttachment, ChatRecord, ChatStorage } from "../src/chat/storage.js";
 import type { UiEvent } from "../src/chat/session.js";
 import type { ChatToExt, ExtToChat } from "../src/ui/messaging.js";
 
@@ -17,12 +18,15 @@ interface FakeSession {
   cancel: ReturnType<typeof vi.fn>;
   shutdown: ReturnType<typeof vi.fn>;
   sent: string[];
+  sentModes: ChatMode[];
   finish(): void;
+  finishPlan(messageTs: number): void;
   renameTitle: ReturnType<typeof vi.fn>;
 }
 vi.mock("../src/chat/session.js", () => ({
   ChatSession: class implements FakeSession {
     sent: string[] = [];
+    sentModes: ChatMode[] = [];
     private finishTurn?: () => void;
     private active = false;
     emit: (event: UiEvent) => void;
@@ -37,9 +41,27 @@ vi.mock("../src/chat/session.js", () => ({
     emitLoaded() { this.emit({ kind: "chatLoaded", record: this.args.record }); }
     refreshMemoryVisibility() {}
     isTurnActive() { return this.active; }
-    async sendUserMessage(text: string) {
+    setMode(mode: ChatMode) {
+      if (this.args.record.pendingPlanMessageTs !== undefined) mode = "plan";
+      this.args.record.mode = mode;
+      this.emit({ kind: "chatModeChanged", mode });
+    }
+    resolvePlan(messageTs: number, mode: "act" | "plan") {
+      if (this.active || this.args.record.pendingPlanMessageTs !== messageTs) return false;
+      delete this.args.record.pendingPlanMessageTs;
+      this.setMode(mode);
+      return true;
+    }
+    finishPlan(messageTs: number) {
+      this.args.record.pendingPlanMessageTs = messageTs;
+      this.setMode("plan");
+      this.emit({ kind: "planFinal", messageId: "plan", messageTs, markdown: "The plan" });
+      this.finish();
+    }
+    async sendUserMessage(text: string, _attachments: ChatAttachment[], mode: ChatMode) {
       this.active = true;
       this.sent.push(text);
+      this.sentModes.push(mode);
       this.emit({ kind: "turnPreparing", reason: "server" });
       await new Promise<void>(resolve => { this.finishTurn = resolve; });
       this.active = false;
@@ -138,10 +160,10 @@ describe("independent chat tabs", () => {
   it("runs and drains each queue independently and cancels only the visible chat", async () => {
     const { provider, send } = setup();
     provider.openChat(record("a"));
-    const first = send({ type: "send", text: "A", chatId: "a" });
-    await send({ type: "queueMessage", id: "qa", text: "A follow-up", chatId: "a" });
+    const first = send({ type: "send", mode: "act", text: "A", chatId: "a" });
+    await send({ type: "queueMessage", mode: "act", id: "qa", text: "A follow-up", chatId: "a" });
     provider.openChat(record("b"));
-    const second = send({ type: "send", text: "B", chatId: "b" });
+    const second = send({ type: "send", mode: "act", text: "B", chatId: "b" });
     const a = mocks.sessions.get("a")!, b = mocks.sessions.get("b")!;
     expect(provider.getTabs().filter(tab => tab.running)).toHaveLength(2);
     a.finish();
@@ -157,10 +179,89 @@ describe("independent chat tabs", () => {
     expect(provider.getTabs().some(tab => tab.running)).toBe(false);
   });
 
+  it("retains submitted modes through queue edits, reordering, tab switches and webview reloads", async () => {
+    const { provider, send, posted } = setup();
+    provider.openChat(record("a"));
+    const turn = send({ type: "send", text: "Start", mode: "act" });
+    await send({ type: "setChatMode", mode: "plan" });
+    await send({ type: "queueMessage", id: "plan", text: "Plan it", mode: "plan" });
+    await send({ type: "setChatMode", mode: "review" });
+    await send({ type: "queueMessage", id: "review", text: "Review it", mode: "review" });
+    await send({ type: "setChatMode", mode: "act" });
+    await send({ type: "updateQueuedMessage", id: "plan", text: "Plan the fix" });
+    await send({ type: "reorderQueuedMessages", ids: ["review", "plan"] });
+    provider.openChat(record("b"));
+    await provider.openChatById("a");
+    await send({ type: "ready" });
+    expect(posted.filter(message => "type" in message && message.type === "messageQueue").at(-1)).toEqual({
+      type: "messageQueue",
+      messages: [
+        { id: "review", text: "Review it", mode: "review" },
+        { id: "plan", text: "Plan the fix", mode: "plan" }
+      ]
+    });
+
+    const a = mocks.sessions.get("a")!;
+    a.finish();
+    await vi.waitFor(() => expect(a.sent).toEqual(["Start", "Review it"]));
+    expect(a.sentModes).toEqual(["act", "review"]);
+    a.finish();
+    await vi.waitFor(() => expect(a.sent).toEqual(["Start", "Review it", "Plan the fix"]));
+    expect(a.sentModes).toEqual(["act", "review", "plan"]);
+    expect(provider.getCurrentRecord()?.mode).toBe("act");
+    a.finish();
+    await turn;
+  });
+
+  it("keeps the submitted mode when a concurrent send becomes queued", async () => {
+    const { provider, send } = setup();
+    provider.openChat(record("a"));
+    const turn = send({ type: "send", text: "First", mode: "plan" });
+    await send({ type: "send", text: "Next", mode: "review" });
+    await send({ type: "setChatMode", mode: "act" });
+    const a = mocks.sessions.get("a")!;
+    a.finish();
+    await vi.waitFor(() => expect(a.sentModes).toEqual(["plan", "review"]));
+    a.finish();
+    await turn;
+  });
+
+  it.each(["acceptPlan", "revisePlan"] as const)("pauses queued work until a plan response and submits it in the right mode (%s)", async response => {
+    const { provider, send, snapshot } = setup();
+    provider.openChat(record("a"));
+    const first = send({ type: "send", text: "Plan it", mode: "plan" });
+    await send({ type: "queueMessage", id: "later", text: "Later review", mode: "review" });
+    const a = mocks.sessions.get("a")!;
+    a.finishPlan(10);
+    await first;
+    expect(a.sent).toEqual(["Plan it"]);
+    await send({ type: "setChatMode", mode: "act" });
+    expect(provider.getCurrentRecord()?.mode).toBe("plan");
+    await send({ type: "ready" });
+    expect(snapshot().events).toContainEqual(expect.objectContaining({ kind: "planFinal", messageTs: 10 }));
+    await send({ type: "acceptPlan", messageTs: 9 });
+    expect(a.sent).toEqual(["Plan it"]);
+
+    const next = response === "acceptPlan"
+      ? send({ type: "acceptPlan", messageTs: 10 })
+      : send({ type: "revisePlan", messageTs: 10, text: "  Include validation  " });
+    expect(a.sent[1]).toBe(response === "acceptPlan" ? "I accept your plan. Please implement." : "Include validation");
+    expect(a.sentModes[1]).toBe(response === "acceptPlan" ? "act" : "plan");
+    if (response === "acceptPlan") {
+      a.finish();
+      await vi.waitFor(() => expect(a.sent[2]).toBe("Later review"));
+      a.finish();
+    } else {
+      a.finishPlan(20);
+    }
+    await next;
+    expect(provider.getCurrentRecord()?.pendingPlanMessageTs).toBe(response === "acceptPlan" ? undefined : 20);
+  });
+
   it("keeps a closed tab running, retains its draft, and reopens the same session", async () => {
     const { provider, send, snapshot } = setup();
     provider.openChat(record("a"));
-    const turn = send({ type: "send", text: "work" });
+    const turn = send({ type: "send", mode: "act", text: "work" });
     await send({ type: "saveDraft", text: "next request", chatId: "a" });
     provider.closeTab("a");
     expect(provider.getCurrentRecord()).toBeUndefined();
@@ -177,7 +278,7 @@ describe("independent chat tabs", () => {
     provider.openChat(record("a"));
     provider.openChat(record("b"));
     await send({ type: "cancel", chatId: "a" });
-    await send({ type: "send", text: "wrong chat", chatId: "a" });
+    await send({ type: "send", mode: "act", text: "wrong chat", chatId: "a" });
     await send({ type: "saveDraft", text: "draft A", chatId: "a" });
     expect(mocks.sessions.get("b")!.sent).toEqual([]);
     expect(mocks.sessions.get("b")!.cancel).not.toHaveBeenCalled();
