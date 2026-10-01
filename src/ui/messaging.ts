@@ -29,6 +29,12 @@ export interface ChatPlanFinal {
   markdown: string;
 }
 
+export interface ChatPlanningState {
+  kind: "planningState";
+  active: boolean;
+  pendingPlanMessageTs?: number;
+}
+
 export interface UiQueuedMessage {
   id: string;
   text: string;
@@ -152,7 +158,8 @@ export type ChatToExt = (
   | { type: "openChats" }
   | { type: "openSettings" }
   | { type: "acceptPlan"; messageTs: number }
-  | { type: "revisePlan"; messageTs: number; text: string }
+  | { type: "revisePlan"; messageTs?: number; text: string }
+  | { type: "cancelPlanning"; messageTs?: number }
   | { type: "classifyWorkspacePaths"; requestId: number; paths: string[] }
   | { type: "openFile"; path: string; line?: number }
   | { type: "reviewFile"; path: string }

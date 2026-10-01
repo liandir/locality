@@ -80,6 +80,8 @@ export interface ChatRecord {
   mode: ChatMode;
   /** Completed plan awaiting an explicit acceptance or revision request. */
   pendingPlanMessageTs?: number;
+  /** Planning holds queued requests through all revisions until acceptance or cancellation. */
+  planning?: boolean;
   reasoningEffort: ReasoningEffort;
   /** Complete saved transcript; compaction never rewrites these messages. */
   messages: ChatMessage[];
@@ -336,6 +338,7 @@ export class ChatStorage {
     if (forked.messages.some(message => message.role === "assistant" && message.ts === rec.pendingPlanMessageTs)) {
       forked.pendingPlanMessageTs = rec.pendingPlanMessageTs;
     }
+    if (end === rec.messages.length && rec.planning) forked.planning = true;
     // A historical fork must not inherit a summary containing later turns.
     if (end === rec.messages.length && rec.contextMessages) {
       forked.contextMessages = structuredClone(rec.contextMessages);

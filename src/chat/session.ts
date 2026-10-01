@@ -15,7 +15,7 @@ import {
   type LlmMessage
 } from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
-import type { ChatContextActivity, ChatContextState, ChatMemoryCreations, ChatPlanFinal, ChatToolProcess, ChatToolResultDisplay, ChatTurnEnd, ChatTurnPreparation, ChatUserMessage } from "../ui/messaging.js";
+import type { ChatContextActivity, ChatContextState, ChatMemoryCreations, ChatPlanFinal, ChatPlanningState, ChatToolProcess, ChatToolResultDisplay, ChatTurnEnd, ChatTurnPreparation, ChatUserMessage } from "../ui/messaging.js";
 import { createFeatures } from "../build/runtime.js";
 import type { FeatureRuntime, FeatureResultUpdate } from "../build/contracts.js";
 import { loadRootAgentsMd } from "../llm/agentsMd.js";
@@ -86,6 +86,7 @@ export type UiEvent =
   | { kind: "fileChanges"; messageId: string; changes: FileChangeSummary[] }
   | { kind: "summary"; messageId: string; text: string }
   | ChatPlanFinal
+  | ChatPlanningState
   | { kind: "abort"; reason: string }
   | { kind: "notice"; text: string }
   | ChatTurnEnd
@@ -396,10 +397,35 @@ export class ChatSession {
     void this.saveRecord();
   }
 
-  resolvePlan(messageTs: number, mode: "act" | "plan"): boolean {
-    if (this.disposed || this.activeTurn || this.record.pendingPlanMessageTs !== messageTs) return false;
+  isPlanning(): boolean {
+    return this.record.planning === true || this.record.pendingPlanMessageTs !== undefined;
+  }
+
+  private emitPlanningState(): void {
+    this.emit({ kind: "planningState", active: this.isPlanning(), pendingPlanMessageTs: this.record.pendingPlanMessageTs });
+  }
+
+  resolvePlan(messageTs: number | undefined, mode: "act" | "plan"): boolean {
+    if (this.disposed || this.activeTurn || !this.isPlanning() || this.record.pendingPlanMessageTs !== messageTs) return false;
+    if (mode === "act" && messageTs === undefined) return false;
     delete this.record.pendingPlanMessageTs;
+    if (mode === "act") delete this.record.planning;
+    else this.record.planning = true;
     this.setMode(mode);
+    this.emitPlanningState();
+    return true;
+  }
+
+  async cancelPlanning(messageTs?: number): Promise<boolean> {
+    if (this.disposed || !this.isPlanning()) return false;
+    if (messageTs !== undefined && (this.activeTurn || this.record.pendingPlanMessageTs !== messageTs)) return false;
+    this.cancel();
+    await this.activeTurn?.catch(() => undefined);
+    delete this.record.pendingPlanMessageTs;
+    delete this.record.planning;
+    this.setMode("act");
+    this.emitPlanningState();
+    await this.saveRecord();
     return true;
   }
 
@@ -553,7 +579,7 @@ export class ChatSession {
 
   async sendUserMessage(text: string, attachments: ChatAttachment[] = [], mode: ChatMode = this.record.mode): Promise<void> {
     if (this.disposed) return;
-    if (this.record.pendingPlanMessageTs !== undefined && mode !== "plan") {
+    if (this.isPlanning() && mode !== "plan") {
       this.emit({ kind: "notice", text: "Accept the plan to switch to Act mode, or suggest changes to continue in Plan mode." });
       return;
     }
@@ -566,6 +592,10 @@ export class ChatSession {
       mode,
       reasoningEffort: this.record.reasoningEffort
     };
+    if (mode === "plan") {
+      this.record.planning = true;
+      this.emitPlanningState();
+    }
     const turn = this.runForegroundTurn((ready, waitingForMemory) =>
       this.sendUserMessageLocked(text, attachments.slice(0, MAX_ATTACHMENTS_PER_MESSAGE), ready, waitingForMemory));
     this.activeTurn = turn;
@@ -582,7 +612,7 @@ export class ChatSession {
 
   async editUserMessage(messageTs: number, text: string, removeAttachmentIds: string[] = [], mode: ChatMode = this.record.mode): Promise<void> {
     if (this.disposed) return;
-    if (this.record.pendingPlanMessageTs !== undefined) mode = "plan";
+    if (this.isPlanning()) mode = "plan";
     if (this.activeTurn) {
       this.emit({ kind: "notice", text: "Wait for the current response to finish before editing an earlier message." });
       return;
@@ -686,6 +716,7 @@ export class ChatSession {
     edited.content = text;
     edited.mode = this.turnMode();
     delete this.record.pendingPlanMessageTs;
+    if (this.turnMode() === "plan") this.record.planning = true;
     if (removeAttachmentIds.length && edited.attachments) {
       const removed = new Set(removeAttachmentIds);
       const retained = edited.attachments.filter(attachment => !removed.has(attachment.id));

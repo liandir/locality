@@ -792,6 +792,44 @@ describe("ChatSession", () => {
     }
   });
 
+  it.each(["pending", "incomplete"] as const)("persists cancellation of %s planning without accepting or implementing it", async outcome => {
+    const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-cancel-plan-"));
+    const { ChatSession } = await import("../src/chat/session.js");
+    const { ChatStorage } = await import("../src/chat/storage.js");
+    mocks.settings.toolCallingMode = "native";
+    mocks.streamChat.mockImplementation(async function* () {
+      if (outcome === "pending") yield { kind: "text", text: "The plan" };
+    });
+    const storage = new ChatStorage(ws, path.join(ws, "chats"));
+    const record = storage.newRecord("native");
+    const events: UiEvent[] = [];
+    let session = new ChatSession({ storage, workspaceRoot: ws, record, emit: event => events.push(event) });
+    try {
+      await session.sendUserMessage("Plan this", [], "plan");
+      await session.shutdown();
+      const loaded = (await storage.load(record.id))!;
+      session = new ChatSession({ storage, workspaceRoot: ws, record: loaded, emit: event => events.push(event) });
+      expect(session.isPlanning()).toBe(true);
+      if (outcome === "pending") {
+        expect(await session.cancelPlanning(loaded.pendingPlanMessageTs! - 1)).toBe(false);
+        expect(session.isPlanning()).toBe(true);
+      }
+      expect(await session.cancelPlanning(loaded.pendingPlanMessageTs)).toBe(true);
+      expect(session.isPlanning()).toBe(false);
+      expect(loaded.mode).toBe("act");
+      expect(loaded.messages.filter(message => message.role === "user").map(message => message.content)).toEqual(["Plan this"]);
+      expect(mocks.streamChat).toHaveBeenCalledOnce();
+      expect(events).toContainEqual({ kind: "planningState", active: false, pendingPlanMessageTs: undefined });
+      const saved = (await storage.load(record.id))!;
+      expect(saved.pendingPlanMessageTs).toBeUndefined();
+      expect(saved.planning).toBeUndefined();
+      expect(await session.cancelPlanning()).toBe(false);
+    } finally {
+      await session.shutdown();
+      await fs.rm(ws, { recursive: true, force: true });
+    }
+  });
+
   it("persists successful file-creation metadata for restored tool labels", async () => {
     const ws = await fs.mkdtemp(path.join(os.tmpdir(), "locality-session-"));
     mocks.settings.toolCallingMode = "native";

@@ -221,7 +221,7 @@ interface Message {
 
 type ComposerDecision =
   | { kind: "tool"; tool: ToolCard }
-  | { kind: "plan"; messageTs: number };
+  | { kind: "plan"; messageTs?: number };
 
 interface CompactActivity {
   id: string;
@@ -268,6 +268,7 @@ interface State {
   savedScrollTop: number;
   scrollDownOpacity: number;
   pendingPlanMessageTs?: number;
+  planning: boolean;
   compactAvailable: boolean;
   compactCurrentMessages: number;
   compactMinMessages: number;
@@ -339,6 +340,7 @@ const state: State = {
   savedScrollTop: 0,
   scrollDownOpacity: 1,
   pendingPlanMessageTs: undefined,
+  planning: false,
   compactAvailable: false,
   compactCurrentMessages: 0,
   compactMinMessages: 6,
@@ -2164,7 +2166,7 @@ function findPendingComposerDecision(): ComposerDecision | undefined {
       }
     }
   }
-  if (state.pendingPlanMessageTs !== undefined && !state.busy) {
+  if (state.planning && !state.busy) {
     return { kind: "plan", messageTs: state.pendingPlanMessageTs };
   }
   return undefined;
@@ -2226,31 +2228,39 @@ function renderToolApprovalComposer(tc: ToolCard): string {
   </div>`;
 }
 
-function renderPlanApprovalComposer(messageTs: number): string {
+function renderPlanApprovalComposer(messageTs?: number): string {
   return `<div class="approval-composer question-composer">
     <div class="approval-summary question-summary">
       <span class="tool-icon" aria-hidden="true">${scrollIcon()}</span>
-      <div class="assistant-markdown question-markdown"><p>Accept this plan? Accepting switches to Act mode and starts implementation. Suggest changes below to stay in Plan mode.</p></div>
+      <div class="assistant-markdown question-markdown"><p>${messageTs === undefined ? "Planning is paused." : "Accept this plan?"} Accepting switches to Act mode and starts implementation. Request changes to keep planning, or cancel planning to release queued messages.</p></div>
     </div>
     <div class="question-options">
-      <button class="question-option" type="button" data-accept-plan="${messageTs}">Accept plan and switch to Act</button>
+      <button class="question-option" type="button" data-accept-plan="${messageTs ?? ""}"${messageTs === undefined ? " disabled" : ""}>Accept plan</button>
     </div>
-    <div class="question-other">
-      <textarea id="questionOther" class="question-other-input" rows="1" placeholder="Suggest changes (stays in Plan mode)…" aria-label="Suggest changes to the plan"></textarea>
-      <button class="question-submit" type="button" data-plan-changes="${messageTs}" data-tip="Suggest changes in Plan mode" aria-label="Suggest changes in Plan mode" disabled>${sendIcon()}</button>
+    <div class="question-other plan-feedback">
+      <textarea id="questionOther" class="question-other-input" rows="2" placeholder="Describe the changes (stays in Plan mode)…" aria-label="Suggest changes to the plan"></textarea>
+    </div>
+    <div class="plan-decision-actions">
+      <button class="question-option" type="button" data-plan-changes="${messageTs ?? ""}" disabled>Request changes</button>
+      <button class="question-option" type="button" data-cancel-planning="${messageTs ?? ""}">Cancel planning</button>
     </div>
   </div>`;
 }
 
-function submitPlanResponse(messageTs: number, feedback?: string): void {
-  if (state.busy || state.pendingPlanMessageTs !== messageTs || (feedback !== undefined && !feedback.trim())) return;
+function submitPlanResponse(messageTs: number | undefined, feedback?: string): void {
+  if (state.busy || !state.planning || state.pendingPlanMessageTs !== messageTs || (feedback !== undefined && !feedback.trim())) return;
+  if (feedback === undefined && messageTs === undefined) return;
   state.mode = feedback === undefined ? "act" : "plan";
   state.busy = true;
   state.serverPending = "server";
   state.questionDraft = "";
-  if (feedback === undefined) send({ type: "acceptPlan", messageTs });
+  if (feedback === undefined) send({ type: "acceptPlan", messageTs: messageTs! });
   else send({ type: "revisePlan", messageTs, text: feedback.trim() });
   render();
+}
+
+function planTimestamp(value: string | undefined): number | undefined {
+  return value ? Number(value) : undefined;
 }
 
 function updateContextPill(): void {
@@ -3183,7 +3193,7 @@ function bindOnce(): void {
     const submitBtn = root.querySelector("[data-answer-submit], [data-plan-changes]") as HTMLButtonElement | null;
     const toolId = submitBtn?.dataset.answerSubmit;
     if (toolId) submitQuestionAnswer(toolId, state.questionDraft.trim());
-    else if (submitBtn?.dataset.planChanges) submitPlanResponse(Number(submitBtn.dataset.planChanges), state.questionDraft);
+    else if (submitBtn?.hasAttribute("data-plan-changes")) submitPlanResponse(planTimestamp(submitBtn.dataset.planChanges), state.questionDraft);
   });
   installTooltips();
   window.addEventListener("resize", () => {
@@ -3465,6 +3475,7 @@ function bindOnce(): void {
       const answerSubmit = target.closest("[data-answer-submit]") as HTMLElement | null;
       const acceptPlan = target.closest("[data-accept-plan]") as HTMLElement | null;
       const planChanges = target.closest("[data-plan-changes]") as HTMLElement | null;
+      const cancelPlanning = target.closest("[data-cancel-planning]") as HTMLElement | null;
       if (openFile) {
         e.preventDefault();
         const lineAttr = openFile.dataset.openLine;
@@ -3501,9 +3512,14 @@ function bindOnce(): void {
         if (answer) submitQuestionAnswer(answerSubmit.dataset.answerSubmit!, answer);
       }
       else if (acceptPlan) {
-        submitPlanResponse(Number(acceptPlan.dataset.acceptPlan));
+        submitPlanResponse(planTimestamp(acceptPlan.dataset.acceptPlan));
       } else if (planChanges) {
-        submitPlanResponse(Number(planChanges.dataset.planChanges), state.questionDraft);
+        submitPlanResponse(planTimestamp(planChanges.dataset.planChanges), state.questionDraft);
+      } else if (cancelPlanning && !state.busy) {
+        state.busy = true;
+        state.questionDraft = "";
+        send({ type: "cancelPlanning", messageTs: planTimestamp(cancelPlanning.dataset.cancelPlanning) });
+        render();
       }
     }
   });
@@ -4079,6 +4095,7 @@ function circleIcon(ratio: number): string {
 
 function loadFromRecord(rec: ChatRecord): void {
   state.pendingPlanMessageTs = rec.pendingPlanMessageTs;
+  state.planning = rec.planning === true || rec.pendingPlanMessageTs !== undefined;
   if (state.pendingPlanMessageTs !== undefined) {
     state.mode = "plan";
     state.chatModeMenuOpen = false;
@@ -4322,6 +4339,7 @@ function handleHostMessage(msg: ExtToChat): void {
       state.draft = "";
       state.questionDraft = "";
       state.pendingPlanMessageTs = undefined;
+      state.planning = false;
       state.memories = [];
       state.memoryCreations = [];
       closeImagePreview(false);
@@ -4588,11 +4606,23 @@ function handleHostMessage(msg: ExtToChat): void {
       render();
       break;
     }
+    case "planningState": {
+      state.planning = msg.active;
+      state.pendingPlanMessageTs = msg.pendingPlanMessageTs;
+      if (!msg.active) {
+        state.busy = false;
+        state.serverPending = undefined;
+        state.questionDraft = "";
+      }
+      render();
+      break;
+    }
     case "planFinal": {
       // Plan output streams as ordinary text parts (same renderer as a normal
       // answer); the host retains the pending approval across reloads.
       const m = getOrCreateMsg(msg.messageId, "assistant");
       state.pendingPlanMessageTs = msg.messageTs;
+      state.planning = true;
       state.mode = "plan";
       state.chatModeMenuOpen = false;
       finalizeLiveThoughts(m);
@@ -4632,8 +4662,8 @@ function handleHostMessage(msg: ExtToChat): void {
       if (!target.parts.some(part => part.kind === "abort" && part.reason === msg.reason)) {
         target.parts.push({ id: nextPartId("abort"), kind: "abort", reason: msg.reason });
       }
-      state.busy = state.queuedMessages.length > 0;
-      state.serverPending = state.queuedMessages.length > 0 ? "server" : undefined;
+      state.busy = !state.planning && state.queuedMessages.length > 0;
+      state.serverPending = state.busy ? "server" : undefined;
       render();
       break;
     }
@@ -4681,8 +4711,8 @@ function handleHostMessage(msg: ExtToChat): void {
       render();
       break;
     case "turnEnd":
-      state.busy = state.queuedMessages.length > 0;
-      state.serverPending = state.queuedMessages.length > 0 ? "server" : undefined;
+      state.busy = !state.planning && state.queuedMessages.length > 0;
+      state.serverPending = state.busy ? "server" : undefined;
       for (const m of state.messages) {
         finalizeLiveThoughts(m);
         if (m.id === msg.messageId) m.recordTs = msg.messageTs;

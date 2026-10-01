@@ -29,6 +29,7 @@ vi.mock("../src/chat/session.js", () => ({
     sentModes: ChatMode[] = [];
     private finishTurn?: () => void;
     private active = false;
+    private turn?: Promise<void>;
     emit: (event: UiEvent) => void;
     cancel = vi.fn(() => this.finish());
     shutdown = vi.fn(async () => { this.cancel(); });
@@ -41,19 +42,35 @@ vi.mock("../src/chat/session.js", () => ({
     emitLoaded() { this.emit({ kind: "chatLoaded", record: this.args.record }); }
     refreshMemoryVisibility() {}
     isTurnActive() { return this.active; }
+    isPlanning() { return this.args.record.planning === true || this.args.record.pendingPlanMessageTs !== undefined; }
     setMode(mode: ChatMode) {
       if (this.args.record.pendingPlanMessageTs !== undefined) mode = "plan";
       this.args.record.mode = mode;
       this.emit({ kind: "chatModeChanged", mode });
     }
-    resolvePlan(messageTs: number, mode: "act" | "plan") {
-      if (this.active || this.args.record.pendingPlanMessageTs !== messageTs) return false;
+    resolvePlan(messageTs: number | undefined, mode: "act" | "plan") {
+      if (this.active || !this.isPlanning() || this.args.record.pendingPlanMessageTs !== messageTs) return false;
+      if (mode === "act" && messageTs === undefined) return false;
       delete this.args.record.pendingPlanMessageTs;
+      if (mode === "act") delete this.args.record.planning;
+      else this.args.record.planning = true;
       this.setMode(mode);
+      this.emit({ kind: "planningState", active: this.isPlanning() });
+      return true;
+    }
+    async cancelPlanning(messageTs?: number) {
+      if (!this.isPlanning() || (messageTs !== undefined && (this.active || this.args.record.pendingPlanMessageTs !== messageTs))) return false;
+      this.cancel();
+      await this.turn;
+      delete this.args.record.planning;
+      delete this.args.record.pendingPlanMessageTs;
+      this.setMode("act");
+      this.emit({ kind: "planningState", active: false });
       return true;
     }
     finishPlan(messageTs: number) {
       this.args.record.pendingPlanMessageTs = messageTs;
+      this.args.record.planning = true;
       this.setMode("plan");
       this.emit({ kind: "planFinal", messageId: "plan", messageTs, markdown: "The plan" });
       this.finish();
@@ -62,8 +79,10 @@ vi.mock("../src/chat/session.js", () => ({
       this.active = true;
       this.sent.push(text);
       this.sentModes.push(mode);
+      if (mode === "plan") this.args.record.planning = true;
       this.emit({ kind: "turnPreparing", reason: "server" });
-      await new Promise<void>(resolve => { this.finishTurn = resolve; });
+      this.turn = new Promise<void>(resolve => { this.finishTurn = resolve; });
+      await this.turn;
       this.active = false;
       this.emit({ kind: "turnEnd", messageId: this.args.record.id });
     }
@@ -216,12 +235,12 @@ describe("independent chat tabs", () => {
   it("keeps the submitted mode when a concurrent send becomes queued", async () => {
     const { provider, send } = setup();
     provider.openChat(record("a"));
-    const turn = send({ type: "send", text: "First", mode: "plan" });
+    const turn = send({ type: "send", text: "First", mode: "act" });
     await send({ type: "send", text: "Next", mode: "review" });
     await send({ type: "setChatMode", mode: "act" });
     const a = mocks.sessions.get("a")!;
     a.finish();
-    await vi.waitFor(() => expect(a.sentModes).toEqual(["plan", "review"]));
+    await vi.waitFor(() => expect(a.sentModes).toEqual(["act", "review"]));
     a.finish();
     await turn;
   });
@@ -256,6 +275,69 @@ describe("independent chat tabs", () => {
     }
     await next;
     expect(provider.getCurrentRecord()?.pendingPlanMessageTs).toBe(response === "acceptPlan" ? undefined : 20);
+  });
+
+  it.each(["acceptPlan", "cancelPlanning"] as const)("holds the queue across every planning revision until %s", async action => {
+    const { provider, send, posted } = setup();
+    provider.openChat(record("a"));
+    const first = send({ type: "send", text: "Plan the first task", mode: "plan" });
+    await send({ type: "queueMessage", id: "next", text: "Independent task", mode: "act" });
+    const a = mocks.sessions.get("a")!;
+    a.finishPlan(10);
+    await first;
+    for (const messageTs of [10, 20]) {
+      const revision = send({ type: "revisePlan", messageTs, text: `Revise ${messageTs}` });
+      expect(a.sent).not.toContain("Independent task");
+      a.finishPlan(messageTs + 10);
+      await revision;
+      expect(a.sent).not.toContain("Independent task");
+      expect(posted.filter(message => "type" in message && message.type === "messageQueue").at(-1)).toMatchObject({
+        messages: [{ id: "next", text: "Independent task", mode: "act" }]
+      });
+    }
+    await send({ type: "cancelPlanning", messageTs: 20 });
+    expect(a.sent).not.toContain("Independent task");
+    const resolved = send({ type: action, messageTs: 30 });
+    if (action === "acceptPlan") {
+      expect(a.sent.at(-1)).toBe("I accept your plan. Please implement.");
+      a.finish();
+    }
+    await vi.waitFor(() => expect(a.sent.at(-1)).toBe("Independent task"));
+    expect(a.sentModes.at(-1)).toBe("act");
+    a.finish();
+    await resolved;
+    expect(a.sent.filter(text => text === "Independent task")).toHaveLength(1);
+    if (action === "cancelPlanning") expect(a.sent).not.toContain("I accept your plan. Please implement.");
+  });
+
+  it("holds queued messages after an incomplete revision and releases them on cancellation", async () => {
+    const { provider, send } = setup();
+    provider.openChat(record("a"));
+    const first = send({ type: "send", text: "Plan it", mode: "plan" });
+    await send({ type: "queueMessage", id: "next", text: "Next task", mode: "review" });
+    const a = mocks.sessions.get("a")!;
+    a.finishPlan(10);
+    await first;
+    const revision = send({ type: "revisePlan", messageTs: 10, text: "Revise it" });
+    a.finish();
+    await revision;
+    expect(a.sent).toEqual(["Plan it", "Revise it"]);
+    await send({ type: "cancelPlanning" });
+    await vi.waitFor(() => expect(a.sent).toEqual(["Plan it", "Revise it", "Next task"]));
+    a.finish();
+  });
+
+  it("releases queued messages when the user stops an active planning turn", async () => {
+    const { provider, send } = setup();
+    provider.openChat(record("a"));
+    const first = send({ type: "send", text: "Plan it", mode: "plan" });
+    await send({ type: "queueMessage", id: "next", text: "Next task", mode: "review" });
+    const a = mocks.sessions.get("a")!;
+    await send({ type: "cancel" });
+    await vi.waitFor(() => expect(a.sent).toEqual(["Plan it", "Next task"]));
+    expect(a.sentModes).toEqual(["plan", "review"]);
+    a.finish();
+    await first;
   });
 
   it("keeps a closed tab running, retains its draft, and reopens the same session", async () => {

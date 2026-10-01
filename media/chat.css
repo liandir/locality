@@ -706,6 +706,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   transition: background 0.12s, border-color 0.12s;
 }
 .question-option:hover, .question-option:focus-visible { background: var(--surface-fill-strong); border-color: transparent; }
+.question-option:disabled { opacity: 0.5; cursor: default; }
+.plan-decision-actions { display: flex; gap: 8px; }
+.plan-decision-actions .question-option { flex: 1; min-width: 0; text-align: center; }
+.plan-feedback .question-other-input { padding: 10px 12px; }
 .question-other { position: relative; }
 .question-other-input {
   display: block; width: 100%; min-width: 0; resize: vertical; min-height: 54px; max-height: 160px;

@@ -29,10 +29,13 @@ describe("ChatStorage", () => {
       { role: "assistant", content: "The plan", ts: 4 }
     ];
     rec.pendingPlanMessageTs = 4;
+    rec.planning = true;
     const full = await storage.fork(rec);
     expect((await storage.load(full.id))?.pendingPlanMessageTs).toBe(4);
+    expect((await storage.load(full.id))?.planning).toBe(true);
     const earlier = await storage.fork(rec, 1);
     expect((await storage.load(earlier.id))?.pendingPlanMessageTs).toBeUndefined();
+    expect((await storage.load(earlier.id))?.planning).toBeUndefined();
   });
 
   it("retains message modes on reload and fork without guessing modes for older messages", async () => {

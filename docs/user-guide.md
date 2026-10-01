@@ -164,15 +164,20 @@ Editing and resending a previously sent message uses the current composer mode.
 
 After each completed Plan response, the approval field asks how to continue:
 
-- **Accept plan and switch to Act** sends “I accept your plan. Please implement.”
+- **Accept plan** switches to Act and sends “I accept your plan. Please implement.”
   as an Act message, with the Act icon, and starts implementation in Act mode.
-- **Suggest changes** lets you type feedback directly in the approval field.
-  Submit it with Enter or the send button; Shift+Enter adds a new line. Your
+- **Request changes** submits the feedback you type directly in the approval field.
+  Click the button or press Enter; Shift+Enter adds a new line. Your
   feedback appears as a Plan message, and the revised plan needs acceptance again.
+- **Cancel planning** ends planning without implementing the plan and releases
+  queued messages. The composer returns to Act mode.
 
-The chat stays in Plan mode and queued work pauses until you respond. Pending
-approval survives reopening the chat. The mode selector remains in Plan until
-acceptance; submitting revisions keeps the same read-only restrictions.
+Queued messages wait through the entire planning exchange, including all change
+requests. Accepting the plan runs its Act implementation turn first, then resumes
+the queue. Cancelling planning or stopping an active planning turn resumes the
+queue without sending an acceptance message. Queued messages retain their
+original modes and order. Planning and pending approval survive reopening the
+chat; submitting revisions keeps the same read-only restrictions.
 
 Use plan mode for anything non-trivial. It gives you a chance to redirect
 before files are touched.
