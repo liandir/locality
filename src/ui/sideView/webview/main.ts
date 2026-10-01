@@ -159,7 +159,7 @@ function renderChats(): string {
         <h3>Chats</h3>
         ${chats.length === 0 ? `<p class="empty-state">${query ? "No matching chats." : "No chats yet."}</p>` :
           `<ul class="chat-list">${chats.map(c => renderChatEntry(c, memories.get(c.id), "recent")).join("")}</ul>`}
-        <p class="setting-help">Memories update after responses. Edited memories are preserved.</p>
+        <p class="setting-help">Memories update after responses when Use workspace memories is enabled. Edited memories are preserved.</p>
         ${state.memoryError ? `<p class="memory-error" role="alert">${esc(state.memoryError)}</p>` : ""}
         ${busy ? '<button id="cancelMemories" class="wide-button">Cancel generation</button>' : ""}
         <button id="summarizeMemories" class="wide-button memory-generate icon-label">${cloudIcon()}<span>Re-generate all memories</span></button>
@@ -172,7 +172,7 @@ function renderChats(): string {
 function renderMemorySettings(): string {
   return `<div class="memory-settings">
     ${switchControl("memoryEnabled", "Use workspace memories", state.settings.memoryEnabled === true)}
-    <p class="setting-help">Let the agent search and recall active memories from this workspace. Summaries are generated and managed in Recent Chats.</p>
+    <p class="setting-help">Let the agent search and recall active memories from this workspace. Memories are created or updated only if this is enabled when an Act or Review response finishes. Manage memories in Recent Chats.</p>
     <label class="field-label" for="memoryMaxCount">Maximum search results</label>
     <input id="memoryMaxCount" type="number" min="1" max="${MAX_MEMORY_COUNT}" step="1" value="${esc(String(state.settings.memoryMaxCount ?? DEFAULT_MEMORY_MAX_COUNT))}" />
     <p class="setting-help">Return up to 10 matches per search by default. The agent chooses which memories to recall.</p>

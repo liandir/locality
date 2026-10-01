@@ -367,7 +367,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (event.kind === "turnEnd" || event.kind === "abort") {
           runtime.running = false;
           this.pushTabs();
-          if (event.kind === "turnEnd" && event.messageTs !== undefined && (event.mode === "act" || event.mode === "review")) {
+          // Decide from the current workspace setting when the answer finishes,
+          // so toggles during a running turn apply to both creation and updates.
+          if (event.kind === "turnEnd" && event.messageTs !== undefined
+            && (event.mode === "act" || event.mode === "review") && readSettings().memoryEnabled) {
             this.memory?.enqueue(rec.id, false, event.messageTs);
           }
         }

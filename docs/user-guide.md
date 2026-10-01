@@ -375,10 +375,16 @@ trash icon. Deleting cannot be undone.
 Enable **Settings → Workspace memory → Use workspace memories** to let the
 agent search and recall active summaries from other chats in the same workspace. It is off by
 default and is stored in workspace settings (`locality.memoryEnabled`);
-user-level activation is ignored. This switch controls whether memory tools are available. Generation and editing remain available when it is off.
+user-level activation is ignored. This switch controls memory tool availability
+and automatic memory creation and updates. Manual generation and editing remain
+available when it is off.
 
-After a final response in **Act** or **Review** mode, the harness queues a short
-memory summary using the configured local model. **Plan** responses and plan
+After a final response in **Act** or **Review** mode, the harness checks the current
+workspace switch and queues a short memory summary only if it is enabled. Turning
+the switch off during a response prevents that turn from creating or updating a
+memory; turning it on before the response finishes allows it. This decision is
+made at turn completion, and skipped turns are not queued for later generation.
+Summaries use the configured local model. **Plan** responses and plan
 revisions do not create or update memories automatically. After accepting a
 plan, memory generation waits for the Act implementation response to finish.
 New generated memories are active automatically; existing

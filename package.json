@@ -231,7 +231,7 @@
           "type": "boolean",
           "default": false,
           "scope": "window",
-          "description": "Enable search_memories and recall_memory for active summaries from other chats in this workspace. Summary generation and editing remain available when off. Enable in workspace settings; user-level values are ignored."
+          "description": "Enable search_memories and recall_memory for active summaries from other chats in this workspace. Automatic memory creation and updates require this setting to be enabled when an Act or Review response finishes. Manual generation and editing remain available when off. Enable in workspace settings; user-level values are ignored."
         },
         "locality.memoryMaxCount": {
           "type": "integer",

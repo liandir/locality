@@ -341,13 +341,13 @@ describe("memory generation", () => {
     expect((await storage.load(rec.id))!.memory!.text).toBe("Parser uses exact revisions. Verified by tests.");
   });
 
-  it("generates queued summaries when context loading is disabled", async () => {
+  it("finishes summaries already queued while workspace memories were enabled", async () => {
     const rec = await chat(); memory.enqueue(rec.id);
     mocks.settings.memoryEnabled = false; memory.settingsChanged();
     await generated(rec.id);
     expect(mocks.complete).toHaveBeenCalledOnce();
   });
-  it("does not interrupt active generation when context loading is disabled", async () => {
+  it("does not revisit turn-completion eligibility during active generation", async () => {
     const rec = await chat();
     let finish!: (text: string) => void;
     mocks.complete.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));

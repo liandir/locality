@@ -7,7 +7,7 @@ import type { WorkspaceMemory } from "../src/chat/workspaceMemory.js";
 import type { UiEvent } from "../src/chat/session.js";
 import type { ChatToExt, ExtToChat } from "../src/ui/messaging.js";
 
-const mocks = vi.hoisted(() => ({ sessions: new Map<string, FakeSession>(), input: vi.fn(), picker: vi.fn(), metadata: vi.fn(), settings: { reasoningEfforts: {}, endpoint: "http://127.0.0.1:8080", model: "model-a" } }));
+const mocks = vi.hoisted(() => ({ sessions: new Map<string, FakeSession>(), input: vi.fn(), picker: vi.fn(), metadata: vi.fn(), settings: { reasoningEfforts: {}, endpoint: "http://127.0.0.1:8080", model: "model-a", memoryEnabled: true } }));
 vi.mock("vscode", () => ({
   commands: { executeCommand: vi.fn() },
   window: { showInputBox: mocks.input, showOpenDialog: mocks.picker },
@@ -121,6 +121,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.settings.model = "model-a";
   mocks.settings.reasoningEfforts = {};
+  mocks.settings.memoryEnabled = true;
   mocks.metadata.mockReset().mockResolvedValue({ modelAlias: "model-a", contextSize: 32768, supportsVision: false });
 });
 
@@ -168,6 +169,38 @@ describe("reasoning effort from Settings", () => {
     await provider.setReasoningEffort("effort:xhigh");
     expect(provider.getCurrentRecord()?.reasoningEffort).toBe("default");
     expect(workspaceState.update).toHaveBeenCalledWith(WORKSPACE_REASONING_EFFORT_KEY, "default");
+  });
+});
+
+describe.each(["act", "review"] as const)("automatic %s memories", mode => {
+  it.each([
+    { startEnabled: true, endEnabled: false },
+    { startEnabled: false, endEnabled: false },
+    { startEnabled: false, endEnabled: true },
+    { startEnabled: true, endEnabled: true }
+  ])("uses the setting at turn completion (start=$startEnabled, end=$endEnabled)", ({ startEnabled, endEnabled }) => {
+    mocks.settings.memoryEnabled = startEnabled;
+    const memory = { enqueue: vi.fn(), creations: vi.fn().mockResolvedValue([]) };
+    const { provider } = setup(memory as unknown as WorkspaceMemory);
+    provider.openChat(record("a"));
+    const session = mocks.sessions.get("a")!;
+    session.emit({ kind: "turnPreparing", reason: "server" });
+    session.emit({ kind: "text", messageId: "answer-a", delta: "Working on the request" });
+    expect(memory.enqueue).not.toHaveBeenCalled();
+
+    // Settings and the selected tab can change while the model is responding.
+    provider.openChat(record("b"));
+    mocks.settings.memoryEnabled = endEnabled;
+    provider.pushSettings();
+    expect(memory.enqueue).not.toHaveBeenCalled();
+    session.emit({ kind: "turnEnd", messageId: "answer-a", mode, messageTs: 2 });
+    if (endEnabled) expect(memory.enqueue).toHaveBeenCalledExactlyOnceWith("a", false, 2);
+    else expect(memory.enqueue).not.toHaveBeenCalled();
+
+    // Re-enabling afterward must not schedule a skipped turn retroactively.
+    mocks.settings.memoryEnabled = true;
+    provider.pushSettings();
+    expect(memory.enqueue).toHaveBeenCalledTimes(endEnabled ? 1 : 0);
   });
 });
 
