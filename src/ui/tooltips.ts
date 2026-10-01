@@ -35,7 +35,7 @@ export function installTooltips(): void {
   };
   const refresh = (): void => {
     if (!target || tooltip.hidden) return;
-    if (!target.isConnected || !target.getClientRects().length || target.matches('[aria-haspopup="menu"][aria-expanded="true"]')) {
+    if (!target.isConnected || !target.getClientRects().length || target.closest("[data-no-tooltip]") || target.matches('[aria-haspopup="menu"][aria-expanded="true"]')) {
       hide();
       return;
     }
@@ -62,8 +62,10 @@ export function installTooltips(): void {
       refresh();
     }, TOOLTIP_DELAY_MS);
   };
-  const owner = (event: Event): HTMLElement | null =>
-    event.target instanceof Element ? event.target.closest<HTMLElement>("[data-tip], button") : null;
+  const owner = (event: Event): HTMLElement | null => {
+    if (!(event.target instanceof Element) || event.target.closest("[data-no-tooltip]")) return null;
+    return event.target.closest<HTMLElement>("[data-tip], button");
+  };
   document.addEventListener("pointerover", event => {
     const element = owner(event);
     if (element) schedule(element);
@@ -83,6 +85,6 @@ export function installTooltips(): void {
   window.addEventListener("scroll", hide, true);
   // Streaming and tab switches can replace the hovered control without pointerout.
   new MutationObserver(refresh).observe(document.getElementById("app")!, {
-    subtree: true, childList: true, attributes: true, attributeFilter: ["data-tip", "aria-label", "aria-expanded", "hidden"]
+    subtree: true, childList: true, attributes: true, attributeFilter: ["data-tip", "data-no-tooltip", "aria-label", "aria-expanded", "hidden"]
   });
 }

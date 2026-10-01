@@ -2199,7 +2199,7 @@ function renderQuestionLayout(config: {
   inputLabel: string;
   inputIcon?: string;
 }): string {
-  return `<div class="approval-composer question-composer">
+  return `<div class="approval-composer question-composer" data-no-tooltip>
     <div class="question-header">
       <span class="tool-icon" aria-hidden="true">${config.icon}</span>
       <span>${escapeHtml(config.title)}</span>
@@ -2210,10 +2210,10 @@ function renderQuestionLayout(config: {
       <div class="question-other">
         <span class="question-option-badge question-reply-icon" aria-hidden="true">${config.inputIcon ?? pencilIcon()}</span>
         <textarea id="questionOther" class="question-other-input" rows="1" placeholder="${escapeHtml(config.placeholder)}" aria-label="${escapeHtml(config.inputLabel)}"></textarea>
-        <button class="question-option-arrow question-submit" type="button" ${config.submit.attribute} data-tip="${escapeHtml(config.submit.label)}" aria-label="${escapeHtml(config.submit.label)}" disabled>${sendIcon()}</button>
+        <button class="question-option-arrow question-submit" type="button" ${config.submit.attribute} aria-label="${escapeHtml(config.submit.label)}" disabled>${sendIcon()}</button>
       </div>
       ${config.secondary ? `<div class="question-actions">
-        <button class="send-btn cancel-btn" type="button" ${config.secondary.attribute} data-tip="${escapeHtml(config.secondary.label)}" aria-label="${escapeHtml(config.secondary.label)}">${stopIcon()}</button>
+        <button class="send-btn cancel-btn" type="button" ${config.secondary.attribute} aria-label="${escapeHtml(config.secondary.label)}">${stopIcon()}</button>
       </div>` : ""}
     </div>
   </div>`;
@@ -2232,7 +2232,7 @@ function renderToolApprovalComposer(tc: ToolCard): string {
   const rejectText = isWrite ? "Reject changes and suggest changes" : "Reject";
   const autoApproveLabel = tc.category === "read" ? "reads" : isWrite ? "edits" : tc.category === "command" ? "commands" : tc.category === "search" ? "web searches" : undefined;
   const label = renderToolApprovalLabel(tc);
-  return `<div class="approval-composer">
+  return `<div class="approval-composer" data-no-tooltip>
     <div class="approval-summary">
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
       <strong>${escapeHtml(toolApprovalName(tc))}</strong>
@@ -2250,7 +2250,7 @@ function renderPlanApprovalComposer(messageTs?: number): string {
   return renderQuestionLayout({
     title: "Plan", icon: scrollIcon(),
     content: `<p>${messageTs === undefined ? "Planning is paused. " : ""}Accepting the plan switches to Act mode and starts implementation. Request changes to stay in Plan mode, or cancel planning to release queued messages.</p>`,
-    options: `<button class="question-option" type="button" data-accept-plan="${messageTs ?? ""}" data-tip="Accept plan"${messageTs === undefined ? " disabled" : ""}>
+    options: `<button class="question-option" type="button" data-accept-plan="${messageTs ?? ""}"${messageTs === undefined ? " disabled" : ""}>
       <span class="question-option-badge" aria-hidden="true">${pawnIcon()}</span>
       <span class="question-option-label">Accept plan</span>
       <span class="question-option-arrow" aria-hidden="true">${sendIcon()}</span>
