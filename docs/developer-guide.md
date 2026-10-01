@@ -38,7 +38,7 @@ npm run package:vsix
 
 Packaging audits the bundles, staged contents, and actual VSIX archives before
 placing the packages in `artifacts/`. Local filenames include the version from
-`package.json`, such as `locality-2.0.1-safe-list.vsix`.
+`package.json`, such as `locality-2.0.2-safe-list.vsix`.
 
 To package one edition during development:
 
@@ -49,7 +49,7 @@ npm run package:vsix -- --profile=safe-list
 Install the resulting package with the VS Code CLI:
 
 ```bash
-code --install-extension artifacts/locality-2.0.1-safe-list.vsix
+code --install-extension artifacts/locality-2.0.2-safe-list.vsix
 ```
 
 Alternatively, use **Extensions: Install from VSIX…** in VS Code's Command
@@ -62,13 +62,13 @@ VSIX.
 The [release workflow](../.github/workflows/release.yml) runs whenever `main` is
 updated, including when a pull request is merged. It takes the version from
 `package.json` and creates a matching tag on the exact commit it builds, such as
-`v2.0.1`. It does not increment the version automatically.
+`v2.0.2`. It does not increment the version automatically.
 
 Before merging a release PR into `main`, bump the version and commit both
 `package.json` and `package-lock.json`. For example:
 
 ```bash
-npm version 2.0.1 --no-git-tag-version
+npm version patch --no-git-tag-version
 ```
 
 Use a new stable `major.minor.patch` version for each release. The workflow
