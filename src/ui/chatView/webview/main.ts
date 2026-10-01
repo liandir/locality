@@ -1130,7 +1130,7 @@ function renderMessageActionsInnerHtml(m: Message): string {
   const mode = m.role === "user" ? renderMessageMode(m.mode) : "";
   if (actions.length === 0 && !date && !mode) return "";
   const hintClass = `message-action-hint${persistentHint ? " active" : ""}`;
-  return `${actions.join("")}${mode}${date ? `<span class="message-date">${date}</span>` : ""}<span class="${hintClass}" aria-hidden="true">${persistentHint}</span>`;
+  return `${actions.join("")}${date ? `<span class="message-date">${date}</span>` : ""}${mode}<span class="${hintClass}" aria-hidden="true">${persistentHint}</span>`;
 }
 
 function renderFileChangeSummary(parent: HTMLElement, m: Message): void {
@@ -2178,6 +2178,7 @@ function renderQuestionComposer(tc: ToolCard): string {
     .join("");
   return renderQuestionLayout({
     title: "Question", icon: questionIcon(), content: renderedQuestion, options,
+    secondary: { attribute: "data-cancel-question", label: "Cancel" },
     submit: { attribute: `data-answer-submit="${toolId}"`, label: "Send" },
     placeholder: "Or write your own response…", inputLabel: "Your answer"
   });
@@ -2203,13 +2204,13 @@ function renderQuestionLayout(config: {
     <div class="question-options">${config.options}</div>
     <div class="question-footer">
       <div class="question-other">
-        <span class="question-reply-icon" aria-hidden="true">${pencilIcon()}</span>
+        <span class="question-option-badge question-reply-icon" aria-hidden="true">${pencilIcon()}</span>
         <textarea id="questionOther" class="question-other-input" rows="1" placeholder="${escapeHtml(config.placeholder)}" aria-label="${escapeHtml(config.inputLabel)}"></textarea>
+        <button class="question-option-arrow question-submit" type="button" ${config.submit.attribute} data-tip="${escapeHtml(config.submit.label)}" aria-label="${escapeHtml(config.submit.label)}" disabled>${sendIcon()}</button>
       </div>
-      <div class="question-actions">
-        ${config.secondary ? `<button class="send-btn cancel-btn" type="button" ${config.secondary.attribute} data-tip="${escapeHtml(config.secondary.label)}" aria-label="${escapeHtml(config.secondary.label)}">${stopIcon()}</button>` : ""}
-        <button class="send-btn" type="button" ${config.submit.attribute} data-tip="${escapeHtml(config.submit.label)}" aria-label="${escapeHtml(config.submit.label)}" disabled>${sendIcon()}</button>
-      </div>
+      ${config.secondary ? `<div class="question-actions">
+        <button class="send-btn cancel-btn" type="button" ${config.secondary.attribute} data-tip="${escapeHtml(config.secondary.label)}" aria-label="${escapeHtml(config.secondary.label)}">${stopIcon()}</button>
+      </div>` : ""}
     </div>
   </div>`;
 }
@@ -3439,6 +3440,7 @@ function bindOnce(): void {
       const reject = target.closest("[data-reject]") as HTMLElement | null;
       const answerOption = target.closest("[data-answer-option]") as HTMLElement | null;
       const answerSubmit = target.closest("[data-answer-submit]") as HTMLElement | null;
+      const cancelQuestion = target.closest("[data-cancel-question]") as HTMLElement | null;
       const acceptPlan = target.closest("[data-accept-plan]") as HTMLElement | null;
       const planChanges = target.closest("[data-plan-changes]") as HTMLElement | null;
       const cancelPlanning = target.closest("[data-cancel-planning]") as HTMLElement | null;
@@ -3476,6 +3478,10 @@ function bindOnce(): void {
       else if (answerSubmit) {
         const answer = state.questionDraft.trim();
         if (answer) submitQuestionAnswer(answerSubmit.dataset.answerSubmit!, answer);
+      }
+      else if (cancelQuestion) {
+        state.questionDraft = "";
+        send({ type: "cancel" });
       }
       else if (acceptPlan) {
         submitPlanResponse(planTimestamp(acceptPlan.dataset.acceptPlan));

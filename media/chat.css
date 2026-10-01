@@ -110,7 +110,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .message-actions { display: flex; align-items: center; gap: 1px; min-height: 24px; margin-top: -2px; }
 .msg.user .message-actions { align-self: flex-end; flex-direction: row-reverse; max-width: 90%; padding-right: 2px; }
 .msg.assistant .message-actions { align-self: flex-start; }
-.message-actions .message-mode { margin-inline-end: 7px; }
+.message-actions .message-mode { margin-inline-start: 7px; }
 .message-date { flex: 0 0 auto; margin-inline: 7px; font-variant-numeric: tabular-nums; color: var(--vscode-descriptionForeground); font-size: 0.82em; line-height: 1.35; white-space: nowrap; }
 .copy-btn { width: 28px; height: 24px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 0; border-radius: var(--control-radius); cursor: pointer; opacity: 0.72; transition: background 0.12s, color 0.12s, opacity 0.12s; }
 .copy-btn:hover { background: var(--surface-fill); color: var(--vscode-foreground); opacity: 1; }
@@ -704,20 +704,25 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .question-option:disabled { opacity: 0.5; cursor: default; }
 .question-option-badge { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 20px; height: 20px; background: var(--surface-fill); color: var(--vscode-descriptionForeground); border-radius: var(--control-radius); font-size: 0.85em; }
 .question-option-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.question-option-arrow { display: inline-flex; flex: 0 0 auto; color: var(--vscode-descriptionForeground); opacity: 0; transition: opacity 0.12s; }
+.question-option-arrow { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 20px; width: 20px; height: 20px; color: var(--vscode-descriptionForeground); opacity: 0; transition: opacity 0.12s; }
 .question-option:hover:not(:disabled) .question-option-arrow, .question-option:focus-visible:not(:disabled) .question-option-arrow { opacity: 1; }
-.question-footer { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 6px 10px; }
-.question-other { display: flex; align-items: flex-start; flex: 1 1 190px; min-width: 0; border-radius: var(--control-radius); }
-.question-other:focus-within { background: var(--surface-fill); }
-.question-reply-icon { display: inline-flex; flex: 0 0 auto; padding: 9px 0 0 7px; color: var(--vscode-descriptionForeground); }
-.question-composer .question-other-input {
-  display: block; flex: 1; width: 100%; min-width: 0; resize: none; min-height: 32px; max-height: none;
-  padding: 6px 8px; background: transparent;
+.question-footer { display: flex; flex-direction: column; gap: 10px; }
+.question-other { display: flex; align-items: flex-start; gap: 8px; width: 100%; min-width: 0; background: transparent; border: 1px solid transparent; transition: background 0.12s; }
+.question-other:hover, .question-other:focus-within { background: var(--surface-fill-strong); }
+.question-reply-icon, .question-submit { margin-top: 1px; }
+.question-composer textarea.question-other-input {
+  display: block; flex: 1; width: 100%; min-width: 0; resize: none; min-height: 22px; max-height: none;
+  padding: 0; background: transparent;
   color: var(--vscode-input-foreground); border: 1px solid transparent;
   border-radius: var(--control-radius); font: inherit; line-height: 1.4; box-sizing: border-box; outline: none;
 }
-.question-composer .question-other-input:focus { background: transparent; border-color: transparent; }
-.question-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; margin-left: auto; }
+.question-composer textarea.question-other-input:focus { background: transparent; border-color: transparent; }
+.question-submit { padding: 0; background: transparent; border: 1px solid transparent; border-radius: var(--control-radius); cursor: pointer; outline: none; }
+.question-other:hover .question-submit:not(:disabled), .question-other:focus-within .question-submit:not(:disabled) { opacity: 1; }
+.question-submit:hover:not(:disabled), .question-submit:focus-visible:not(:disabled) { background: var(--surface-fill); color: var(--vscode-foreground); }
+.question-submit:disabled { cursor: default; }
+.question-actions { display: flex; justify-content: flex-end; }
+.question-actions .cancel-btn { border-radius: var(--control-radius); }
 #sendSlot { position: absolute; right: 10px; bottom: 10px; display: inline-flex; gap: 5px; }
 .composer-attach { position: absolute; left: 10px; bottom: 13px; width: var(--icon-action-size); height: var(--icon-action-size); display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: var(--control-radius); cursor: pointer; outline: none; }
 .composer-attach svg { display: block; }
