@@ -378,6 +378,7 @@ let renderQueued = false;
 let followScrollFrame: number | undefined;
 let partSeq = 0;
 let renderedBusy: boolean | undefined;
+let composerControlPressed = false;
 let renderedScrollDown: boolean | undefined;
 let copiedMessageId: string | undefined;
 let copiedResetTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1976,14 +1977,15 @@ function updateComposer(): void {
   const sendSlot = root.querySelector("#sendSlot") as HTMLElement | null;
   if (sendSlot && renderedBusy !== state.busy) {
     const html = state.busy
-      ? `<button id="queueMessage" class="send-btn" data-tip="${state.steerWithEnter ? "Steer" : "Queue"} message" aria-label="${state.steerWithEnter ? "Steer" : "Queue"} message">${sendIcon()}</button><button id="cancel" class="send-btn cancel-btn" data-tip="Cancel" aria-label="Cancel">${stopIcon()}</button>`
-      : `<button id="send" class="send-btn" data-tip="Send" aria-label="Send">${sendIcon()}</button>`;
+      ? `<button id="queueMessage" class="send-btn"></button><button id="cancel" class="send-btn cancel-btn" data-tip="Cancel" aria-label="Cancel">${stopIcon()}</button>`
+      : `<button id="send" class="send-btn"></button>`;
     sendSlot.innerHTML = html;
     renderedBusy = state.busy;
   }
   root.querySelector(".composer-row")?.classList.toggle("busy", state.busy);
   const submitButton = root.querySelector("#send, #queueMessage") as HTMLButtonElement | null;
   if (submitButton) submitButton.disabled = state.attachmentPastePending;
+  updateComposerSubmitAction();
   const attach = root.querySelector("#attachFiles") as HTMLButtonElement | null;
   if (attach) {
     const label = state.supportsVision ? "Attach images or text files" : "Attach text files (vision unavailable)";
@@ -1998,6 +2000,17 @@ function updateComposer(): void {
   if (pendingDecision) state.chatModeMenuOpen = false;
   updateChatModeControl();
   updateScrollDownButton();
+}
+
+function updateComposerSubmitAction(focused: Element | null = document.activeElement): void {
+  const button = root.querySelector<HTMLElement>("#send, #queueMessage");
+  if (!button) return;
+  const alternate = composerControlPressed && (focused?.id === "input" || focused === button);
+  const steer = state.busy && (alternate ? !state.steerWithEnter : state.steerWithEnter);
+  const label = state.busy ? `${steer ? "Steer" : "Queue"} message` : "Send";
+  setHtml(button, steer ? steerIcon() : sendIcon());
+  if (button.dataset.tip !== label) button.dataset.tip = label;
+  if (button.getAttribute("aria-label") !== label) button.setAttribute("aria-label", label);
 }
 
 function updateScrollDownButton(): void {
@@ -2939,6 +2952,26 @@ function scrollReachesChat(body: HTMLElement, target: EventTarget | null, delta:
 }
 
 function bindOnce(): void {
+  const updateComposerControlKey = (event: KeyboardEvent | PointerEvent): void => {
+    if (composerControlPressed === event.ctrlKey) return;
+    composerControlPressed = event.ctrlKey;
+    updateComposerSubmitAction();
+  };
+  const resetComposerControlKey = (): void => {
+    composerControlPressed = false;
+    updateComposerSubmitAction();
+  };
+  document.addEventListener("keydown", updateComposerControlKey, true);
+  document.addEventListener("keyup", updateComposerControlKey, true);
+  document.addEventListener("pointerdown", updateComposerControlKey, true);
+  document.addEventListener("focusin", () => updateComposerSubmitAction());
+  document.addEventListener("focusout", event => {
+    updateComposerSubmitAction(event.relatedTarget instanceof Element ? event.relatedTarget : null);
+  });
+  window.addEventListener("blur", resetComposerControlKey);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) resetComposerControlKey();
+  });
   const tabs = root.querySelector<HTMLElement>("#chatTabs");
   tabs?.addEventListener("wheel", event => {
     if (event.ctrlKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY) || tabs.scrollWidth <= tabs.clientWidth) return;
@@ -3335,8 +3368,8 @@ function bindOnce(): void {
         send({ type: "compactNow" });
       }
     }
-    else if (target.closest("#send")) submit();
-    else if (target.closest("#queueMessage")) submit();
+    else if (target.closest("#send")) submit(e.ctrlKey);
+    else if (target.closest("#queueMessage")) submit(e.ctrlKey);
     else if (target.closest("#attachFiles")) {
       state.attachmentPastePending = true;
       render();
@@ -3835,6 +3868,12 @@ function sendIcon(): string {
   </svg>`;
 }
 
+function steerIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M12.5 13V6.5h-9M7 3 3.5 6.5 7 10"/>
+  </svg>`;
+}
+
 function paperclipIcon(): string {
   return `<svg viewBox="0 0 18 18" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <path d="M6 6.25v6.25C6 14.6 7.35 16 9.25 16s3.25-1.4 3.25-3.5V5.25C12.5 3.85 11.6 3 10.4 3S8.3 3.85 8.3 5.25v7c0 .7.4 1.1.95 1.1s.95-.4.95-1.1V6.4"/>
@@ -4141,7 +4180,6 @@ function handleHostMessage(msg: ExtToChat): void {
     if (msg.type === "settings") {
       state.mode = msg.mode;
       state.showThinking = msg.showThinking;
-      if (state.steerWithEnter !== msg.steerWithEnter) renderedBusy = undefined;
       state.steerWithEnter = msg.steerWithEnter;
       state.autoCompact = msg.autoCompact;
       state.autoCompactThresholdPercent = msg.autoCompactThresholdPercent;
