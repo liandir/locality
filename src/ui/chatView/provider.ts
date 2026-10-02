@@ -9,7 +9,7 @@ import * as fs from "node:fs/promises";
 import { ChatSession, type UiEvent } from "../../chat/session.js";
 import { ChatStorage, MAX_ATTACHMENT_BYTES, type ChatAttachment, type ChatRecord } from "../../chat/storage.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "../../chat/attachmentLimits.js";
-import type { ChatMode } from "../../chat/mode.js";
+import { normalizeChatMode, type ChatMode } from "../../chat/mode.js";
 import { readSettings, onSettingsChange } from "../../config/settings.js";
 import {
   DEFAULT_REASONING_EFFORT,
@@ -27,7 +27,8 @@ import { classifyWorkspacePath } from "./workspacePathTypes.js";
 interface ChatRuntime {
   session?: ChatSession;
   storage?: ChatStorage;
-  queuedMessages: { id: string; text: string; attachments?: ChatAttachment[] }[];
+  queuedMessages: { id: string; text: string; mode: ChatMode; attachments?: ChatAttachment[] }[];
+  planResponse?: { text: string; mode: ChatMode; attachments?: ChatAttachment[] };
   stagedAttachmentIds: Set<string>;
   pendingAttachments: Map<string, ChatAttachment>;
   messageLoopRunning: boolean;
@@ -173,17 +174,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   pushSettings(): void {
     const s = readSettings();
     void this.refreshVisionCapability();
-    const reasoningEffort = availableReasoningEffort(
-      this.session?.getRecord().reasoningEffort ?? this.workspaceReasoningEffort(),
-      s.reasoningEfforts
-    );
     if (this.memory) this.refreshMemoryVisibility();
     this.post({
       type: "settings",
       mode: this.session?.getRecord().mode ?? "act",
-      reasoningEffort,
-      reasoningEfforts: s.reasoningEfforts,
       showThinking: s.showThinking,
+      steerWithEnter: s.steerWithEnter,
       autoCompact: s.autoCompact,
       autoCompactThresholdPercent: s.autoCompactThresholdPercent,
       workspaceRoot: this.getWorkspaceRoot()
@@ -372,7 +368,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (event.kind === "turnEnd" || event.kind === "abort") {
           runtime.running = false;
           this.pushTabs();
-          if (event.kind === "turnEnd" && event.messageTs !== undefined) this.memory?.enqueue(rec.id, false, event.messageTs);
+          // Decide from the current workspace setting when the answer finishes,
+          // so toggles during a running turn apply to both creation and updates.
+          if (event.kind === "turnEnd" && event.messageTs !== undefined
+            && (event.mode === "act" || event.mode === "review") && readSettings().memoryEnabled) {
+            this.memory?.enqueue(rec.id, false, event.messageTs);
+          }
         }
         if (event.kind === "titleChanged") { this.onChatOpened(rec); this.pushTabs(); }
       }
@@ -437,7 +438,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.session?.setMode(mode);
   }
 
-  private async setReasoningEffort(effort: ReasoningEffort): Promise<void> {
+  getReasoningEffort(): ReasoningEffort {
+    return availableReasoningEffort(
+      this.session?.getRecord().reasoningEffort ?? this.workspaceReasoningEffort(),
+      readSettings().reasoningEfforts
+    );
+  }
+
+  async setReasoningEffort(effort: ReasoningEffort): Promise<void> {
     const available = availableReasoningEffort(effort, readSettings().reasoningEfforts);
     if (this.session) {
       // Apply synchronously so a message sent while workspaceState is flushing
@@ -446,10 +454,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       await this.context.workspaceState.update(WORKSPACE_REASONING_EFFORT_KEY, available);
       return;
     }
-    // New-chat construction reads this preference, so persist it before asking
-    // the extension host to create the first record.
+    // Keep the preference for the next chat without creating one from Settings.
     await this.context.workspaceState.update(WORKSPACE_REASONING_EFFORT_KEY, available);
-    await this.onCreateChat();
   }
 
   private workspaceReasoningEffort(): ReasoningEffort {
@@ -483,6 +489,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "saveDraft": this.active.draft = m.text; break;
       case "closeChatTab": this.closeTab(m.id); break;
       case "send":
+      case "steerMessage":
         this.active.draft = "";
         if (!this.session) {
           this.sessionCreationPending = true;
@@ -496,7 +503,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             this.sessionCreationPending = false;
           }
         }
-        await this.sendAndDrainQueue(this.active, m.text, this.takeStagedAttachments(m.attachmentIds));
+        {
+          const attachments = this.takeStagedAttachments(m.attachmentIds);
+          if (m.type !== "steerMessage" || !this.session?.steerUserMessage(m.text, attachments)) {
+            await this.sendAndDrainQueue(this.active, m.text, attachments, normalizeChatMode(m.mode));
+          }
+        }
         break;
       case "selectAttachment":
         await this.selectAttachment();
@@ -553,7 +565,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (this.queuedMessages.some(message => message.id === m.id)) break;
         const attachments = this.takeStagedAttachments(m.attachmentIds);
         if (!text && attachments.length === 0) break;
-        this.queuedMessages.push({ id: m.id, text, attachments: attachments.length ? attachments : undefined });
+        this.queuedMessages.push({ id: m.id, text, mode: normalizeChatMode(m.mode), attachments: attachments.length ? attachments : undefined });
         this.pushMessageQueue();
         this.drainMessageQueueIfIdle();
         break;
@@ -587,7 +599,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       case "editMessage": {
         const runtime = this.active;
-        await runtime.session?.editUserMessage(m.messageTs, m.text, m.removeAttachmentIds ?? []);
+        await runtime.session?.editUserMessage(m.messageTs, m.text, m.removeAttachmentIds ?? [], normalizeChatMode(m.mode));
         if (runtime.session && !runtime.removed) this.onChatOpened(runtime.session.getRecord());
         this.onChatListChanged();
         await this.pushRecentChats();
@@ -603,14 +615,38 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.onChatListChanged();
         break;
       }
+      case "continueChat": {
+        const runtime = this.active;
+        if (!runtime.session) break;
+        if (runtime.messageLoopRunning) { this.activateRuntime(runtime, true); break; }
+        if (await runtime.session.continueTurn(m.messageTs)) {
+          if (runtime.removed) break;
+          this.onChatOpened(runtime.session.getRecord());
+          this.onChatListChanged();
+          await this.pushRecentChats();
+          this.drainMessageQueueIfIdle(runtime);
+        } else if (runtime === this.active) this.activateRuntime(runtime, true);
+        break;
+      }
       case "openChat": await this.openChatById(m.id); break;
       case "openMemory": await this.onOpenMemory?.(m.id); break;
-      case "cancel": this.session?.cancel(); break;
-      case "approveTool": this.session?.approve(m.toolId, m.approved); break;
+      case "cancel": {
+        const runtime = this.active;
+        runtime.planResponse = undefined;
+        if (runtime.session?.isPlanning()) {
+          await runtime.session.cancelPlanning();
+          this.drainMessageQueueIfIdle(runtime);
+        } else runtime.session?.cancel();
+        break;
+      }
+      case "approveTool":
+        if (m.approved && m.autoApprove) await this.session?.approveFutureTools(m.toolId);
+        else this.session?.approve(m.toolId, m.approved);
+        break;
       case "answerQuestion": this.session?.answerQuestion(m.toolId, m.answer); break;
+      case "skipQuestion": this.session?.skipQuestion(m.toolId); break;
       case "featureAction": await this.session?.handleFeatureAction(m.id); break;
       case "setChatMode": await this.setChatMode(m.mode); break;
-      case "setReasoningEffort": await this.setReasoningEffort(m.effort); break;
       case "compactNow": await this.compactNow(); break;
       case "compactInterruptAndRun": await this.compactAfterInterrupt(); break;
       case "newChat":
@@ -627,10 +663,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.onOpenSideTab("settings");
         await vscode.commands.executeCommand("workbench.view.extension.locality");
         break;
-      case "acceptPlan": {
+      case "acceptPlan":
+      case "revisePlan": {
         const runtime = this.active;
-        runtime.session?.setMode("act");
-        await this.sendAndDrainQueue(runtime, "I accept your plan. Please implement.");
+        const mode = m.type === "acceptPlan" ? "act" : "plan";
+        const text = m.type === "acceptPlan" ? "I accept your plan. Please implement." : m.text.trim();
+        if (!text || !runtime.session?.resolvePlan(m.messageTs, mode)) {
+          if (runtime.session) this.activateRuntime(runtime, true);
+          break;
+        }
+        await this.sendAndDrainQueue(runtime, text, [], mode, true);
+        break;
+      }
+      case "cancelPlanning": {
+        const runtime = this.active;
+        if (!runtime.session) break;
+        if (await runtime.session.cancelPlanning(m.messageTs)) {
+          this.onChatOpened(runtime.session.getRecord());
+          this.onChatListChanged();
+          this.drainMessageQueueIfIdle(runtime);
+        } else this.activateRuntime(runtime, true);
         break;
       }
       case "classifyWorkspacePaths": {
@@ -666,40 +718,49 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async sendAndDrainQueue(runtime: ChatRuntime, firstMessage?: string, firstAttachments: ChatAttachment[] = []): Promise<void> {
+  private async sendAndDrainQueue(runtime: ChatRuntime, firstMessage?: string, firstAttachments: ChatAttachment[] = [], firstMode: ChatMode = "act", priority = false): Promise<void> {
     const session = runtime.session;
     if (!session || runtime.removed) return;
-    if (runtime.messageLoopRunning) {
+    const first = firstMessage !== undefined || firstAttachments.length
+      ? { text: firstMessage?.trim() ?? "", mode: firstMode, attachments: firstAttachments.length ? firstAttachments : undefined }
+      : undefined;
+    if (priority && first) runtime.planResponse = first;
+    if (runtime.messageLoopRunning || session.isTurnActive() || (session.isPlanning() && !runtime.planResponse)) {
       const text = firstMessage?.trim() ?? "";
-      if (text || firstAttachments.length) {
-        runtime.queuedMessages.push({
+      if (!priority && (text || firstAttachments.length)) {
+        const message = {
           id: `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           text,
+          mode: firstMode,
           attachments: firstAttachments.length ? firstAttachments : undefined
-        });
+        };
+        runtime.queuedMessages.push(message);
         this.pushMessageQueue(runtime);
       }
       return;
     }
     runtime.messageLoopRunning = true;
-    let pending: { text: string; attachments?: ChatAttachment[] } | undefined =
-      firstMessage !== undefined || firstAttachments.length
-        ? { text: firstMessage?.trim() ?? "", attachments: firstAttachments.length ? firstAttachments : undefined }
-        : undefined;
+    let pending: ChatRuntime["planResponse"] = priority ? undefined : first;
     try {
       while (!runtime.removed) {
+        if (session.isTurnActive()) return;
+        if (!pending && runtime.planResponse) {
+          pending = runtime.planResponse;
+          runtime.planResponse = undefined;
+        }
         if (!pending) {
+          if (session.isPlanning()) return;
           const next = runtime.queuedMessages.shift();
           this.pushMessageQueue(runtime);
-          pending = next ? { text: next.text, attachments: next.attachments } : undefined;
+          pending = next;
         }
         if (!pending || (!pending.text && !pending.attachments?.length)) return;
-        const { text, attachments = [] } = pending;
+        const { text, mode, attachments = [] } = pending;
         for (const attachment of attachments) {
           runtime.stagedAttachmentIds.delete(attachment.id);
           runtime.pendingAttachments.delete(attachment.id);
         }
-        await session.sendUserMessage(text, attachments);
+        await session.sendUserMessage(text, attachments, mode);
         pending = undefined;
         if (runtime.removed) return;
         this.onChatOpened(session.getRecord());
@@ -716,8 +777,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private drainMessageQueueIfIdle(runtime = this.active): void {
     const session = runtime.session;
-    if (runtime.removed || !session || !shouldDrainMessageQueue({
-      queueLength: runtime.queuedMessages.length,
+    if (runtime.removed || !session || (session.isPlanning() && !runtime.planResponse) || !shouldDrainMessageQueue({
+      queueLength: runtime.queuedMessages.length + (runtime.planResponse ? 1 : 0),
       messageLoopRunning: runtime.messageLoopRunning,
       sessionCreationPending: runtime.sessionCreationPending,
       turnActive: session.isTurnActive()
@@ -732,12 +793,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       messages: runtime.queuedMessages.map(message => ({
         id: message.id,
         text: message.text,
+        mode: message.mode,
         attachments: message.attachments?.map(attachment => this.toUiAttachment(attachment))
       }))
     });
   }
 
   private clearMessageQueue(runtime = this.active): void {
+    runtime.planResponse = undefined;
     const pending = [
       ...runtime.pendingAttachments.values(),
       ...runtime.queuedMessages.flatMap(message => message.attachments ?? [])

@@ -18,6 +18,57 @@ afterEach(async () => {
 });
 
 describe("ChatStorage", () => {
+  it("includes steering and the whole response when forking a user turn", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const rec = storage.newRecord("native");
+    rec.messages = [
+      { role: "user", content: "Request", mode: "act", ts: 1 },
+      { role: "assistant", content: "Initial response", ts: 2 },
+      { role: "user", content: "Guidance", steering: true, ts: 3 },
+      { role: "assistant", content: "Revised response", ts: 4 },
+      { role: "user", content: "Next turn", ts: 5 }
+    ];
+    const forked = await storage.fork(rec, 1);
+    expect(forked.messages).toEqual(rec.messages.slice(0, 4));
+    expect((await storage.load(forked.id))?.messages[2].steering).toBe(true);
+  });
+
+  it("retains pending plan approval only in forks containing that plan", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const rec = storage.newRecord("native");
+    rec.mode = "plan";
+    rec.messages = [
+      { role: "user", content: "Earlier request", mode: "act", ts: 1 },
+      { role: "assistant", content: "Earlier response", ts: 2 },
+      { role: "user", content: "Plan this", mode: "plan", ts: 3 },
+      { role: "assistant", content: "The plan", ts: 4 }
+    ];
+    rec.pendingPlanMessageTs = 4;
+    rec.planning = true;
+    const full = await storage.fork(rec);
+    expect((await storage.load(full.id))?.pendingPlanMessageTs).toBe(4);
+    expect((await storage.load(full.id))?.planning).toBe(true);
+    const earlier = await storage.fork(rec, 1);
+    expect((await storage.load(earlier.id))?.pendingPlanMessageTs).toBeUndefined();
+    expect((await storage.load(earlier.id))?.planning).toBeUndefined();
+  });
+
+  it("retains message modes on reload and fork without guessing modes for older messages", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const rec = storage.newRecord("native");
+    rec.mode = "review";
+    rec.messages = [
+      { role: "user", content: "Earlier request", ts: 1 },
+      { role: "user", content: "Plan", mode: "plan", ts: 2 },
+      { role: "user", content: "Implement", mode: "act", ts: 3 }
+    ];
+    await storage.save(rec);
+    const loaded = (await storage.load(rec.id))!;
+    expect(loaded.messages.map(message => message.mode)).toEqual([undefined, "plan", "act"]);
+    const forked = await storage.fork(loaded);
+    expect((await storage.load(forked.id))?.messages.map(message => message.mode)).toEqual([undefined, "plan", "act"]);
+  });
+
   it("imports validated images as chat-owned assets without embedding bytes in the record", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
     const rec = storage.newRecord("compat-muse-glimmer");

@@ -38,7 +38,6 @@ export function normalizeReasoningEfforts(value: unknown): ReasoningEfforts {
 
 export function reasoningEffortChoices(efforts: ReasoningEfforts): ReasoningEffortChoice[] {
   return [
-    { label: "None", effort: REASONING_NONE },
     { label: "Default", effort: REASONING_DEFAULT },
     ...Object.entries(efforts).map(([label, value]) => ({
       label,

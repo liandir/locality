@@ -1,9 +1,10 @@
 import * as vscode from "vscode";
 import { DEFAULT_SAFE_PATTERNS } from "./defaults.js";
-export const featureSettingKeys = ["safeCommandPatterns", "autoapproveSafeCommands"];
+export const featureSettingKeys = ["safeCommandPatterns", "autoapproveSafeCommands", "commandToolsEnabled"];
 export function readFeatureSettings(cfg: vscode.WorkspaceConfiguration) {
   const configured = cfg.inspect<unknown>("safeCommandPatterns")?.globalValue;
   return {
+    commandToolsEnabled: cfg.get<boolean>("commandToolsEnabled") !== false,
     safeCommandPatterns: configured === undefined ? [...DEFAULT_SAFE_PATTERNS] : configured,
     autoapproveSafeCommands: cfg.inspect<boolean>("autoapproveSafeCommands")?.globalValue === true
   };

@@ -30,6 +30,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     () => newChat(context),
     () => {
       sideProvider.refreshOpenTabs();
+      sideProvider.pushReasoningEffort();
       void sideProvider.pushChats();
       void chatProvider.pushRecentChats();
     },
@@ -44,7 +45,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     (id) => void openChatById(id),
     () => chatProvider.getTabs(),
     memory,
-    () => chatProvider.pushSettings()
+    () => chatProvider.pushSettings(),
+    {
+      get: () => chatProvider.getReasoningEffort(),
+      set: effort => chatProvider.setReasoningEffort(effort)
+    }
   );
   context.subscriptions.push(
     memory,

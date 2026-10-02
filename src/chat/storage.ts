@@ -37,6 +37,12 @@ export interface ChatAttachment {
 export interface ChatMessage {
   role: Role;
   content: string;
+  /** Display-only terminal response; never included in model context. */
+  interruption?: { reason: string; mode: ChatMode; reasoningEffort: ReasoningEffort };
+  /** Mode selected when a user message was submitted; absent in older history. */
+  mode?: ChatMode;
+  /** User guidance injected into the current turn without changing its mode. */
+  steering?: boolean;
   /** Native model reasoning associated with this assistant response. */
   reasoningContent?: string;
   /** Parser events captured during this assistant turn (text, thought, toolCall, summary). */
@@ -76,6 +82,10 @@ export interface ChatRecord {
   title: string;
   toolCallingMode: ToolCallingProfile;
   mode: ChatMode;
+  /** Completed plan awaiting an explicit acceptance or revision request. */
+  pendingPlanMessageTs?: number;
+  /** Planning holds queued requests through all revisions until acceptance or cancellation. */
+  planning?: boolean;
   reasoningEffort: ReasoningEffort;
   /** Complete saved transcript; compaction never rewrites these messages. */
   messages: ChatMessage[];
@@ -318,7 +328,7 @@ export class ChatStorage {
       );
       if (userIndex >= 0) {
         const nextUser = rec.messages.findIndex(
-          (message, index) => index > userIndex && message.role === "user"
+          (message, index) => index > userIndex && message.role === "user" && !message.steering
         );
         end = nextUser >= 0 ? nextUser : rec.messages.length;
       }
@@ -329,6 +339,10 @@ export class ChatStorage {
     forked.mode = rec.mode;
     forked.reasoningEffort = normalizeReasoningEffort(rec.reasoningEffort);
     forked.messages = structuredClone(rec.messages.slice(0, end));
+    if (forked.messages.some(message => message.role === "assistant" && message.ts === rec.pendingPlanMessageTs)) {
+      forked.pendingPlanMessageTs = rec.pendingPlanMessageTs;
+    }
+    if (end === rec.messages.length && rec.planning) forked.planning = true;
     // A historical fork must not inherit a summary containing later turns.
     if (end === rec.messages.length && rec.contextMessages) {
       forked.contextMessages = structuredClone(rec.contextMessages);
@@ -498,6 +512,11 @@ function normalizeWorkspaceRoot(root: string): string {
 
 /** The transcript and model context share an array until the first compaction. */
 export function modelMessages(rec: ChatRecord): ChatMessage[] {
+  // Rebuilt histories (for example an edited chat or historical fork) may
+  // contain terminal cards even when their separate context was discarded.
+  if (!rec.contextMessages && rec.messages.some(message => message.interruption)) {
+    rec.contextMessages = rec.messages.filter(message => !message.interruption);
+  }
   return rec.contextMessages ?? rec.messages;
 }
 

@@ -4,9 +4,12 @@ import { featureTools } from "../build/tools.js";
 import { objectParameters, type ToolSpec, type JsonSchema } from "./schema.js";
 export { asOpenAiTools, type JsonSchema, type ToolSpec, type OpenAiTool } from "./schema.js";
 
+const READ_FILE_DESCRIPTION = "Read a UTF-8 text file inside the open workspace, optionally only a line range. Each returned line is prefixed with its real 1-based line number in the file and a tab (e.g. `12\\t...`); that prefix is not part of the file. Prefer a range for large files; a range read is prefixed with `[lines X-Y of N]`.";
+
 export const ALL_TOOLS: ToolSpec[] = [
   {
     name: "search_memories",
+    enabledSetting: "readToolsEnabled",
     description: "Search active memories from other chats in this workspace by deterministic keywords. Returns matching names, IDs, and full UTC dates, ranked by relevance; no memory contents. Use recall_memory to read a match.",
     parameters: objectParameters({
       query: { type: "string", description: "Non-empty keywords, names, paths, or symbols related to the current request." }
@@ -14,6 +17,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "recall_memory",
+    enabledSetting: "readToolsEnabled",
     description: "Read one active workspace memory using the exact name and ID from search_memories. Returns its name, ID, full UTC date, and contents. If the source changed or is no longer active, search again.",
     parameters: objectParameters({
       name: { type: "string", description: "Exact memory name from search_memories." },
@@ -22,6 +26,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "view_image",
+    enabledSetting: "readToolsEnabled",
     description: "View a JPEG, PNG, or WebP image inside the open workspace. Use this to inspect image files found by list_dir or glob; read_file only reads text. The image is supplied with the tool result for visual inspection.",
     parameters: objectParameters({
       path: { type: "string", description: "Workspace-relative image path." }
@@ -29,7 +34,8 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "read_file",
-    description: "Read a UTF-8 text file inside the open workspace, optionally only a line range. Each returned line is prefixed with its real 1-based line number in the file and a tab (e.g. `12\\t...`); that prefix is not part of the file. Pass those numbers to insert_text and replace_range. Prefer a range for large files; a range read is prefixed with `[lines X-Y of N]`.",
+    enabledSetting: "readToolsEnabled",
+    description: `${READ_FILE_DESCRIPTION} Pass those numbers to insert_text and replace_range.`,
     parameters: objectParameters({
       path: { type: "string", description: "Workspace-relative path." },
       startLine: { type: "integer", minimum: 1, description: "Optional 1-based first line to read. Omit to read from the start." },
@@ -38,6 +44,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "write_file",
+    enabledSetting: "editToolsEnabled",
     description: "Replace a UTF-8 text file inside the open workspace with complete file content. Creates parent directories. Prefer insert_text or replace_range for small localized edits.",
     parameters: objectParameters({
       path: { type: "string", description: "Workspace-relative path." },
@@ -46,6 +53,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "create_file",
+    enabledSetting: "editToolsEnabled",
     description: "Create a new UTF-8 text file inside the workspace. Fails if the path already exists; use edit_file for an existing file.",
     parameters: objectParameters({
       path: { type: "string", description: "Workspace-relative path." },
@@ -54,6 +62,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "edit_file",
+    enabledSetting: "editToolsEnabled",
     description: "Atomically edit an existing UTF-8 file using exact text replacements. First call read_file and pass its revision as baseRevision. Every oldText must occur exactly once in the progressively edited file; otherwise nothing is written.",
     parameters: objectParameters({
       path: { type: "string", description: "Workspace-relative path." },
@@ -76,6 +85,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "insert_text",
+    enabledSetting: "editToolsEnabled",
     description: "Insert UTF-8 text immediately BEFORE a 1-based line number in a workspace file. Obtain current target lines from read_file or a successful edit result. Use for imports and added blocks. Refuses an expectedLine mismatch without writing. Returns the updated region with fresh line numbers for follow-up edits.",
     parameters: objectParameters({
       path: { type: "string", description: "Workspace-relative path." },
@@ -86,6 +96,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "replace_range",
+    enabledSetting: "editToolsEnabled",
     description: "Replace an inclusive 1-based line range in a workspace file. Obtain current target lines from read_file or a successful edit result. expectedContent is the OLD/CURRENT text; content is the NEW replacement. Refuses an expectedContent mismatch without writing. Returns fresh numbered context for follow-up edits.",
     parameters: objectParameters({
       path: { type: "string", description: "Workspace-relative path." },
@@ -97,6 +108,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "list_dir",
+    enabledSetting: "readToolsEnabled",
     description: "List entries of a directory inside the open workspace.",
     parameters: objectParameters({
       path: { type: "string", description: "Workspace-relative directory path." }
@@ -104,6 +116,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "glob",
+    enabledSetting: "readToolsEnabled",
     description: "List files matching a glob pattern inside the open workspace.",
     parameters: objectParameters({
       pattern: { type: "string", description: "Glob pattern, e.g. 'src/**/*.ts'." }
@@ -113,7 +126,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   {
     name: "ask_user_question",
     description:
-      "Ask a single clarifying question when a material user choice remains unresolved after considering the request and relevant workspace evidence. Provide 2-3 short, distinct suggested answers; the user picks one or types their own. Emit this tool on its own (not alongside other tool calls) and wait for the answer before continuing. Prefer acting on sensible defaults — use this only when a wrong guess would waste real work.",
+      "Ask a single clarifying question when a material user choice remains unresolved after considering the request and relevant workspace evidence. Provide 2-3 short, distinct suggested answers; the user picks one, types their own, or skips the question. Emit this tool on its own (not alongside other tool calls) and wait for the response before continuing. If the user skips, continue without an answer. Prefer acting on sensible defaults — use this only when a wrong guess would waste real work.",
     parameters: objectParameters({
       question: { type: "string", description: "The question to ask, phrased clearly for the user." },
       suggestions: {
@@ -147,14 +160,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   }
 ];
 
-const PLAN_MODE_TOOL_NAMES = new Set(["view_image", "read_file", "list_dir", "glob", "ask_user_question"]);
-const REVIEW_MODE_TOOL_NAMES = new Set([
-  "view_image",
-  "read_file",
-  "list_dir",
-  "glob",
-  "ask_user_question",
-]);
+const READ_ONLY_TOOL_NAMES = new Set(["view_image", "read_file", "list_dir", "glob", "ask_user_question"]);
 
 export function isMemoryToolName(name: string): boolean {
   return name === "search_memories" || name === "recall_memory";
@@ -162,19 +168,21 @@ export function isMemoryToolName(name: string): boolean {
 
 export function toolsForMode(mode: ChatMode, transport: "native" | "legacy" = "legacy", memoryEnabled = false, supportsVision = false, settings?: object): ToolSpec[] {
   const available = ALL_TOOLS.filter(tool =>
-    (!tool.availability?.setting || !!(settings as Record<string, unknown> | undefined)?.[tool.availability.setting])
+    (!tool.enabledSetting || (settings as Record<string, unknown> | undefined)?.[tool.enabledSetting] !== false)
+    && (!tool.availability?.setting || !!(settings as Record<string, unknown> | undefined)?.[tool.availability.setting])
     && (!isMemoryToolName(tool.name) || memoryEnabled)
     && (tool.name !== "view_image" || (supportsVision && transport === "native"))
     && (!tool.availability || (tool.availability.modes.includes(mode) && (!tool.availability.transport || tool.availability.transport === transport)))
   );
-  if (mode === "plan") return available.filter(tool => PLAN_MODE_TOOL_NAMES.has(tool.name) || isMemoryToolName(tool.name) || !!tool.availability);
+  if (mode !== "act") return available
+    .filter(tool => READ_ONLY_TOOL_NAMES.has(tool.name) || isMemoryToolName(tool.name) || !!tool.availability)
+    .map(tool => tool.name === "read_file" ? { ...tool, description: READ_FILE_DESCRIPTION } : tool);
   const excluded = transport === "native"
     ? new Set(["write_file"])
     : new Set(["create_file", "edit_file"]);
-  return available.filter(tool =>
-    !excluded.has(tool.name)
-    && (mode !== "review" || REVIEW_MODE_TOOL_NAMES.has(tool.name) || isMemoryToolName(tool.name) || !!tool.availability)
-  );
+  return available.filter(tool => !excluded.has(tool.name))
+    .map(tool => tool.name === "read_file" && (settings as Record<string, unknown> | undefined)?.editToolsEnabled === false
+      ? { ...tool, description: READ_FILE_DESCRIPTION } : tool);
 }
 
 export function validateToolArguments(toolName: string, value: unknown): string | undefined {

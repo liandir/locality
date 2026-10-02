@@ -28,9 +28,8 @@ describe("reasoning effort settings", () => {
     })).toEqual({ Quick: "minimal" });
   });
 
-  it("builds None and Default ahead of configured choices", () => {
+  it("builds Default ahead of configured choices without a None option", () => {
     expect(reasoningEffortChoices({ Fast: "low", Deep: "xhigh" })).toEqual([
-      { label: "None", effort: "none" },
       { label: "Default", effort: "default" },
       { label: "Fast", effort: "effort:low" },
       { label: "Deep", effort: "effort:xhigh" }

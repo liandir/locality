@@ -4,6 +4,7 @@ import { pageRequest, readWebpage } from "./readPage.js";
 export function createWebpageFeature(): FeatureRuntime {
   const approved = new WeakMap<Record<string, unknown>, string>();
   return {
+    autoApprovalSetting: "autoapproveWebSearch", autoApprovalScope: "global",
     tools: ["read_webpage"], category: () => "search", needsApproval: settings => settings.autoapproveWebSearch !== true,
     async prepare(_name, args, settings) {
       if (!settings.webToolsEnabled) throw new Error("Verify the Web search endpoint using Set in Settings before using web tools.");

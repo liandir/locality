@@ -57,9 +57,9 @@ with **Set** in Settings. They require approval by default. See
 
 ## Shared behavior and switching editions
 
-Chat modes apply in every edition: Plan cannot edit files or run commands;
-Review disables file edits and always asks before running commands. See
-[chat modes](user-guide.md#chat-modes) for details.
+Chat modes apply in every edition: Plan and Review are read-only and cannot
+edit files or run commands. File edits and commands are available only in Act
+mode. See [chat modes](user-guide.md#chat-modes) for details.
 
 All editions can draft commit messages through VS Code's built-in Git
 integration, including No commands. See

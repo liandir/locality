@@ -11,12 +11,13 @@ let status: { ok?: boolean; text: string } | undefined;
 
 export const sideFeature: SideFeature = {
   label: "Advanced",
+  renderTools: (settings, toggle, escape) => (commands.renderTools?.(settings, toggle, escape) ?? "")
+    + toggle("webRequestsEnabled", "Web requests", settings.webRequestsEnabled !== false),
   render: (settings, toggle, escape) => commands.render(settings, toggle, escape)
-    + toggle("autoapproveWebSearch", "Auto-approve web requests", settings.autoapproveWebSearch === true),
+    + toggle("autoapproveWebSearch", "Auto-approve web requests", settings.autoapproveWebSearch === true, settings.webRequestsEnabled === false || settings.webToolsEnabled !== true),
   renderSection(settings, _toggle, escape) {
     const disabled = testing || !loaded ? "disabled" : "";
-    return `<section class="panel-section"><h3>Web search</h3>
-      <div class="connection-settings" aria-label="Web search settings">
+    return `<div class="connection-settings" aria-label="Web search settings">
         <label class="field-label" for="webSearchEndpoint">Web search endpoint</label>
         <div class="setting-action-row">
           <input id="webSearchEndpoint" type="text" value="${escape(endpoint ?? String(settings.webSearchEndpoint ?? ""))}" placeholder="https://search.example.org" ${disabled} />
@@ -24,10 +25,8 @@ export const sideFeature: SideFeature = {
         </div>
         <label class="field-label" for="webSearchApiKey">API-key</label>
         <input id="webSearchApiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Required for some endpoints" ${disabled} />
-        <p class="setting-help">Brave Web Search endpoint or SearXNG base URL. Brave requires an API key; SearXNG keys are optional. Set verifies and enables both web tools. Leave the endpoint blank to disable them.</p>
         ${status ? `<div class="validation ${status.ok === false ? "err" : status.ok ? "ok" : ""}" role="${status.ok === false ? "alert" : "status"}">${escape(status.text)}</div>` : ""}
-      </div>
-    </section>`;
+      </div>`;
   },
   bind(root, send, render) {
     commands.bind(root, send);
@@ -67,8 +66,7 @@ export const sideFeature: SideFeature = {
         endpoint = message.endpoint;
         apiKey = message.apiKey;
         status = message.error ? { ok: false, text: message.error }
-          : message.verified ? { ok: true, text: "Verified — web tools enabled." }
-          : message.endpoint ? { text: "Click Set to verify this connection and enable web tools." } : undefined;
+          : message.verified ? { ok: true, text: "Connection verified." } : undefined;
       }
       loaded = true;
       return true;
@@ -80,7 +78,7 @@ export const sideFeature: SideFeature = {
         if (!endpoint) apiKey = "";
         dirty = false;
       }
-      status = { ok: message.ok, text: message.ok ? (endpoint ? "Verified — web tools enabled." : "Web search disabled.") : message.error ?? "Search connection failed." };
+      status = { ok: message.ok, text: message.ok ? (endpoint ? "Connection verified." : "Web search disabled.") : message.error ?? "Search connection failed." };
       return true;
     }
     return false;

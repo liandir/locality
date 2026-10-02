@@ -14,7 +14,9 @@ import {
 import { validateEndpoint } from "../../network/endpointValidator.js";
 import { fetchServerMetadata, fetchServerModels, type ServerModel } from "../../llm/client.js";
 import { ChatStorage } from "../../chat/storage.js";
+import { DEFAULT_REASONING_EFFORT, type ReasoningEffort } from "../../chat/reasoningEffort.js";
 import type { ExtToSide, SideTab, SideToExt, ChatTab } from "../messaging.js";
+import { SETTINGS_SECTIONS, type SettingsSection } from "../messaging.js";
 
 export class SideViewProvider implements vscode.WebviewViewProvider {
   static readonly viewType = "locality.side";
@@ -22,6 +24,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
   private featureHost?: SideHost;
   private subs: vscode.Disposable[] = [];
   private activeTab: SideTab = "welcome";
+  private expandedSettings: Set<SettingsSection>;
   private memoryListGeneration = 0;
   private chatListGeneration = 0;
   private webviewReady = false;
@@ -34,8 +37,16 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
     private onOpenChat: (id: string) => void,
     private onOpenTabs: () => ChatTab[],
     private memory?: WorkspaceMemory,
-    private onEndpointConnected?: () => void
-  ) { this.featureHost = createSideHost?.(context.secrets, message => this.post(message), context.globalState); }
+    private onEndpointConnected?: () => void,
+    private reasoningEffortControl?: {
+      get: () => ReasoningEffort;
+      set: (effort: ReasoningEffort) => Promise<void>;
+    }
+  ) {
+    this.featureHost = createSideHost?.(context.secrets, message => this.post(message), context.globalState);
+    const expanded = context.globalState?.get<SettingsSection[]>("settings.expandedSections") ?? [];
+    this.expandedSettings = new Set(expanded.filter(section => SETTINGS_SECTIONS.includes(section)));
+  }
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
@@ -62,8 +73,16 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
 
   pushSettings(): void {
     const s = readSettings();
-    this.post({ type: "settings", settings: s as unknown as Record<string, unknown> });
+    this.post({ type: "settings", settings: s as unknown as Record<string, unknown>, reasoningEffort: this.currentReasoningEffort() });
     void this.featureHost?.pushSettings();
+  }
+
+  pushReasoningEffort(): void {
+    this.post({ type: "reasoningEffort", effort: this.currentReasoningEffort() });
+  }
+
+  private currentReasoningEffort(): ReasoningEffort {
+    return this.reasoningEffortControl?.get() ?? DEFAULT_REASONING_EFFORT;
   }
 
   async pushMemories(): Promise<void> {
@@ -122,6 +141,7 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
     switch (m.type) {
       case "ready":
         this.webviewReady = true;
+        this.post({ type: "settingsSections", expanded: [...this.expandedSettings] });
         this.post({ type: "appInfo", version: this.context.extension.packageJSON.version as string });
         this.pushSettings();
         void this.pushEndpointMetadata(readSettings().endpoint);
@@ -163,11 +183,27 @@ export class SideViewProvider implements vscode.WebviewViewProvider {
         this.activeTab = m.tab;
         await this.pushMemories();
         break;
+      case "setSettingsSectionExpanded":
+        if (!SETTINGS_SECTIONS.includes(m.section)) break;
+        if (m.expanded) this.expandedSettings.add(m.section);
+        else this.expandedSettings.delete(m.section);
+        await this.context.globalState.update("settings.expandedSections", [...this.expandedSettings]);
+        this.post({ type: "settingsSections", expanded: [...this.expandedSettings] });
+        break;
       case "saveSetting":
         try {
           await writeSetting(m.key as keyof ReturnType<typeof readSettings>, m.value as never);
         } catch (e) {
+          this.pushSettings();
           this.post({ type: "settingSaved", key: m.key, ok: false, error: (e as Error).message });
+        }
+        break;
+      case "setReasoningEffort":
+        try {
+          await this.reasoningEffortControl?.set(m.effort);
+          this.pushReasoningEffort();
+        } catch (error) {
+          this.post({ type: "settingSaved", key: "reasoningEffort", ok: false, error: (error as Error).message });
         }
         break;
       case "validateEndpoint": {

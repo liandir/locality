@@ -9,6 +9,29 @@
   --error-highlight-foreground: color-mix(in srgb, var(--vscode-errorForeground) 78%, #5c1111);
 }
 
+/* Use the Settings/Welcome control geometry for decision fields and actions too. */
+.welcome-button, .wide-button, .question-option, .question-other,
+.approval-actions .approve, .approval-actions .reject {
+  min-height: 30px;
+  padding: 4px 12px;
+  box-sizing: border-box;
+  border-radius: var(--control-radius);
+  font: inherit;
+}
+.question-option, .question-other { padding-left: 6px; }
+.question-option.question-skip { padding-left: 12px; text-align: center; }
+
+/* Decision controls keep a gray fill at rest, half the hover/focus strength. */
+.approval-actions .approve, .question-option, .question-other {
+  background: color-mix(in srgb, var(--surface-fill-strong) 50%, transparent);
+}
+.approval-actions .approve:is(:hover, :focus-visible):not(:disabled),
+.question-option:is(:hover, :focus-visible):not(:disabled),
+.question-other:is(:hover, :focus-within) {
+  background: var(--surface-fill-strong);
+}
+.question-option.question-cancel:is(:hover, :focus-visible):not(:disabled) { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); color: var(--error-highlight-foreground); }
+
 /* Text links share hover/focus underlines in both webviews. Workspace links
    underline only their label; tool path/URL links keep the tighter underline
    spacing defined by .tool-path-link so it fits their clipped header rows. */

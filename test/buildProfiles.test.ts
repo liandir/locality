@@ -58,21 +58,58 @@ async function probe(profile: string, values: Record<string, unknown> = {}, work
 }
 
 describe("edition composition", () => {
+  it.each(["no-commands", "safe-list", "commands", "advanced"])("honors tool switches across %s modes and transports", async profile => {
+    const { api } = await probe(profile, { webSearchEndpoint: "https://search.example" });
+    for (const key of ["readToolsEnabled", "editToolsEnabled", ...(profile !== "no-commands" ? ["commandToolsEnabled"] : []), ...(profile === "advanced" ? ["webRequestsEnabled"] : [])]) {
+      await api.writeSetting(key, false);
+    }
+    const settings = api.readSettings();
+    for (const mode of ["act", "plan", "review"] as const) for (const transport of ["native", "legacy"] as const) {
+      const names = api.toolsForMode(mode, transport, true, true, settings).map(tool => tool.name);
+      expect(names).toEqual(mode === "act" ? ["ask_user_question", "update_todos"] : ["ask_user_question"]);
+      const prompt = api.buildSystemPrompt({ family: "gemma4", mode, nativeTools: transport === "native", memoryEnabled: true, supportsVision: true, workspaceRoot: "/tmp", featureSettings: settings });
+      expect(prompt).not.toMatch(/run_command|wait_process|stop_process|web_search|read_webpage|search_memories|recall_memory|view_image is available|declaration:read_file|declaration:write_file/);
+    }
+    const disabled: string[] = [];
+    api.sideFeature.render(settings as unknown as Record<string, unknown>, (key, _label, _checked, inactive) => { if (inactive) disabled.push(key); return ""; }, value => value);
+    if (profile !== "no-commands") expect(disabled).toContain(profile === "safe-list" ? "autoapproveSafeCommands" : "autoapproveCommands");
+    if (profile === "advanced") expect(disabled).toContain("autoapproveWebSearch");
+    if (profile === "no-commands") await expect(api.writeSetting("commandToolsEnabled", true)).rejects.toThrow("unavailable");
+    if (profile !== "advanced") await expect(api.writeSetting("webRequestsEnabled", true)).rejects.toThrow("unavailable");
+    await api.writeSetting("readToolsEnabled", true);
+    expect(api.toolsForMode("act", "native", true, true, api.readSettings()).map(tool => tool.name)).toContain("read_file");
+    expect(api.toolsForMode("act", "native", true, true, api.readSettings()).map(tool => tool.name)).not.toContain("edit_file");
+  });
+
   it.each(["no-commands", "safe-list", "commands", "advanced"])("aligns %s tools, prompts, runtimes and settings", async profile => {
     const { api, text } = await probe(profile, { webSearchEndpoint: "http://localhost:8888", safeCommandPatterns: ["git status"] });
     const settings = api.readSettings();
     const features = api.createFeatures({ workspaceRoot: "/tmp", emit() {}, async appendResult() {} });
     for (const mode of ["act", "plan", "review"] as const) for (const transport of ["native", "legacy"] as const) {
       const names = api.toolsForMode(mode, transport, false, false, settings).map(tool => tool.name);
-      expect(names.includes("run_command")).toBe(profile !== "no-commands" && mode !== "plan");
+      for (const name of ["run_command", "wait_process", "stop_process"]) {
+        expect(names.includes(name)).toBe(profile !== "no-commands" && mode === "act");
+      }
+      if (mode !== "act") {
+        for (const name of ["write_file", "create_file", "edit_file", "insert_text", "replace_range", "update_todos"]) {
+          expect(names).not.toContain(name);
+        }
+      }
       expect(names).not.toContain("run_process");
       expect(names.includes("web_search")).toBe(profile === "advanced");
       expect(names.includes("read_webpage")).toBe(profile === "advanced");
       for (const family of ["gemma4", "qwen3", "muse-glimmer", "gpt-oss"] as const) {
         const prompt = api.buildSystemPrompt({ family, mode, nativeTools: transport === "native", workspaceRoot: "/tmp", featureSettings: settings });
         expect(prompt).not.toContain("run_process");
-        expect(prompt.includes("SAFE-LIST CONFIGURATION")).toBe(profile === "safe-list" && mode !== "plan");
-        if (profile === "no-commands" || mode === "plan") expect(prompt).not.toContain("run_command");
+        expect(prompt.includes("SAFE-LIST CONFIGURATION")).toBe(profile === "safe-list" && mode === "act");
+        if (profile === "no-commands" || mode !== "act") {
+          for (const name of ["run_command", "wait_process", "stop_process"]) expect(prompt).not.toContain(name);
+        }
+        if (mode !== "act") {
+          for (const name of ["write_file", "create_file", "edit_file", "insert_text", "replace_range", "update_todos"]) {
+            expect(prompt).not.toContain(name);
+          }
+        }
         if (profile !== "advanced") expect(prompt).not.toContain("web_search");
         expect(prompt).not.toContain('"availability"');
         expect(prompt).not.toContain("You are offline");
@@ -82,6 +119,19 @@ describe("edition composition", () => {
     expect(registered).not.toContain("run_process");
     expect(registered.includes("run_command")).toBe(profile !== "no-commands");
     expect(registered.includes("web_search")).toBe(profile === "advanced");
+    const command = features.find(feature => feature.tools.includes("run_command"));
+    if (command) {
+      expect(command.autoApprovalSetting).toBe(profile === "safe-list" ? "autoapproveSafeCommands" : "autoapproveCommands");
+      expect(command.needsApproval(api.readSettings())).toBe(true);
+      await api.writeSetting(command.autoApprovalSetting!, true);
+      expect(command.needsApproval(api.readSettings())).toBe(false);
+    }
+    for (const feature of features.filter(feature => feature.category(feature.tools[0]) === "search")) {
+      expect(feature.autoApprovalSetting).toBe("autoapproveWebSearch");
+      expect(feature.autoApprovalScope).toBe("global");
+      await api.writeSetting(feature.autoApprovalSetting!, true);
+      expect(feature.needsApproval(api.readSettings())).toBe(false);
+    }
     const html = api.sideFeature.render(settings as unknown as Record<string, unknown>, (key, label) => `${key}:${label}`, value => value)
       + (api.sideFeature.renderSection?.(settings as unknown as Record<string, unknown>, (key, label) => `${key}:${label}`, value => value) ?? "");
     expect(html.includes("Auto-approve safe commands")).toBe(profile === "safe-list");

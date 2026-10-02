@@ -3,7 +3,8 @@ import { objectParameters, type ToolSpec } from "../../../tools/schema.js";
 export function commandDefinitions(description: string): ToolSpec[] { return [
   {
     name: "run_command",
-    availability: { modes: ["act", "review"] },
+    enabledSetting: "commandToolsEnabled",
+    availability: { modes: ["act"] },
     description,
     parameters: objectParameters({
       command: { type: "string", description: "Exact command line." }
@@ -11,7 +12,8 @@ export function commandDefinitions(description: string): ToolSpec[] { return [
   },
   {
     name: "wait_process",
-    availability: { modes: ["act", "review"] },
+    enabledSetting: "commandToolsEnabled",
+    availability: { modes: ["act"] },
     description:
       "Wait for a managed process job previously returned by run_command. Waits for at most wait_ms without consuming model tokens, then returns new output and whether the job is still running. If it is still running, call wait_process again later or stop_process when it is no longer needed.",
     parameters: objectParameters({
@@ -21,7 +23,8 @@ export function commandDefinitions(description: string): ToolSpec[] { return [
   },
   {
     name: "stop_process",
-    availability: { modes: ["act", "review"] },
+    enabledSetting: "commandToolsEnabled",
+    availability: { modes: ["act"] },
     description:
       "Stop a managed process job previously returned by run_command. The harness terminates only that chat-owned process tree, escalating to a forced stop if it does not exit promptly, and returns its final output.",
     parameters: objectParameters({

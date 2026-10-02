@@ -2,7 +2,7 @@
   "name": "locality",
   "displayName": "Locality",
   "description": "Drive a LAN-hosted llama.cpp LLM from VS Code with hard network isolation, workspace-scoped tools, and an approval-gated terminal.",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/liandir/locality.git"
@@ -195,10 +195,11 @@
           "description": "Top-p (nucleus) sampling: keep the smallest token set whose cumulative probability reaches p (1 disables)."
         },
         "locality.reasoningBudget": {
-          "type": "number",
-          "default": -1,
-          "minimum": -1,
-          "description": "Per-request llama.cpp reasoning budget: -1 is unlimited, 0 ends reasoning immediately, and a positive number sets the token threshold."
+          "type": ["integer", "null"],
+          "default": null,
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "Per-request llama.cpp reasoning budget: a positive integer sets the token threshold; null (empty in Locality settings) means unlimited."
         },
         "locality.reasoningEfforts": {
           "type": "object",
@@ -210,7 +211,7 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Additional reasoning-effort choices shown in chat. Each key is the display label and its value is sent as llama.cpp reasoning_effort. None and Default are built in."
+          "description": "Additional reasoning-effort choices shown in settings. Each key is the display label and its value is sent as llama.cpp reasoning_effort. Default is built in; use Activate Reasoning to turn reasoning on or off."
         },
         "locality.titlePrompt": {
           "type": "string",
@@ -227,11 +228,16 @@
           "default": false,
           "description": "Show completed model thoughts in chat and tool history. Current thinking remains visible while active."
         },
+        "locality.steerWithEnter": {
+          "type": "boolean",
+          "default": false,
+          "description": "Steer/Queue messages: when enabled, Enter steers the running response and Ctrl+Enter queues. When disabled, Enter queues and Ctrl+Enter steers."
+        },
         "locality.memoryEnabled": {
           "type": "boolean",
           "default": false,
           "scope": "window",
-          "description": "Enable search_memories and recall_memory for active summaries from other chats in this workspace. Summary generation and editing remain available when off. Enable in workspace settings; user-level values are ignored."
+          "description": "Enable search_memories and recall_memory for active summaries from other chats in this workspace. Automatic memory creation and updates require this setting to be enabled when an Act or Review response finishes. Manual generation and editing remain available when off. Enable in workspace settings; user-level values are ignored."
         },
         "locality.memoryMaxCount": {
           "type": "integer",
@@ -279,6 +285,21 @@
           "default": true,
           "description": "Auto-approve read_file / list_dir / glob tool calls."
         },
+        "locality.readToolsEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable workspace read tools, including file, image, directory, and memory reads."
+        },
+        "locality.editToolsEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable workspace file creation and editing tools."
+        },
+        "locality.commandToolsEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable command and managed process tools."
+        },
         "locality.autoapproveWrites": {
           "type": "boolean",
           "default": false,
@@ -287,7 +308,7 @@
         "locality.autoapproveCommands": {
           "type": "boolean",
           "default": false,
-          "description": "Auto-approve all command tool calls in Act mode. Review mode always requires explicit approval. Off by default."
+          "description": "Auto-approve all command tool calls in Act mode. Off by default."
         }
       }
     }

@@ -84,8 +84,8 @@ export class WorkspaceMemory {
     this.changed();
   }
   settingsChanged(): void {
-    // The memory switch controls search and recall tools only. Restart generation only
-    // when its model or endpoint changes.
+    // Automatic summaries are admitted at turn completion using the memory switch.
+    // Once queued, restart generation only when its model or endpoint changes.
     if (this.active && !settingsStillMatch(this.active.endpoint, this.active.model)) this.active.controller.abort();
     this.schedule();
     this.changed();
@@ -116,11 +116,12 @@ export class WorkspaceMemory {
       const rec = await storage.load(id);
       if (!rec || rec.memory?.manual || (rec.memory?.enabled === false && !regenerate) || !rec.messages.length) return;
       this.active.operation = rec.memory?.text.trim() ? "update" : "create";
-      messageTs = [...rec.messages].reverse().find(message => message.role === "assistant")?.ts;
-      // A newly accepted user message can already be saved. Summarize only
-      // through the completed answer, keeping the next request out of this memory.
-      sourceLength = messageTs === undefined ? rec.messages.length
-        : rec.messages.findIndex(message => message.role === "assistant" && message.ts === messageTs) + 1;
+      messageTs = queued.messageTs ?? [...rec.messages].reverse().find(message => message.role === "assistant")?.ts;
+      const answerIndex = rec.messages.findIndex(message => message.role === "assistant" && message.ts === messageTs);
+      if (messageTs !== undefined && answerIndex < 0) return;
+      // Keep automatic jobs tied to the final Act/Review answer that queued them.
+      // A later request or Plan response may already be saved by the time we run.
+      sourceLength = messageTs === undefined ? rec.messages.length : answerIndex + 1;
       const source = { ...rec, messages: rec.messages.slice(0, sourceLength) };
       revision = transcriptRevision(source);
       this.active.messageTs = messageTs;

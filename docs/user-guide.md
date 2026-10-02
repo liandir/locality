@@ -152,17 +152,36 @@ The mode menu in the chat composer offers three ways to work:
 - **Plan mode** restricts the assistant to read-only tools. It can browse and read
   files but cannot write or run commands, and it finishes with an implementation
   plan.
-- **Review mode** disables file edits and focuses on answers. It can inspect files and
-  answer questions about the workspace without producing an implementation plan.
-  It may propose commands when they help validate a review, but every command
-  requires explicit approval even when command auto-approval is enabled.
+- **Review mode** uses read-only tools to gather evidence and provide answers and
+  review findings. It cannot edit files or run commands.
 
-Once a Plan-mode response is rendered, you'll see two buttons:
+Each message uses the mode selected when you send or queue it. Its bubble shows
+the mode's icon and label beneath an inset divider. Changing the composer mode
+affects future submissions; it does not change a running turn or messages already
+in the queue. Editing or reordering queued messages preserves their modes.
+Editing and resending a previously sent message uses the current composer mode.
 
-- **Accept plan and execute** — turns plan mode off and asks the assistant
-  to carry out what it just proposed.
-- **Reject plan and suggest changes** — keeps plan mode on and lets you
-  type feedback so the assistant can revise.
+Questions from the assistant appear in the composer with **A, B, C…** choices.
+Click a choice to answer immediately, or write your own response and click
+**Send** (Enter sends; Shift+Enter adds a line).
+
+After each completed Plan response, a matching composer with the **Plan** icon
+asks how to continue:
+
+- **Accept plan** switches to Act and sends “I accept your plan. Please implement.”
+  as an Act message, with the Act icon, and starts implementation in Act mode.
+- **Request changes** submits the feedback you type directly in the approval field.
+  Click the button or press Enter; Shift+Enter adds a new line. Your
+  feedback appears as a Plan message, and the revised plan needs acceptance again.
+- **Cancel planning** ends planning without implementing the plan and releases
+  queued messages. The composer returns to Act mode.
+
+Queued messages wait through the entire planning exchange, including all change
+requests. Accepting the plan runs its Act implementation turn first, then resumes
+the queue. Cancelling planning or stopping an active planning turn resumes the
+queue without sending an acceptance message. Queued messages retain their
+original modes and order. Planning and pending approval survive reopening the
+chat; submitting revisions keeps the same read-only restrictions.
 
 Use plan mode for anything non-trivial. It gives you a chance to redirect
 before files are touched.
@@ -253,6 +272,14 @@ window is. When it gets close to full:
   you can compact manually before the next request gets too large.
 - You can also click the context ring at any time to compact immediately.
 
+With **Auto-compact** enabled, a response cut short by a generation limit gets
+one recovery attempt per turn. The harness discards that unfinished response,
+compacts the saved context when enough history is available, and continues with
+a request for a shorter response or smaller edits. Completed tool results and
+file changes are retained. If compaction fails or the retry reaches the limit
+again, the error remains visible. A server output limit or excessive reasoning
+can still cause this failure even when context has room.
+
 Compaction summarizes older details in the model's context so it has room to
 keep working. The saved chat and visible history retain the original messages
 and file attachments. The model receives the summary and recent context;
@@ -280,8 +307,8 @@ Only settings supported by the installed edition are available.
 | `autoCompactThresholdPercent` | `80` | Context usage percentage that triggers auto-compaction. |
 | `autoapproveReads` | `true` | Skip approval for read-only file tools. |
 | `autoapproveWrites` | `false` | Skip approval for file-edit tool calls. Off by default. |
-| `autoapproveCommands` | `false` | Commands and Advanced: skip command approval in Act mode. Review always asks. |
-| `autoapproveSafeCommands` | `false` | Safe list: skip approval for every matching command in Act mode. Review always asks. |
+| `autoapproveCommands` | `false` | Commands and Advanced: skip command approval in Act mode. |
+| `autoapproveSafeCommands` | `false` | Safe list: skip approval for every matching command in Act mode. |
 | `safeCommandPatterns` | Built-in regex list | Safe list: whole-command patterns in user settings; empty means deny all. |
 | `webSearchEndpoint` | `https://api.search.brave.com/res/v1/web/search` | Advanced: Brave Web Search URL or SearXNG base URL, configured and tested in Settings. Empty or unverified omits both web tools. |
 | `autoapproveWebSearch` | `false` | Advanced: auto-approve searches and page reads in Act, Plan, and Review modes. User settings only. |
@@ -355,10 +382,19 @@ trash icon. Deleting cannot be undone.
 Enable **Settings → Workspace memory → Use workspace memories** to let the
 agent search and recall active summaries from other chats in the same workspace. It is off by
 default and is stored in workspace settings (`locality.memoryEnabled`);
-user-level activation is ignored. This switch controls whether memory tools are available. Generation and editing remain available when it is off.
+user-level activation is ignored. This switch controls memory tool availability
+and automatic memory creation and updates. Manual generation and editing remain
+available when it is off.
 
-After a response finishes, the harness queues a short memory summary using the
-configured local model. New generated memories are active automatically; existing
+After a final response in **Act** or **Review** mode, the harness checks the current
+workspace switch and queues a short memory summary only if it is enabled. Turning
+the switch off during a response prevents that turn from creating or updating a
+memory; turning it on before the response finishes allows it. This decision is
+made at turn completion, and skipped turns are not queued for later generation.
+Summaries use the configured local model. **Plan** responses and plan
+revisions do not create or update memories automatically. After accepting a
+plan, memory generation waits for the Act implementation response to finish.
+New generated memories are active automatically; existing
 individual exclusions are preserved. The workspace switch still controls whether
 the agent can search and recall them.
 

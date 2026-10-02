@@ -53,10 +53,10 @@ a model or server, and does not require Node.js.
 You can also install from the terminal, using your downloaded filename:
 
 ```bash
-code --install-extension locality-safe-list.vsix
+code --install-extension locality-harness-safe-list.vsix
 ```
 
-Downloads use stable names such as `locality-safe-list.vsix`. The links below
+Downloads use stable names such as `locality-harness-safe-list.vsix`. The links below
 always follow the release marked **Latest** on GitHub; the release tag and the
 extension's version identify the version you are installing.
 
@@ -67,10 +67,10 @@ file reading and editing. The level determines the assistant's additional tools.
 
 | Edition | Command execution | Built-in web tools | Latest download |
 | --- | --- | --- | --- |
-| **No commands** | None; work through workspace file tools | None | [Download VSIX](https://github.com/liandir/locality/releases/latest/download/locality-no-commands.vsix) |
-| **Safe list** | Only commands matching your configured rules, with workspace checks for built-ins | None | [Download VSIX](https://github.com/liandir/locality/releases/latest/download/locality-safe-list.vsix) |
-| **Commands** | General command execution for builds, tests, and other programs | None | [Download VSIX](https://github.com/liandir/locality/releases/latest/download/locality-commands.vsix) |
-| **Advanced** | Same as Commands | Brave Search or SearXNG, plus public webpage reading | [Download VSIX](https://github.com/liandir/locality/releases/latest/download/locality-advanced.vsix) |
+| **No commands** | None; work through workspace file tools | None | [Download VSIX](https://github.com/liandir/locality/releases/latest/download/locality-harness-no-commands.vsix) |
+| **Safe list** | Only commands matching your configured rules, with workspace checks for built-ins | None | [Download VSIX](https://github.com/liandir/locality/releases/latest/download/locality-harness-safe-list.vsix) |
+| **Commands** | General command execution for builds, tests, and other programs | None | [Download VSIX](https://github.com/liandir/locality/releases/latest/download/locality-harness-commands.vsix) |
+| **Advanced** | Same as Commands | Brave Search or SearXNG, plus public webpage reading | [Download VSIX](https://github.com/liandir/locality/releases/latest/download/locality-harness-advanced.vsix) |
 
 File edits and commands require approval by default; file reads are auto-approved.
 General commands and custom safe-list programs run with your OS permissions and
@@ -94,8 +94,8 @@ settings. The installed edition is shown in Locality's Settings tab.
 4. Open a project folder, click **+ New chat**, and describe what you want to do.
 
 Use **Act** to make changes, **Plan** to explore a solution before editing, and
-**Review** to inspect code and answer questions. Plan cannot edit files or run
-commands. Review disables file edits and always asks before running commands.
+**Review** to inspect code and answer questions. Plan and Review are read-only:
+they cannot edit files or run commands.
 
 See the [user guide](docs/user-guide.md#first-time-setup) for model compatibility,
 image attachments, context management, and settings. Advanced users can configure
@@ -112,7 +112,7 @@ its arguments, output, or proposed file diff before approving a change.
 | Images | Inspect workspace images with `view_image` | All editions, with a vision model and native tool calling |
 | Questions and task progress | Ask for a decision and track a task checklist | All editions; checklists in Act mode |
 | Workspace memory | Search and recall summaries from earlier chats in the same workspace | All editions, when enabled in workspace settings |
-| Commands | Start a process, read its output, and stop it | Safe list, Commands, and Advanced; Act and Review modes |
+| Commands | Start a process, read its output, and stop it | Safe list, Commands, and Advanced; Act mode |
 | Web research | Search through Brave or SearXNG and read public webpages | Advanced, after configuring and verifying a search connection |
 
 The [tools reference](docs/tools.md) lists individual tools, mode availability,

@@ -69,7 +69,7 @@ export class VisionUnsupportedError extends Error {
   }
 }
 
-class GenerationLengthError extends Error {
+export class GenerationLengthError extends Error {
   constructor() {
     super(
       "LLM generation stopped early because llama.cpp reported finish_reason=\"length\". " +

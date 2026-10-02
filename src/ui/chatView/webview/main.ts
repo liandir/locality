@@ -4,12 +4,15 @@ import type { MemoryCreation, MemorySnapshot } from "../../../chat/memory.js";
 import { installChatContextMenu } from "../../chatContextMenu.js";
 import type { ChatTab, ChatToolProcess, ChatTurnPreparation } from "../../messaging.js";
 import { chatFeature } from "../../../build/chat.js";
-import { cloudIcon } from "../../icons.js";
+import { chevronIcon, cloudIcon, pawnIcon, scrollIcon, searchIcon } from "../../icons.js";
+import { chatModeIcon, chatModeLabel, renderMessageMode } from "./messageMode.js";
 import { renderMessageDate } from "../../memoryDate.js";
 import { renderMemoryContents, renderMemoryCreation, renderMemoryResult } from "./memoryResults.js";
 import { CARD_SEPARATOR_HTML, renderToolOutputSurface } from "./toolOutputSurface.js";
 import { parseQuestionPayload, renderQuestionResult } from "./questionResult.js";
 import { copyableAssistantText } from "./messageCopy.js";
+import { discardResponseParts, resumeResponseMessage } from "./responseRecovery.js";
+import { isAssistantTurnLive, isWorkPart, partStartedAt, resolveWorkTimeline, type ResolvedUnit as WorkTimelineUnit } from "./workTimeline.js";
 import { ScrollFollow } from "./scrollFollow.js";
 import MarkdownIt from "markdown-it";
 import type { RenderRule } from "markdown-it/lib/renderer.mjs";
@@ -40,17 +43,9 @@ import yaml from "@shikijs/langs/yaml";
 import darkPlus from "@shikijs/themes/dark-plus";
 import lightPlus from "@shikijs/themes/light-plus";
 import mdKatex from "@vscode/markdown-it-katex";
-import type { ChatToExt, ExtToChat, UiAttachment, WorkspacePathType } from "../../messaging.js";
+import type { ChatToExt, ExtToChat, UiAttachment, UiQueuedMessage, WorkspacePathType } from "../../messaging.js";
 import type { ChatRecord, FileChangeSummary, TodoItem } from "../../../chat/storage.js";
 import type { ChatMode } from "../../../chat/mode.js";
-import {
-  DEFAULT_REASONING_EFFORT,
-  DEFAULT_REASONING_EFFORTS,
-  reasoningEffortChoices,
-  reasoningEffortLabel,
-  type ReasoningEffort,
-  type ReasoningEfforts
-} from "../../../chat/reasoningEffort.js";
 import { restoredRecordMessageId, restoredToolCardId } from "./ids.js";
 import { normalizeToolArgsForDisplay } from "./toolArgs.js";
 import { restoredCreatesNewFile, restoredToolFileChanges, restoredToolStatus } from "./toolHistory.js";
@@ -65,7 +60,6 @@ import { createAttachmentGallery, moveAttachmentGallery, type AttachmentGallery 
 import {
   rendersSingleWorkItemDirectly,
   thinkingPresentation,
-  workPresentationForTurn,
   workSectionPresentation
 } from "./workPresentation.js";
 import {
@@ -193,6 +187,7 @@ type MessagePart =
   | { id: string; kind: "text"; text: string; startedAt?: number }
   | { id: string; kind: "thought"; text: string; live: boolean; userExpanded?: boolean; startedAt?: number; durationMs?: number }
   | { id: string; kind: "tool"; card: ToolCard; startedAt?: number }
+  | { id: string; kind: "steering"; message: Message; startedAt?: number }
   | { id: string; kind: "summary"; text: string }
   | { id: string; kind: "abort"; reason: string };
 
@@ -200,17 +195,18 @@ interface Message {
   id: string;
   role: "user" | "assistant" | "tool" | "system";
   recordTs?: number;
+  mode?: ChatMode;
+  steering?: boolean;
   responseToTs?: number;
   parts: MessagePart[];
   text: string;
   thought: string;
   toolCards: ToolCard[];
   summary?: string;
-  isPlan?: boolean;
-  planResolved?: "accepted" | "rejected";
   aborted?: string;
   workStartedAt?: number;
   workEndedAt?: number;
+  startNewPart?: boolean;
   hasTurnWorkSummary?: boolean;
   workGroupExpanded?: Map<string, boolean>;
   fileChanges?: FileChangeSummary[];
@@ -221,7 +217,7 @@ interface Message {
 
 type ComposerDecision =
   | { kind: "tool"; tool: ToolCard }
-  | { kind: "plan"; message: Message };
+  | { kind: "plan"; messageTs?: number };
 
 interface CompactActivity {
   id: string;
@@ -237,18 +233,16 @@ interface CompactActivity {
 
 interface State {
   messages: Message[];
-  queuedMessages: { id: string; text: string; attachments?: UiAttachment[] }[];
+  queuedMessages: UiQueuedMessage[];
   notices: { id: string; text: string }[];
   tokens: number;
   limit: number;
   mode: ChatMode;
   chatModeMenuOpen: boolean;
-  reasoningEffort: ReasoningEffort;
-  reasoningEfforts: ReasoningEfforts;
-  reasoningEffortMenuOpen: boolean;
   serverPending?: ChatTurnPreparation["reason"];
   contextActivityIds: Set<string>;
   showThinking: boolean;
+  steerWithEnter: boolean;
   autoCompact: boolean;
   autoCompactThresholdPercent: number;
   workspaceRoot?: string;
@@ -257,7 +251,7 @@ interface State {
   draftAttachments: UiAttachment[];
   attachmentPastePending: boolean;
   supportsVision: boolean;
-  // The free-text "other" answer typed into a pending ask_user_question box,
+  // Free-text feedback for plan approval or a pending ask_user_question box,
   // kept here so it survives composer re-renders like the main draft does.
   questionDraft: string;
   chatTitle: string;
@@ -267,7 +261,8 @@ interface State {
   autoScroll: boolean;
   savedScrollTop: number;
   scrollDownOpacity: number;
-  pendingPlanRejection: boolean;
+  pendingPlanMessageTs?: number;
+  planning: boolean;
   compactAvailable: boolean;
   compactCurrentMessages: number;
   compactMinMessages: number;
@@ -317,12 +312,10 @@ const state: State = {
   limit: 32768,
   mode: "act",
   chatModeMenuOpen: false,
-  reasoningEffort: DEFAULT_REASONING_EFFORT,
-  reasoningEfforts: { ...DEFAULT_REASONING_EFFORTS },
-  reasoningEffortMenuOpen: false,
   serverPending: undefined,
   contextActivityIds: new Set(),
   showThinking: false,
+  steerWithEnter: false,
   autoCompact: true,
   autoCompactThresholdPercent: 80,
   busy: false,
@@ -338,7 +331,8 @@ const state: State = {
   autoScroll: true,
   savedScrollTop: 0,
   scrollDownOpacity: 1,
-  pendingPlanRejection: false,
+  pendingPlanMessageTs: undefined,
+  planning: false,
   compactAvailable: false,
   compactCurrentMessages: 0,
   compactMinMessages: 6,
@@ -384,6 +378,7 @@ let renderQueued = false;
 let followScrollFrame: number | undefined;
 let partSeq = 0;
 let renderedBusy: boolean | undefined;
+let composerControlPressed = false;
 let renderedScrollDown: boolean | undefined;
 let copiedMessageId: string | undefined;
 let copiedResetTimer: ReturnType<typeof setTimeout> | undefined;
@@ -462,6 +457,21 @@ function getOrCreateMsg(id: string, role: Message["role"]): Message {
   return m;
 }
 
+/** Guidance belongs to the response chronology, including in saved history. */
+function appendUserMessage(message: Message): void {
+  if (!message.steering) {
+    state.messages.push(message);
+    return;
+  }
+  let response = state.messages.at(-1);
+  if (response?.role !== "assistant" || response.aborted) {
+    response = getOrCreateMsg(`steering_${message.id}`, "assistant");
+    response.responseToTs = [...state.messages].reverse().find(m => m.role === "user" && !m.steering)?.recordTs;
+  }
+  finalizeLiveThoughts(response);
+  response.parts.push({ id: nextPartId("steering"), kind: "steering", message, startedAt: message.recordTs });
+}
+
 function markWorkStarted(m: Message): void {
   if (m.workStartedAt === undefined) m.workStartedAt = Date.now();
   if (m.workEndedAt !== undefined) m.workEndedAt = undefined;
@@ -481,13 +491,14 @@ function finalizeLiveThoughts(m: Message): void {
 function appendPartText(m: Message, kind: "text" | "thought", delta: string): void {
   const last = m.parts[m.parts.length - 1];
   if (kind === "text" && !delta.trim()) {
-    if (last?.kind === "text") last.text += delta;
+    if (last?.kind === "text" && !m.startNewPart) last.text += delta;
     return;
   }
-  if (last?.kind === kind) {
+  if (last?.kind === kind && !m.startNewPart) {
     last.text += delta;
     return;
   }
+  m.startNewPart = false;
   if (kind === "thought") {
     markWorkStarted(m);
     finalizeLiveThoughts(m);
@@ -770,11 +781,6 @@ function mountShell(): void {
       <div class="composer-row">
         <div id="approvalSlot"></div>
         <textarea id="input" rows="3"></textarea>
-        <button id="attachFiles" class="composer-attach" type="button" aria-label="Attach files" data-tip="Attach files">${paperclipIcon()}</button>
-        <div id="composerAttachment" class="composer-attachment" hidden></div>
-        <span id="sendSlot"></span>
-      </div>
-      <div class="composer-toggles">
         <span class="composer-mode-controls">
           <span class="mode-selector chat-mode-group">
             <button id="chatMode" class="mode-pill mode-icon-toggle" type="button" aria-label="Mode (Act)" aria-haspopup="menu" aria-controls="chatModeMenu" aria-expanded="false" data-tip="Mode (Act)"><span id="chatModeIcon">${pawnIcon()}</span></button>
@@ -784,18 +790,17 @@ function mountShell(): void {
               <button type="button" role="menuitemradio" data-chat-mode="review"><span class="mode-select-check"></span><span class="mode-select-option-icon">${searchIcon()}</span><span>Review mode</span></button>
             </span>
           </span>
-          <span class="mode-selector reasoning-effort-group">
-            <button id="reasoningEffort" class="mode-pill mode-icon-toggle" type="button" aria-label="Reasoning effort (Default)" aria-haspopup="menu" aria-controls="reasoningEffortMenu" aria-expanded="false" data-tip="Reasoning effort (Default)">${brainIcon()}</button>
-            <span id="reasoningEffortMenu" class="mode-select-menu reasoning-effort-menu" role="menu" hidden>
-              ${reasoningEffortMenuHtml()}
-            </span>
-          </span>
         </span>
+        <div id="composerAttachment" class="composer-attachment" hidden></div>
+        <button id="attachFiles" class="composer-attach" type="button" aria-label="Attach files" data-tip="Attach files">${paperclipIcon()}</button>
+        <span id="sendSlot"></span>
+      </div>
+      <div class="composer-toggles">
         <span class="compact-group">
-          <span id="compactHint" class="inline-hint compact-hint"></span>
           <button id="compact" class="ctx-pill" type="button" aria-label="Compact context">
             <span id="ctxIcon"></span><span id="ctxPct"></span>
           </button>
+          <span id="compactHint" class="inline-hint compact-hint"></span>
           <div id="compactMenu" class="compact-menu" role="menu" hidden>
             <p>Agent is currently active.</p>
             <button type="button" data-compact-action="interrupt">Interrupt chat and compact</button>
@@ -1043,14 +1048,14 @@ function renderUserMessage(el: HTMLElement, m: Message): void {
       ${renderAttachmentsHtml(attachments, true, "data-edit-remove-attachment")}
       <textarea class="user-edit-input" rows="3" data-edit-input="${m.recordTs}">${escapeHtml(state.editDraft)}</textarea>
       <div class="user-edit-actions">
-        <button class="user-edit-cancel" type="button" data-edit-cancel>Cancel</button>
-        <button class="user-edit-submit" type="button" data-edit-submit="${m.recordTs}"${state.editDraft.trim() || attachments.length ? "" : " disabled"}>Send</button>
+        <button class="send-btn cancel-btn" type="button" data-edit-cancel data-tip="Cancel" aria-label="Cancel">${stopIcon()}</button>
+        <button class="send-btn" type="button" data-edit-submit="${m.recordTs}" data-tip="Send" aria-label="Send"${state.editDraft.trim() || attachments.length ? "" : " disabled"}>${sendIcon()}</button>
       </div>
     </div>`;
     setHtml(el, html);
     return;
   }
-  const html = `<div class="bubble">${renderAttachmentsHtml(m.attachments ?? [])}${m.text ? md.render(m.text) : ""}</div>${renderMessageActionsHtml(m)}`;
+  const html = `<div class="bubble"><div class="user-message-body">${renderAttachmentsHtml(m.attachments ?? [])}${m.text ? md.render(m.text) : ""}</div></div>${renderMessageActionsHtml(m)}`;
   setHtml(el, html);
 }
 
@@ -1124,6 +1129,7 @@ function renderMessageActionsHtml(m: Message): string {
 }
 
 function renderMessageActionsInnerHtml(m: Message): string {
+  if (m.steering) return "";
   if (m.role === "assistant" && isAssistantTurnLive(m)) return "";
   const actions: string[] = [];
   let persistentHint = "";
@@ -1140,13 +1146,19 @@ function renderMessageActionsInnerHtml(m: Message): string {
     actions.push(`<button class="copy-btn" type="button" data-edit-message="${m.recordTs}" data-tip="Edit message" aria-label="Edit message">${pencilIcon()}</button>`);
   }
   if (m.role === "assistant" && m.responseToTs !== undefined && !state.busy) {
-    actions.push(`<button class="copy-btn" type="button" data-fork-chat="${m.responseToTs}" data-tip="Fork chat" aria-label="Fork chat">${forkIcon()}</button>`);
+    const latestResponse = [...state.messages].reverse().find(message => message.role === "assistant" || message.role === "user");
+    if (m.aborted && m.recordTs !== undefined && latestResponse === m) {
+      actions.push(`<button class="copy-btn" type="button" data-continue-chat="${m.recordTs}" data-tip="Continue" aria-label="Continue">${rightArrowIcon()}</button>`);
+    } else if (!m.aborted) {
+      actions.push(`<button class="copy-btn" type="button" data-fork-chat="${m.responseToTs}" data-tip="Fork chat" aria-label="Fork chat">${forkIcon()}</button>`);
+    }
   }
   const date = (m.role === "user" || m.role === "assistant") && m.recordTs !== undefined
     ? renderMessageDate(m.recordTs) : "";
-  if (actions.length === 0 && !date) return "";
+  const mode = m.role === "user" ? renderMessageMode(m.mode) : "";
+  if (actions.length === 0 && !date && !mode) return "";
   const hintClass = `message-action-hint${persistentHint ? " active" : ""}`;
-  return `${actions.join("")}${date ? `<span class="message-date">${date}</span>` : ""}<span class="${hintClass}" aria-hidden="true">${persistentHint}</span>`;
+  return `${actions.join("")}${date ? `<span class="message-date">${date}</span>` : ""}${mode}<span class="${hintClass}" aria-hidden="true">${persistentHint}</span>`;
 }
 
 function renderFileChangeSummary(parent: HTMLElement, m: Message): void {
@@ -1202,125 +1214,14 @@ function fileChangeKey(index: number): string {
   return String(index);
 }
 
-interface ResolvedUnit {
-  kind: "work" | "inline";
-  groupId?: string;
-  parts: MessagePart[];
-  expanded: boolean;
-  live?: boolean;
-  liveStatus?: string;
-  collapsible?: boolean;
-  conglomerate?: boolean;
-  children?: ResolvedUnit[];
-  startedAt?: number;
-  endedAt?: number;
-}
+type ResolvedUnit = WorkTimelineUnit<MessagePart>;
 
-/**
- * Split an assistant message's parts into chronological render units. Every
- * run of work before a model text output gets its own disclosure group. During
- * a live turn the top-level Worked-for summary is absent: completed sessions
- * stay collapsed, while the active session shows its current activity until
- * another tool or a following status switches it to the live summary. Once
- * the turn settles, every session moves under one collapsed Worked-for summary.
- */
 function resolveRenderUnits(m: Message): ResolvedUnit[] {
-  const parts = m.parts.filter(part => !isBlankTextPart(part)
-    && (part.kind !== "thought" || thinkingPresentation(state.showThinking, part.live).visible));
-  const turnLive = isAssistantTurnLive(m);
-  const workPresentation = workPresentationForTurn(turnLive);
-  if (!parts.some(isWorkPart)) {
-    const inlineUnits: ResolvedUnit[] = parts.map(part => ({
-      kind: "inline" as const,
-      parts: [part],
-      expanded: false
-    }));
-    return wrapTurnWorkSummary(m, parts, inlineUnits);
-  }
-
-  const units: ResolvedUnit[] = [];
-  let workParts: MessagePart[] = [];
-  let sessionIndex = 0;
-  const flushWork = (endedAt: number | undefined, live: boolean): void => {
-    if (workParts.length === 0) return;
-    const stableId = `${m.id}:worked:${sessionIndex++}`;
-    // Changing identity when the live session settles makes it collapse again,
-    // even when the user had expanded it while watching the tools run.
-    const groupId = live ? `${stableId}:live` : stableId;
-    const firstPartStart = partStartedAt(workParts[0]);
-    const startedAt = sessionIndex === 1 ? (m.workStartedAt ?? firstPartStart) : firstPartStart;
-    const currentPart = workParts.at(-1);
-    const liveStatus = live
-      ? visibleServerPendingLabel
-        ?? (!state.serverPending && currentPart?.kind === "thought" && currentPart.live ? "Thinking" : undefined)
-      : undefined;
-    units.push({
-      kind: "work",
-      groupId,
-      parts: workParts,
-      expanded: workPresentation.expandSessions ? true : (m.workGroupExpanded?.get(groupId) ?? false),
-      live,
-      liveStatus,
-      collapsible: workPresentation.sessionsCollapsible,
-      startedAt,
-      endedAt
-    });
-    workParts = [];
-  };
-
-  for (const part of parts) {
-    if (isWorkPart(part)) {
-      workParts.push(part);
-      continue;
-    }
-    flushWork(partStartedAt(part), false);
-    units.push({ kind: "inline", parts: [part], expanded: false });
-  }
-  const trailingLive = workParts.length > 0 && isAssistantTurnLive(m);
-  flushWork(trailingLive ? undefined : m.workEndedAt, trailingLive);
-  return wrapTurnWorkSummary(m, parts, units);
-}
-
-function wrapTurnWorkSummary(m: Message, parts: MessagePart[], units: ResolvedUnit[]): ResolvedUnit[] {
-  if (m.workStartedAt === undefined) return units;
-  if (!parts.some(isWorkPart)) return units;
-  const live = isAssistantTurnLive(m);
-  if (!workPresentationForTurn(live).showTurnSummary) return units;
-  const finalPartIndex = lastFinalOutputIndex(parts);
-  const finalPart = finalPartIndex >= 0 ? parts[finalPartIndex] : undefined;
-  const finalUnitIndex = finalPart
-    ? units.findIndex(unit => unit.kind === "inline" && unit.parts[0]?.id === finalPart.id)
-    : -1;
-  const hasTrailingAnswer = finalUnitIndex >= 0 && finalUnitIndex === units.length - 1;
-  const children = hasTrailingAnswer ? units.slice(0, finalUnitIndex) : units;
-  const outputUnits = hasTrailingAnswer ? units.slice(finalUnitIndex) : [];
-  const stableId = `${m.id}:worked:all`;
-  const summary: ResolvedUnit = {
-    kind: "work",
-    groupId: stableId,
-    parts: children.flatMap(unit => unit.parts),
-    children,
-    conglomerate: true,
-    expanded: m.workGroupExpanded?.get(stableId) ?? false,
-    live: false,
-    startedAt: m.workStartedAt,
-    endedAt: (finalPart ? partStartedAt(finalPart) : undefined) ?? m.workEndedAt
-  };
-  return [summary, ...outputUnits];
-}
-
-/** Final text and terminal aborts remain visible outside collapsed work. */
-function lastFinalOutputIndex(parts: MessagePart[]): number {
-  for (let index = parts.length - 1; index >= 0; index--) {
-    if (parts[index].kind === "text" || parts[index].kind === "abort") return index;
-  }
-  return -1;
-}
-
-function partStartedAt(part: MessagePart): number | undefined {
-  return part.kind === "text" || part.kind === "thought" || part.kind === "tool"
-    ? part.startedAt
-    : undefined;
+  return resolveWorkTimeline(m, {
+    showThinking: state.showThinking,
+    serverPending: state.serverPending,
+    liveStatus: visibleServerPendingLabel
+  });
 }
 
 function reconcileAssistantParts(el: HTMLElement, m: Message): void {
@@ -1405,21 +1306,9 @@ function ensureWorkElement(parent: HTMLElement, groupId: string): HTMLElement {
   return el;
 }
 
-function isWorkPart(part: MessagePart): part is Extract<MessagePart, { kind: "thought" | "tool" }> {
-  return part.kind === "thought" || part.kind === "tool";
-}
-
 function messageUsesTimeline(m: Message): boolean {
   return m.parts.some(part => isWorkPart(part)
     && (part.kind !== "thought" || thinkingPresentation(state.showThinking, part.live).visible));
-}
-
-function isAssistantTurnLive(m: Message): boolean {
-  return m.workEndedAt === undefined && m.workStartedAt !== undefined;
-}
-
-function isBlankTextPart(part: MessagePart): part is Extract<MessagePart, { kind: "text" }> {
-  return part.kind === "text" && !part.text.trim();
 }
 
 function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
@@ -1700,6 +1589,10 @@ function renderPartInto(
   } else if (part.kind === "summary") {
     cls = "part summary-part";
     html = `<div class="card summary">${md.render(part.text)}</div>`;
+  } else if (part.kind === "steering") {
+    if (el.className !== "part msg user steering-part") el.className = "part msg user steering-part";
+    renderUserMessage(el, part.message);
+    return;
   } else {
     cls = "part abort-part";
     html = `<div class="card answer bubble abort">${escapeHtml(part.reason)}</div>`;
@@ -2025,21 +1918,24 @@ function updateComposer(): void {
     queue.hidden = state.queuedMessages.length === 0;
     setHtml(queue, state.queuedMessages.map((message, index) => `
       <div class="queued-message${state.editingQueuedMessageId === message.id ? " editing" : ""}" data-queued-message-id="${escapeHtml(message.id)}">
-        <button class="queued-message-drag" type="button" draggable="true" data-drag-queued="${escapeHtml(message.id)}" data-tip="Drag to reorder" aria-label="Reorder queued message ${index + 1}">${dragHandleIcon()}</button>
-        <span class="queued-message-order">${index + 1}</span>
-        <span class="queued-message-content">
-          ${renderQueuedAttachmentThumbnails(message.attachments ?? [])}
-          ${state.editingQueuedMessageId === message.id
-            ? `<textarea class="queued-message-input" rows="3" data-queued-edit-input="${escapeHtml(message.id)}" aria-label="Edit queued message">${escapeHtml(message.text)}</textarea>`
-            : `<span class="queued-message-text">${escapeHtml(message.text)}</span>`}
-        </span>
-        <span class="queued-message-actions">
-          ${state.editingQueuedMessageId === message.id
-            ? `<button class="queued-message-action save" type="button" data-save-queued="${escapeHtml(message.id)}" data-tip="Save" aria-label="Save queued message">${checkIcon()}</button>
-               <button class="queued-message-action" type="button" data-cancel-queued-edit data-tip="Cancel" aria-label="Cancel editing">&times;</button>`
-            : `<button class="queued-message-action" type="button" data-edit-queued="${escapeHtml(message.id)}" data-tip="Edit" aria-label="Edit queued message">${pencilIcon()}</button>
-               <button class="queued-message-action remove" type="button" data-remove-queued="${escapeHtml(message.id)}" data-tip="Remove" aria-label="Remove queued message">${trashIcon()}</button>`}
-        </span>
+        <div class="queued-message-row">
+          <button class="queued-message-drag" type="button" draggable="true" data-drag-queued="${escapeHtml(message.id)}" data-tip="Drag to reorder" aria-label="Reorder queued message ${index + 1}">${dragHandleIcon()}</button>
+          <span class="queued-message-order">${index + 1}</span>
+          <span class="queued-message-content">
+            ${renderQueuedAttachmentThumbnails(message.attachments ?? [])}
+            ${state.editingQueuedMessageId === message.id
+              ? `<textarea class="queued-message-input" rows="3" data-queued-edit-input="${escapeHtml(message.id)}" aria-label="Edit queued message">${escapeHtml(message.text)}</textarea>`
+              : `<span class="queued-message-text">${escapeHtml(message.text)}</span>`}
+          </span>
+          ${renderMessageMode(message.mode)}
+          <span class="queued-message-actions">
+            ${state.editingQueuedMessageId === message.id
+              ? `<button class="queued-message-action save" type="button" data-save-queued="${escapeHtml(message.id)}" data-tip="Save" aria-label="Save queued message">${checkIcon()}</button>
+                 <button class="queued-message-action" type="button" data-cancel-queued-edit data-tip="Cancel" aria-label="Cancel editing">&times;</button>`
+              : `<button class="queued-message-action" type="button" data-edit-queued="${escapeHtml(message.id)}" data-tip="Edit" aria-label="Edit queued message">${pencilIcon()}</button>
+                 <button class="queued-message-action remove" type="button" data-remove-queued="${escapeHtml(message.id)}" data-tip="Remove" aria-label="Remove queued message">${trashIcon()}</button>`}
+          </span>
+        </div>
       </div>`).join(""));
     const nextEditingInput = queue.querySelector("[data-queued-edit-input]") as HTMLTextAreaElement | null;
     if (nextEditingInput && nextEditingInput.value !== state.queuedMessageDraft) {
@@ -2062,13 +1958,11 @@ function updateComposer(): void {
     const active = document.activeElement === input;
     const placeholder = state.busy
       ? "Follow-up message..."
-      : state.pendingPlanRejection
-        ? "Suggest changes to the plan…"
-        : state.mode === "plan"
-          ? "Plan mode — reads only"
-          : state.mode === "review"
-            ? "Review mode — no writes"
-            : "Message…";
+      : state.mode === "plan"
+        ? "Plan mode — reads only"
+        : state.mode === "review"
+          ? "Review the workspace…"
+          : "Message…";
     if (input.placeholder !== placeholder) input.placeholder = placeholder;
     if (!active && input.value !== state.draft) input.value = state.draft;
     input.style.display = pendingDecision ? "none" : "";
@@ -2083,14 +1977,15 @@ function updateComposer(): void {
   const sendSlot = root.querySelector("#sendSlot") as HTMLElement | null;
   if (sendSlot && renderedBusy !== state.busy) {
     const html = state.busy
-      ? `<button id="queueMessage" class="send-btn" data-tip="Queue message" aria-label="Queue message">${sendIcon()}</button><button id="cancel" class="send-btn cancel-btn" data-tip="Cancel" aria-label="Cancel">${stopIcon()}</button>`
-      : `<button id="send" class="send-btn" data-tip="Send" aria-label="Send">${sendIcon()}</button>`;
+      ? `<button id="queueMessage" class="send-btn"></button><button id="cancel" class="send-btn cancel-btn" data-tip="Cancel" aria-label="Cancel">${stopIcon()}</button>`
+      : `<button id="send" class="send-btn"></button>`;
     sendSlot.innerHTML = html;
     renderedBusy = state.busy;
   }
   root.querySelector(".composer-row")?.classList.toggle("busy", state.busy);
   const submitButton = root.querySelector("#send, #queueMessage") as HTMLButtonElement | null;
   if (submitButton) submitButton.disabled = state.attachmentPastePending;
+  updateComposerSubmitAction();
   const attach = root.querySelector("#attachFiles") as HTMLButtonElement | null;
   if (attach) {
     const label = state.supportsVision ? "Attach images or text files" : "Attach text files (vision unavailable)";
@@ -2100,9 +1995,22 @@ function updateComposer(): void {
     attach.disabled = state.draftAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE || state.attachmentPastePending;
   }
   if (sendSlot) sendSlot.style.display = pendingDecision ? "none" : "";
+  const modeControls = root.querySelector(".composer-mode-controls") as HTMLElement | null;
+  if (modeControls) modeControls.style.display = pendingDecision ? "none" : "";
+  if (pendingDecision) state.chatModeMenuOpen = false;
   updateChatModeControl();
-  updateReasoningEffortControl();
   updateScrollDownButton();
+}
+
+function updateComposerSubmitAction(focused: Element | null = document.activeElement): void {
+  const button = root.querySelector<HTMLElement>("#send, #queueMessage");
+  if (!button) return;
+  const alternate = composerControlPressed && (focused?.id === "input" || focused === button);
+  const steer = state.busy && (alternate ? !state.steerWithEnter : state.steerWithEnter);
+  const label = state.busy ? `${steer ? "Steer" : "Queue"} message` : "Send";
+  setHtml(button, steer ? steerIcon() : sendIcon());
+  if (button.dataset.tip !== label) button.dataset.tip = label;
+  if (button.getAttribute("aria-label") !== label) button.setAttribute("aria-label", label);
 }
 
 function updateScrollDownButton(): void {
@@ -2141,13 +2049,14 @@ function resizeComposerInput(input: HTMLTextAreaElement, maxLines = MAX_COMPOSER
  */
 function syncQuestionOther(slot: HTMLElement, pendingDecision: ComposerDecision | undefined): void {
   const isQuestion = pendingDecision?.kind === "tool" && pendingDecision.tool.category === "question";
-  if (!isQuestion) return;
+  if (!isQuestion && pendingDecision?.kind !== "plan") return;
   const other = slot.querySelector("#questionOther") as HTMLTextAreaElement | null;
   if (!other) return;
   if (document.activeElement !== other && other.value !== state.questionDraft) {
     other.value = state.questionDraft;
   }
-  const submit = slot.querySelector("[data-answer-submit]") as HTMLButtonElement | null;
+  resizeComposerInput(other, 6);
+  const submit = slot.querySelector("[data-answer-submit], [data-plan-changes]") as HTMLButtonElement | null;
   if (submit) submit.disabled = other.value.trim() === "";
 }
 
@@ -2163,16 +2072,14 @@ function findPendingComposerDecision(): ComposerDecision | undefined {
       }
     }
   }
-  for (const m of state.messages) {
-    if (m.isPlan && !m.planResolved && !state.busy) {
-      return { kind: "plan", message: m };
-    }
+  if (state.planning && !state.busy) {
+    return { kind: "plan", messageTs: state.pendingPlanMessageTs };
   }
   return undefined;
 }
 
 function renderApprovalComposer(decision: ComposerDecision): string {
-  if (decision.kind === "plan") return renderPlanApprovalComposer(decision.message);
+  if (decision.kind === "plan") return renderPlanApprovalComposer(decision.messageTs);
   if (decision.tool.category === "question") return renderQuestionComposer(decision.tool);
   return renderToolApprovalComposer(decision.tool);
 }
@@ -2182,21 +2089,55 @@ function renderQuestionComposer(tc: ToolCard): string {
   // Use the chat's Markdown pipeline verbatim so fenced/indented code gets the
   // same syntax highlighting and delegated copy control as assistant output.
   const renderedQuestion = md.render(question || "Question");
+  const toolId = escapeHtml(tc.toolId);
   const options = suggestions
     .map(
-      s =>
-        `<button class="question-option" type="button" data-answer-option="${tc.toolId}" data-answer="${escapeHtml(s)}">${escapeHtml(s)}</button>`
+      (s, index) =>
+        `<button class="question-option" type="button" data-answer-option="${toolId}" data-answer="${escapeHtml(s)}">
+          <span class="question-option-badge">${String.fromCharCode(65 + index)}</span>
+          <span class="question-option-label">${escapeHtml(s)}</span>
+          <span class="question-option-arrow" aria-hidden="true">${sendIcon()}</span>
+        </button>`
     )
     .join("");
-  return `<div class="approval-composer question-composer">
-    <div class="approval-summary question-summary">
-      <span class="tool-icon" aria-hidden="true">${questionIcon()}</span>
-      <div class="assistant-markdown question-markdown">${renderedQuestion}</div>
+  return renderQuestionLayout({
+    title: "Question", icon: questionIcon(), content: renderedQuestion, options,
+    secondary: { attribute: `data-skip-question="${toolId}"`, label: "Skip", kind: "skip" },
+    submit: { attribute: `data-answer-submit="${toolId}"`, label: "Send" },
+    placeholder: "Or write your own response…", inputLabel: "Your answer"
+  });
+}
+
+/** Shared question/plan surface. Action attributes and content are rendered by the callers. */
+function renderQuestionLayout(config: {
+  title: string;
+  icon: string;
+  content: string;
+  options: string;
+  secondary?: { attribute: string; label: string; kind: "skip" | "cancel" };
+  submit: { attribute: string; label: string };
+  placeholder: string;
+  inputLabel: string;
+}): string {
+  return `<div class="approval-composer question-composer" data-no-tooltip>
+    <div class="question-header">
+      <span class="tool-icon" aria-hidden="true">${config.icon}</span>
+      <span>${escapeHtml(config.title)}</span>
     </div>
-    <div class="question-options">${options}</div>
-    <div class="question-other">
-      <textarea id="questionOther" class="question-other-input" rows="1" placeholder="Or type your own answer…"></textarea>
-      <button class="question-submit" type="button" data-answer-submit="${tc.toolId}" data-tip="Answer" aria-label="Answer" disabled>${sendIcon()}</button>
+    <div class="assistant-markdown question-markdown">${config.content}</div>
+    <div class="question-footer">
+      <div class="question-options">
+        ${config.options}
+        <div class="question-other">
+          <span class="question-option-badge question-reply-icon" aria-hidden="true">${pencilIcon()}</span>
+          <textarea id="questionOther" class="question-other-input" rows="1" placeholder="${escapeHtml(config.placeholder)}" aria-label="${escapeHtml(config.inputLabel)}"></textarea>
+          <button class="question-option-arrow question-submit" type="button" ${config.submit.attribute} aria-label="${escapeHtml(config.submit.label)}" disabled>${sendIcon()}</button>
+        </div>
+        ${config.secondary ? `<button class="question-option question-${config.secondary.kind}" type="button" ${config.secondary.attribute}>
+          ${config.secondary.kind === "cancel" ? `<span class="question-option-badge" aria-hidden="true">${stopIcon()}</span>` : ""}
+          <span class="question-option-label">${escapeHtml(config.secondary.label)}</span>
+        </button>` : ""}
+      </div>
     </div>
   </div>`;
 }
@@ -2211,73 +2152,99 @@ function submitQuestionAnswer(toolId: string, answer: string): void {
 
 function renderToolApprovalComposer(tc: ToolCard): string {
   const isWrite = tc.category === "write";
-  const approveText = isWrite ? "Accept changes" : "Approve";
   const rejectText = isWrite ? "Reject changes and suggest changes" : "Reject";
+  const autoApproveLabel = tc.category === "read" ? "reads" : isWrite ? "edits" : tc.category === "command" ? "commands" : tc.category === "search" ? "web searches" : undefined;
   const label = renderToolApprovalLabel(tc);
-  return `<div class="approval-composer">
+  return `<div class="approval-composer" data-no-tooltip>
     <div class="approval-summary">
       <span class="tool-icon" aria-hidden="true">${toolIcon(tc)}</span>
       <strong>${escapeHtml(toolApprovalName(tc))}</strong>
       <span>${label}</span>
     </div>
     <div class="approval-actions">
-      <button class="approve" data-approve="${tc.toolId}">${approveText}</button>
+      <button class="approve" data-approve="${tc.toolId}">Approve this time</button>
+      ${autoApproveLabel ? `<button class="approve" data-auto-approve="${tc.toolId}">Auto-approve future ${autoApproveLabel}</button>` : ""}
       <button class="reject" data-reject="${tc.toolId}">${rejectText}</button>
     </div>
   </div>`;
 }
 
-function renderPlanApprovalComposer(m: Message): string {
-  return `<div class="approval-composer">
-    <div class="approval-summary">
-      <span class="tool-icon" aria-hidden="true">${scrollIcon()}</span>
-      <strong>Plan ready</strong>
-      <span>Review the plan above, then choose how to continue.</span>
-    </div>
-    <div class="approval-actions">
-      <button class="approve" data-accept-plan="${m.id}">Accept plan and execute</button>
-      <button class="reject" data-reject-plan="${m.id}">Reject plan and suggest changes</button>
-    </div>
-  </div>`;
+function renderPlanApprovalComposer(messageTs?: number): string {
+  return renderQuestionLayout({
+    title: "Plan", icon: scrollIcon(),
+    content: `<p>${messageTs === undefined ? "Planning is paused. " : ""}Accepting the plan switches to Act mode and starts implementation. Request changes to stay in Plan mode, or cancel planning to release queued messages.</p>`,
+    options: `<button class="question-option" type="button" data-accept-plan="${messageTs ?? ""}"${messageTs === undefined ? " disabled" : ""}>
+      <span class="question-option-badge" aria-hidden="true">${pawnIcon()}</span>
+      <span class="question-option-label">Accept plan</span>
+      <span class="question-option-arrow" aria-hidden="true">${sendIcon()}</span>
+    </button>`,
+    secondary: { attribute: `data-cancel-planning="${messageTs ?? ""}"`, label: "Cancel planning", kind: "cancel" },
+    submit: { attribute: `data-plan-changes="${messageTs ?? ""}"`, label: "Request changes" },
+    placeholder: "Request changes", inputLabel: "Suggest changes to the plan"
+  });
+}
+
+function submitPlanResponse(messageTs: number | undefined, feedback?: string): void {
+  if (state.busy || !state.planning || state.pendingPlanMessageTs !== messageTs || (feedback !== undefined && !feedback.trim())) return;
+  if (feedback === undefined && messageTs === undefined) return;
+  state.mode = feedback === undefined ? "act" : "plan";
+  state.busy = true;
+  state.serverPending = "server";
+  state.questionDraft = "";
+  if (feedback === undefined) send({ type: "acceptPlan", messageTs: messageTs! });
+  else send({ type: "revisePlan", messageTs, text: feedback.trim() });
+  render();
+}
+
+function planTimestamp(value: string | undefined): number | undefined {
+  return value ? Number(value) : undefined;
 }
 
 function updateContextPill(): void {
+  const compacting = state.compactActivity?.status === "pending";
   const ratio = Math.min(1, state.tokens / Math.max(1, state.limit));
   const pct = Math.round(ratio * 100);
   const dangerAt = state.autoCompact ? 0.9 : state.autoCompactThresholdPercent / 100;
   const pctClass = ratio >= dangerAt ? "danger" : "ok";
+  const contextHint = compacting ? "Compacting context…"
+    : state.compactHintOverride ?? `Context: ${state.tokens} / ${state.limit} tokens. Click to compact.`;
   const compact = root.querySelector("#compact") as HTMLElement | null;
-  compact?.classList.toggle("danger", pctClass === "danger");
-  compact?.classList.toggle("ok", pctClass === "ok");
-  compact?.classList.toggle("nudge", state.compactNudge);
+  compact?.classList.toggle("danger", !compacting && pctClass === "danger");
+  compact?.classList.toggle("ok", !compacting && pctClass === "ok");
+  compact?.classList.toggle("nudge", !compacting && state.compactNudge);
   compact?.classList.toggle("active-menu", state.compactMenuOpen);
-  compact?.setAttribute("aria-disabled", String(!state.compactAvailable));
+  compact?.setAttribute("aria-disabled", String(compacting || !state.compactAvailable));
+  compact?.setAttribute("aria-busy", String(compacting));
+  compact?.setAttribute("aria-label", compacting ? "Compacting context" : "Compact context");
   compact?.setAttribute("aria-expanded", String(state.compactMenuOpen));
-  if (compact) compact.dataset.tip = state.compactHintOverride ?? `Context: ${state.tokens} / ${state.limit} tokens. Click to compact.`;
+  if (compact) compact.dataset.tip = contextHint;
   const hint = root.querySelector("#compactHint") as HTMLElement | null;
   if (hint) {
-    hint.textContent = state.compactHintOverride ?? `Context: ${state.tokens} / ${state.limit} tokens. Click to compact.`;
-    hint.classList.toggle("active", !!state.compactHintOverride);
+    hint.textContent = compacting ? "" : contextHint;
+    hint.classList.toggle("active", !compacting && !!state.compactHintOverride);
   }
   const menu = root.querySelector("#compactMenu") as HTMLElement | null;
   if (menu) menu.hidden = !state.compactMenuOpen;
   const icon = root.querySelector("#ctxIcon") as HTMLElement | null;
   const pctEl = root.querySelector("#ctxPct") as HTMLElement | null;
-  if (icon) icon.innerHTML = circleIcon(ratio);
-  if (pctEl) pctEl.textContent = `${pct}%`;
+  if (icon) setHtml(icon, compacting
+    ? '<span class="ctx-compacting-ring" aria-hidden="true"></span>'
+    : circleIcon(ratio));
+  if (pctEl) pctEl.textContent = compacting ? "" : `${pct}%`;
 }
 
 function updateChatModeControl(): void {
   const toggle = root.querySelector("#chatMode") as HTMLButtonElement | null;
-  const selectedLabel = state.mode === "act" ? "Act" : state.mode === "plan" ? "Plan" : "Review";
+  const selectedLabel = chatModeLabel(state.mode);
   const hint = `Mode (${selectedLabel})`;
+  if (toggle) toggle.disabled = state.pendingPlanMessageTs !== undefined;
   toggle?.classList.toggle("active", state.chatModeMenuOpen);
   toggle?.setAttribute("aria-expanded", String(state.chatModeMenuOpen));
   toggle?.setAttribute("aria-label", hint);
   if (toggle) toggle.dataset.tip = hint;
   const icon = root.querySelector("#chatModeIcon") as HTMLElement | null;
   if (icon) {
-    const html = state.mode === "plan" ? scrollIcon() : state.mode === "review" ? searchIcon() : pawnIcon();
+    const html = chatModeIcon(state.mode);
     if (icon.dataset.html !== html) {
       icon.dataset.html = html;
       icon.innerHTML = html;
@@ -2287,24 +2254,6 @@ function updateChatModeControl(): void {
   if (menu) menu.hidden = !state.chatModeMenuOpen;
   root.querySelectorAll<HTMLElement>("[data-chat-mode]").forEach(option => {
     const selected = option.dataset.chatMode === state.mode;
-    updateModeMenuOption(option, selected);
-  });
-}
-
-function updateReasoningEffortControl(): void {
-  const toggle = root.querySelector("#reasoningEffort") as HTMLButtonElement | null;
-  const hint = `Reasoning effort (${reasoningEffortLabel(state.reasoningEffort, state.reasoningEfforts)})`;
-  toggle?.classList.toggle("active", state.reasoningEffortMenuOpen);
-  toggle?.setAttribute("aria-expanded", String(state.reasoningEffortMenuOpen));
-  toggle?.setAttribute("aria-label", hint);
-  if (toggle) toggle.dataset.tip = hint;
-  const menu = root.querySelector("#reasoningEffortMenu") as HTMLElement | null;
-  if (menu) {
-    setHtml(menu, reasoningEffortMenuHtml());
-    menu.hidden = !state.reasoningEffortMenuOpen;
-  }
-  root.querySelectorAll<HTMLElement>("[data-reasoning-effort]").forEach(option => {
-    const selected = option.dataset.reasoningEffort === state.reasoningEffort;
     updateModeMenuOption(option, selected);
   });
 }
@@ -2319,12 +2268,6 @@ function updateModeMenuOption(option: HTMLElement, selected: boolean): void {
     check.dataset.html = html;
     check.innerHTML = html;
   }
-}
-
-function reasoningEffortMenuHtml(): string {
-  return reasoningEffortChoices(state.reasoningEfforts).map(choice =>
-    `<button type="button" role="menuitemradio" data-reasoning-effort="${escapeHtml(choice.effort)}"><span class="mode-select-check"></span><span>${escapeHtml(choice.label)}</span></button>`
-  ).join("");
 }
 
 function showCompactUnavailable(): void {
@@ -2919,6 +2862,10 @@ function summaryRepeatsVisibleText(m: Message, summary: string): boolean {
 
 function restoreAssistantParts(msg: Message, recordMessage: ChatRecord["messages"][number]): void {
   msg.recordTs = recordMessage.ts;
+  if (recordMessage.interruption) {
+    msg.aborted = recordMessage.interruption.reason;
+    msg.parts.push({ id: nextPartId("abort"), kind: "abort", reason: msg.aborted });
+  }
   let restoredText = "";
   let restoredThought = "";
   let runThought: Extract<MessagePart, { kind: "thought" }> | null = null;
@@ -2976,9 +2923,10 @@ function restoreAssistantParts(msg: Message, recordMessage: ChatRecord["messages
   }
   // appendPartText marks work as started; finalize it so a restored message is
   // never treated as live (its work parts collapse into a labelled group).
-  if (msg.workStartedAt !== undefined && msg.workEndedAt === undefined) {
-    msg.workEndedAt = restoredStarts.length > 0 ? Math.max(...restoredStarts) : msg.workStartedAt;
+  if (msg.workStartedAt !== undefined) {
+    msg.workEndedAt = Math.max(msg.workEndedAt ?? msg.workStartedAt, recordMessage.ts, ...restoredStarts);
   }
+  if (recordMessage.interruption && msg.workStartedAt !== undefined) msg.workEndedAt = recordMessage.ts;
 }
 
 
@@ -3004,6 +2952,26 @@ function scrollReachesChat(body: HTMLElement, target: EventTarget | null, delta:
 }
 
 function bindOnce(): void {
+  const updateComposerControlKey = (event: KeyboardEvent | PointerEvent): void => {
+    if (composerControlPressed === event.ctrlKey) return;
+    composerControlPressed = event.ctrlKey;
+    updateComposerSubmitAction();
+  };
+  const resetComposerControlKey = (): void => {
+    composerControlPressed = false;
+    updateComposerSubmitAction();
+  };
+  document.addEventListener("keydown", updateComposerControlKey, true);
+  document.addEventListener("keyup", updateComposerControlKey, true);
+  document.addEventListener("pointerdown", updateComposerControlKey, true);
+  document.addEventListener("focusin", () => updateComposerSubmitAction());
+  document.addEventListener("focusout", event => {
+    updateComposerSubmitAction(event.relatedTarget instanceof Element ? event.relatedTarget : null);
+  });
+  window.addEventListener("blur", resetComposerControlKey);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) resetComposerControlKey();
+  });
   const tabs = root.querySelector<HTMLElement>("#chatTabs");
   tabs?.addEventListener("wheel", event => {
     if (event.ctrlKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY) || tabs.scrollWidth <= tabs.clientWidth) return;
@@ -3012,20 +2980,17 @@ function bindOnce(): void {
     tabs.scrollLeft += event.deltaY * scale;
     if (tabs.scrollLeft !== previous) event.preventDefault();
   }, { passive: false });
-  // Close either drop-up before an outside click is handled. Pointerdown also
+  // Close the mode drop-up before an outside click is handled. Pointerdown also
   // catches clicks outside #app while allowing the eventual click to keep its
   // normal behavior without selecting or changing a menu option.
   document.addEventListener("pointerdown", e => {
     const target = e.target as HTMLElement | null;
     if (!target) return;
     const next = modeMenusAfterPointerDown(state, {
-      inChatModeGroup: !!target.closest(".chat-mode-group"),
-      inReasoningEffortGroup: !!target.closest(".reasoning-effort-group")
+      inChatModeGroup: !!target.closest(".chat-mode-group")
     });
-    const changed = next.chatModeMenuOpen !== state.chatModeMenuOpen ||
-      next.reasoningEffortMenuOpen !== state.reasoningEffortMenuOpen;
+    const changed = next.chatModeMenuOpen !== state.chatModeMenuOpen;
     state.chatModeMenuOpen = next.chatModeMenuOpen;
-    state.reasoningEffortMenuOpen = next.reasoningEffortMenuOpen;
     if (changed) render();
   });
   const body = chatBody();
@@ -3086,12 +3051,14 @@ function bindOnce(): void {
     resizeComposerInput(input);
   });
   input?.addEventListener("keydown", e => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(e.ctrlKey); }
   });
   input?.addEventListener("paste", e => { void handleComposerPaste(e); });
   window.addEventListener("resize", () => {
     const composerInput = root.querySelector("#input") as HTMLTextAreaElement | null;
     if (composerInput && composerInput.style.display !== "none") resizeComposerInput(composerInput);
+    const questionInput = root.querySelector("#questionOther") as HTMLTextAreaElement | null;
+    if (questionInput) resizeComposerInput(questionInput, 6);
   });
   // The ask_user_question "other" field is mounted dynamically, so its events are
   // handled by delegation: keep the draft in sync and submit on Enter.
@@ -3114,7 +3081,8 @@ function bindOnce(): void {
     }
     if (other?.id !== "questionOther") return;
     state.questionDraft = (other as HTMLTextAreaElement).value;
-    const submitBtn = root.querySelector("[data-answer-submit]") as HTMLButtonElement | null;
+    resizeComposerInput(other as HTMLTextAreaElement, 6);
+    const submitBtn = root.querySelector("[data-answer-submit], [data-plan-changes]") as HTMLButtonElement | null;
     if (submitBtn) submitBtn.disabled = state.questionDraft.trim() === "";
   });
   root.addEventListener("keydown", e => {
@@ -3132,10 +3100,9 @@ function bindOnce(): void {
       }
       return;
     }
-    if (e.key === "Escape" && (state.chatModeMenuOpen || state.reasoningEffortMenuOpen)) {
+    if (e.key === "Escape" && state.chatModeMenuOpen) {
       e.preventDefault();
       state.chatModeMenuOpen = false;
-      state.reasoningEffortMenuOpen = false;
       render();
       return;
     }
@@ -3167,9 +3134,10 @@ function bindOnce(): void {
     }
     if (other?.id !== "questionOther" || e.key !== "Enter" || e.shiftKey) return;
     e.preventDefault();
-    const submitBtn = root.querySelector("[data-answer-submit]") as HTMLButtonElement | null;
+    const submitBtn = root.querySelector("[data-answer-submit], [data-plan-changes]") as HTMLButtonElement | null;
     const toolId = submitBtn?.dataset.answerSubmit;
     if (toolId) submitQuestionAnswer(toolId, state.questionDraft.trim());
+    else if (submitBtn?.hasAttribute("data-plan-changes")) submitPlanResponse(planTimestamp(submitBtn.dataset.planChanges), state.questionDraft);
   });
   installTooltips();
   window.addEventListener("resize", () => {
@@ -3265,19 +3233,11 @@ function bindOnce(): void {
     }
     const modeOption = target.closest("[data-chat-mode]") as HTMLElement | null;
     if (modeOption) {
+      if (state.pendingPlanMessageTs !== undefined) return;
       const mode = modeOption.dataset.chatMode as ChatMode;
       state.mode = mode;
       state.chatModeMenuOpen = false;
       send({ type: "setChatMode", mode });
-      render();
-      return;
-    }
-    const reasoningOption = target.closest("[data-reasoning-effort]") as HTMLElement | null;
-    if (reasoningOption) {
-      const effort = reasoningOption.dataset.reasoningEffort as ReasoningEffort;
-      state.reasoningEffort = effort;
-      state.reasoningEffortMenuOpen = false;
-      send({ type: "setReasoningEffort", effort });
       render();
       return;
     }
@@ -3314,6 +3274,15 @@ function bindOnce(): void {
     }
     if (target.closest("[data-edit-submit]")) {
       submitMessageEdit();
+      return;
+    }
+    const continueChat = target.closest("[data-continue-chat]") as HTMLElement | null;
+    if (continueChat) {
+      if (state.busy) return;
+      send({ type: "continueChat", messageTs: Number(continueChat.dataset.continueChat) });
+      state.busy = true;
+      state.serverPending = "context";
+      render();
       return;
     }
     const forkChat = target.closest("[data-fork-chat]") as HTMLElement | null;
@@ -3382,23 +3351,16 @@ function bindOnce(): void {
     else if (target.closest("#plus")) send({ type: "newChat" });
     else if (target.closest("#chatMode")) {
       state.chatModeMenuOpen = !state.chatModeMenuOpen;
-      state.reasoningEffortMenuOpen = false;
-      state.compactMenuOpen = false;
-      render();
-    }
-    else if (target.closest("#reasoningEffort")) {
-      state.reasoningEffortMenuOpen = !state.reasoningEffortMenuOpen;
-      state.chatModeMenuOpen = false;
       state.compactMenuOpen = false;
       render();
     }
     else if (target.closest("#compact")) {
+      if (state.compactActivity?.status === "pending") return;
       if (!state.compactAvailable) {
         state.compactMenuOpen = false;
         showCompactUnavailable();
       } else if (state.busy) {
         state.chatModeMenuOpen = false;
-        state.reasoningEffortMenuOpen = false;
         state.compactMenuOpen = !state.compactMenuOpen;
         render();
       } else {
@@ -3406,8 +3368,8 @@ function bindOnce(): void {
         send({ type: "compactNow" });
       }
     }
-    else if (target.closest("#send")) submit();
-    else if (target.closest("#queueMessage")) submit();
+    else if (target.closest("#send")) submit(e.ctrlKey);
+    else if (target.closest("#queueMessage")) submit(e.ctrlKey);
     else if (target.closest("#attachFiles")) {
       state.attachmentPastePending = true;
       render();
@@ -3445,11 +3407,14 @@ function bindOnce(): void {
       const reviewTool = target.closest("[data-review-tool]") as HTMLElement | null;
       const openFile = target.closest("[data-open-file]") as HTMLElement | null;
       const approve = target.closest("[data-approve]") as HTMLElement | null;
+      const autoApprove = target.closest("[data-auto-approve]") as HTMLElement | null;
       const reject = target.closest("[data-reject]") as HTMLElement | null;
       const answerOption = target.closest("[data-answer-option]") as HTMLElement | null;
       const answerSubmit = target.closest("[data-answer-submit]") as HTMLElement | null;
+      const skipQuestion = target.closest("[data-skip-question]") as HTMLElement | null;
       const acceptPlan = target.closest("[data-accept-plan]") as HTMLElement | null;
-      const rejectPlan = target.closest("[data-reject-plan]") as HTMLElement | null;
+      const planChanges = target.closest("[data-plan-changes]") as HTMLElement | null;
+      const cancelPlanning = target.closest("[data-cancel-planning]") as HTMLElement | null;
       if (openFile) {
         e.preventDefault();
         const lineAttr = openFile.dataset.openLine;
@@ -3465,6 +3430,9 @@ function bindOnce(): void {
         const content = tc ? toolContent(tc) : undefined;
         if (path && content !== undefined) send({ type: "reviewProposedFile", path, content });
         else if (path) send({ type: "reviewFile", path });
+      }
+      else if (autoApprove) {
+        send({ type: "approveTool", toolId: autoApprove.dataset.autoApprove!, approved: true, autoApprove: true });
       }
       else if (approve) {
         const toolId = approve.dataset.approve!;
@@ -3485,20 +3453,22 @@ function bindOnce(): void {
         const answer = state.questionDraft.trim();
         if (answer) submitQuestionAnswer(answerSubmit.dataset.answerSubmit!, answer);
       }
+      else if (skipQuestion) {
+        const toolId = skipQuestion.dataset.skipQuestion!;
+        hiddenApprovalToolIds.add(toolId);
+        state.questionDraft = "";
+        send({ type: "skipQuestion", toolId });
+        render();
+      }
       else if (acceptPlan) {
-        const id = acceptPlan.dataset.acceptPlan!;
-        const m = state.messages.find(x => x.id === id);
-        if (m) m.planResolved = "accepted";
-        state.pendingPlanRejection = false;
-        send({ type: "acceptPlan" });
+        submitPlanResponse(planTimestamp(acceptPlan.dataset.acceptPlan));
+      } else if (planChanges) {
+        submitPlanResponse(planTimestamp(planChanges.dataset.planChanges), state.questionDraft);
+      } else if (cancelPlanning && !state.busy) {
+        state.busy = true;
+        state.questionDraft = "";
+        send({ type: "cancelPlanning", messageTs: planTimestamp(cancelPlanning.dataset.cancelPlanning) });
         render();
-      } else if (rejectPlan) {
-        const id = rejectPlan.dataset.rejectPlan!;
-        const m = state.messages.find(x => x.id === id);
-        if (m) m.planResolved = "rejected";
-        state.pendingPlanRejection = true;
-        render();
-        (root.querySelector("#input") as HTMLTextAreaElement | null)?.focus();
       }
     }
   });
@@ -3591,7 +3561,8 @@ function openAttachmentPreview(trigger: HTMLElement): void {
   attachmentGallery = createAttachmentGallery([
     state.draftAttachments,
     ...state.queuedMessages.map(message => message.attachments ?? []),
-    ...state.messages.map(message => (message.attachments ?? []).filter(attachment =>
+    ...state.messages.flatMap(message => [message, ...message.parts.flatMap(part => part.kind === "steering" ? [part.message] : [])])
+      .map(message => (message.attachments ?? []).filter(attachment =>
       message.recordTs !== state.editingMessageTs || !state.editingRemovedAttachmentIds.has(attachment.id)
     ))
   ], trigger.dataset.openAttachment ?? "");
@@ -3732,7 +3703,7 @@ function submitMessageEdit(): void {
   if (messageTs === undefined || (!text && retainedAttachments.length === 0) || state.busy) return;
   state.editingMessageTs = undefined;
   state.editDraft = "";
-  send({ type: "editMessage", messageTs, text, removeAttachmentIds: [...state.editingRemovedAttachmentIds] });
+  send({ type: "editMessage", messageTs, text, mode: state.mode, removeAttachmentIds: [...state.editingRemovedAttachmentIds] });
   state.editingRemovedAttachmentIds = new Set();
   render();
 }
@@ -3801,20 +3772,23 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
-function submit(): void {
+function submit(alternate = false): void {
   if (state.attachmentPastePending) return;
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   const text = input?.value.trim();
   const attachments = state.draftAttachments;
+  const mode = state.mode;
   if (!text && attachments.length === 0) return;
   if (state.busy) {
     const id = `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    state.queuedMessages.push({ id, text: text ?? "", attachments });
+    const steer = alternate ? !state.steerWithEnter : state.steerWithEnter;
+    if (!steer) state.queuedMessages.push({ id, text: text ?? "", mode, attachments });
     state.draft = "";
     send({ type: "saveDraft", text: "" });
     if (input) input.value = "";
     state.draftAttachments = [];
-    send({ type: "queueMessage", id, text: text ?? "", attachmentIds: attachments.map(attachment => attachment.id) });
+    if (steer) send({ type: "steerMessage", text: text ?? "", mode, attachmentIds: attachments.map(attachment => attachment.id) });
+    else send({ type: "queueMessage", id, text: text ?? "", mode, attachmentIds: attachments.map(attachment => attachment.id) });
     render();
     return;
   }
@@ -3824,8 +3798,7 @@ function submit(): void {
   send({ type: "saveDraft", text: "" });
   state.draftAttachments = [];
   if (input) input.value = "";
-  state.pendingPlanRejection = false;
-  send({ type: "send", text: text ?? "", attachmentIds: attachments.map(attachment => attachment.id) });
+  send({ type: "send", text: text ?? "", mode, attachmentIds: attachments.map(attachment => attachment.id) });
   render();
 }
 
@@ -3895,6 +3868,12 @@ function sendIcon(): string {
   </svg>`;
 }
 
+function steerIcon(): string {
+  return `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M12.5 13V6.5h-9M7 3 3.5 6.5 7 10"/>
+  </svg>`;
+}
+
 function paperclipIcon(): string {
   return `<svg viewBox="0 0 18 18" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <path d="M6 6.25v6.25C6 14.6 7.35 16 9.25 16s3.25-1.4 3.25-3.5V5.25C12.5 3.85 11.6 3 10.4 3S8.3 3.85 8.3 5.25v7c0 .7.4 1.1.95 1.1s.95-.4.95-1.1V6.4"/>
@@ -3937,13 +3916,6 @@ function trashIcon(): string {
 function checkIcon(): string {
   return `<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
     <path d="m3 8.2 3.1 3.1L13 4.7"/>
-  </svg>`;
-}
-
-function searchIcon(): string {
-  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <circle cx="10.5" cy="10.5" r="5.75"/>
-    <path d="m15 15 4.5 4.5"/>
   </svg>`;
 }
 
@@ -4001,6 +3973,12 @@ function forkIcon(): string {
   </svg>`;
 }
 
+function rightArrowIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M4 12h16m-6-6 6 6-6 6"/>
+  </svg>`;
+}
+
 
 
 function compactIcon(): string {
@@ -4027,27 +4005,6 @@ function brainIcon(): string {
     <path d="M10.5 4.2A3.2 3.2 0 0 0 5.3 6.7a3.15 3.15 0 0 0-1 5.7 3.25 3.25 0 0 0 2.5 5.2 3.25 3.25 0 0 0 3.7 2.1Z"/>
     <path d="M13.5 4.2a3.2 3.2 0 0 1 5.2 2.5 3.15 3.15 0 0 1 1 5.7 3.25 3.25 0 0 1-2.5 5.2 3.25 3.25 0 0 1-3.7 2.1Z"/>
     <path d="M10.5 8.1H8.7a1.8 1.8 0 0 0-1.8 1.8M13.5 13.7h1.8a1.8 1.8 0 0 1 1.8 1.8"/>
-  </svg>`;
-}
-
-function chevronIcon(): string {
-  return `<svg class="disclosure-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false">
-    <path d="M6 3.5 10.5 8 6 12.5l-.85-.85L8.8 8 5.15 4.35 6 3.5Z" fill="currentColor"/>
-  </svg>`;
-}
-
-function scrollIcon(): string {
-  return `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-    <path d="M8 21h12a2 2 0 0 0 2-2v-2H10v2a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v3h4"/>
-    <path d="M19 17V5a2 2 0 0 0-2-2H4"/>
-  </svg>`;
-}
-
-function pawnIcon(): string {
-  return `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" shape-rendering="geometricPrecision" aria-hidden="true" focusable="false">
-    <circle cx="12" cy="5.2" r="2.7"/>
-    <path d="M9.5 8.2h5c.05 2.55 1.15 4.45 2.85 5.95H6.65c1.7-1.5 2.8-3.4 2.85-5.95Z"/>
-    <path d="M6.7 14.15h10.6l1.25 3.1a1.05 1.05 0 0 1-.98 1.45H6.43a1.05 1.05 0 0 1-.98-1.45Z"/>
   </svg>`;
 }
 
@@ -4095,6 +4052,12 @@ function circleIcon(ratio: number): string {
 }
 
 function loadFromRecord(rec: ChatRecord): void {
+  state.pendingPlanMessageTs = rec.pendingPlanMessageTs;
+  state.planning = rec.planning === true || rec.pendingPlanMessageTs !== undefined;
+  if (state.pendingPlanMessageTs !== undefined) {
+    state.mode = "plan";
+    state.chatModeMenuOpen = false;
+  }
   state.messages = [];
   state.notices = [];
   const fileChanges = restoredToolFileChanges(rec);
@@ -4102,11 +4065,13 @@ function loadFromRecord(rec: ChatRecord): void {
   for (const [index, m] of rec.messages.entries()) {
     const id = restoredRecordMessageId(index, m.ts);
     if (m.role === "user") {
-      currentUserTs = m.ts;
-      state.messages.push({
+      if (!m.steering) currentUserTs = m.ts;
+      appendUserMessage({
         id,
         role: "user",
         recordTs: m.ts,
+        mode: m.mode,
+        steering: m.steering,
         parts: [],
         text: m.content,
         thought: "",
@@ -4117,10 +4082,10 @@ function loadFromRecord(rec: ChatRecord): void {
       // A turn that looped over tools is persisted as one assistant message
       // per LLM round-trip. Merge consecutive assistant/tool rounds into a
       // single message so a restored turn renders as the same connected
-      // timeline the user watched stream live. (Only a user message can sit
-      // between two turns, so a run of assistant/tool rows is always one turn.)
+      // timeline the user watched stream live. Continue removes the terminal
+      // interruption record so the resumed rounds join this same response.
       const prev = state.messages[state.messages.length - 1];
-      if (prev?.role === "assistant") {
+      if (prev?.role === "assistant" && !prev.aborted) {
         restoreAssistantParts(prev, m);
       } else {
         const msg: Message = { id, role: "assistant", responseToTs: currentUserTs, parts: [], text: "", thought: "", toolCards: [] };
@@ -4136,7 +4101,7 @@ function loadFromRecord(rec: ChatRecord): void {
       // summary (rendered as stray cards after its final reply); start a fresh
       // stub instead, which the turn's later assistant message merges into.
       const lastMsg = state.messages[state.messages.length - 1];
-      let last = lastMsg?.role === "assistant" ? lastMsg : undefined;
+      let last = lastMsg?.role === "assistant" && !lastMsg.aborted ? lastMsg : undefined;
       if (!last) {
         last = { id, role: "assistant", responseToTs: currentUserTs, parts: [], text: "", thought: "", toolCards: [] };
         state.messages.push(last);
@@ -4214,9 +4179,8 @@ function handleHostMessage(msg: ExtToChat): void {
     }
     if (msg.type === "settings") {
       state.mode = msg.mode;
-      state.reasoningEffort = msg.reasoningEffort;
-      state.reasoningEfforts = msg.reasoningEfforts;
       state.showThinking = msg.showThinking;
+      state.steerWithEnter = msg.steerWithEnter;
       state.autoCompact = msg.autoCompact;
       state.autoCompactThresholdPercent = msg.autoCompactThresholdPercent;
       if (state.workspaceRoot !== msg.workspaceRoot) {
@@ -4332,6 +4296,8 @@ function handleHostMessage(msg: ExtToChat): void {
       activeChatId = undefined;
       state.draft = "";
       state.questionDraft = "";
+      state.pendingPlanMessageTs = undefined;
+      state.planning = false;
       state.memories = [];
       state.memoryCreations = [];
       closeImagePreview(false);
@@ -4352,7 +4318,6 @@ function handleHostMessage(msg: ExtToChat): void {
       scrollFollow.reset(true, chatBody()!);
       state.compactMenuOpen = false;
       state.chatModeMenuOpen = false;
-      state.reasoningEffortMenuOpen = false;
       state.compactActivity = undefined;
       state.compactHintOverride = undefined;
       state.compactNudge = false;
@@ -4370,8 +4335,9 @@ function handleHostMessage(msg: ExtToChat): void {
       break;
     case "turnWorkStarted": {
       state.busy = true;
-      const m = getOrCreateMsg(msg.messageId, "assistant");
-      const lastUser = [...state.messages].reverse().find(message => message.role === "user");
+      const m = (msg.continued ? resumeResponseMessage(state.messages, msg.messageId) : undefined)
+        ?? getOrCreateMsg(msg.messageId, "assistant");
+      const lastUser = [...state.messages].reverse().find(message => message.role === "user" && !message.steering);
       m.responseToTs = lastUser?.recordTs;
       m.workStartedAt ??= msg.startedAt;
       m.workEndedAt = undefined;
@@ -4390,10 +4356,9 @@ function handleHostMessage(msg: ExtToChat): void {
       state.serverPending ??= "server";
       state.compactMenuOpen = false;
       state.chatModeMenuOpen = false;
-      state.reasoningEffortMenuOpen = false;
       {
         const m = getOrCreateMsg(msg.messageId, "assistant");
-        const lastUser = [...state.messages].reverse().find(message => message.role === "user");
+        const lastUser = [...state.messages].reverse().find(message => message.role === "user" && !message.steering);
         m.responseToTs = lastUser?.recordTs;
         markWorkStarted(m);
         m.hasTurnWorkSummary = true;
@@ -4401,10 +4366,13 @@ function handleHostMessage(msg: ExtToChat): void {
       render();
       break;
     case "userMessage": {
-      state.messages.push({
+      if (!msg.steering) state.pendingPlanMessageTs = undefined;
+      appendUserMessage({
         id: msg.messageId,
         role: "user",
         recordTs: msg.messageTs,
+        mode: msg.mode,
+        steering: msg.steering,
         parts: [],
         text: msg.text,
         thought: "",
@@ -4427,6 +4395,17 @@ function handleHostMessage(msg: ExtToChat): void {
       const m = getOrCreateMsg(msg.messageId, "assistant");
       m.thought += msg.delta;
       appendPartText(m, "thought", msg.delta);
+      render(false);
+      break;
+    }
+    case "responseDiscarded": {
+      const m = state.messages.find(message => message.id === msg.messageId);
+      if (m) {
+        m.parts = discardResponseParts(m.parts, msg);
+        m.text = m.text.slice(0, Math.max(0, m.text.length - msg.textChars));
+        m.thought = m.thought.slice(0, Math.max(0, m.thought.length - msg.thoughtChars));
+        m.toolCards = m.toolCards.filter(card => !msg.toolIds.includes(card.toolId));
+      }
       render(false);
       break;
     }
@@ -4596,11 +4575,25 @@ function handleHostMessage(msg: ExtToChat): void {
       render();
       break;
     }
+    case "planningState": {
+      state.planning = msg.active;
+      state.pendingPlanMessageTs = msg.pendingPlanMessageTs;
+      if (!msg.active) {
+        state.busy = false;
+        state.serverPending = undefined;
+        state.questionDraft = "";
+      }
+      render();
+      break;
+    }
     case "planFinal": {
       // Plan output streams as ordinary text parts (same renderer as a normal
-      // answer); planFinal only flags the turn so Accept/Reject is offered.
+      // answer); the host retains the pending approval across reloads.
       const m = getOrCreateMsg(msg.messageId, "assistant");
-      m.isPlan = true;
+      state.pendingPlanMessageTs = msg.messageTs;
+      state.planning = true;
+      state.mode = "plan";
+      state.chatModeMenuOpen = false;
       finalizeLiveThoughts(m);
       if (!m.text && msg.markdown) {
         m.text = msg.markdown;
@@ -4618,7 +4611,7 @@ function handleHostMessage(msg: ExtToChat): void {
       // assistant timeline parts; create a response row so the error is
       // visible in the chat instead.
       if (!target || target.role !== "assistant" || !isAssistantTurnLive(target)) {
-        const lastUser = [...state.messages].reverse().find(message => message.role === "user");
+        const lastUser = [...state.messages].reverse().find(message => message.role === "user" && !message.steering);
         target = {
           id: `abort_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           role: "assistant",
@@ -4631,6 +4624,7 @@ function handleHostMessage(msg: ExtToChat): void {
         state.messages.push(target);
       }
       target.aborted = msg.reason;
+      target.recordTs = msg.messageTs ?? Date.now();
       finalizeLiveThoughts(target);
       if (target.workStartedAt !== undefined && target.workEndedAt === undefined) {
         target.workEndedAt = Date.now();
@@ -4638,8 +4632,8 @@ function handleHostMessage(msg: ExtToChat): void {
       if (!target.parts.some(part => part.kind === "abort" && part.reason === msg.reason)) {
         target.parts.push({ id: nextPartId("abort"), kind: "abort", reason: msg.reason });
       }
-      state.busy = state.queuedMessages.length > 0;
-      state.serverPending = state.queuedMessages.length > 0 ? "server" : undefined;
+      state.busy = !state.planning && state.queuedMessages.length > 0;
+      state.serverPending = state.busy ? "server" : undefined;
       render();
       break;
     }
@@ -4652,7 +4646,6 @@ function handleHostMessage(msg: ExtToChat): void {
       state.serverPending = undefined;
       state.compactMenuOpen = false;
       state.chatModeMenuOpen = false;
-      state.reasoningEffortMenuOpen = false;
       {
         const activity: CompactActivity = {
           id: msg.compactId,
@@ -4687,11 +4680,11 @@ function handleHostMessage(msg: ExtToChat): void {
       render();
       break;
     case "turnEnd":
-      state.busy = state.queuedMessages.length > 0;
-      state.serverPending = state.queuedMessages.length > 0 ? "server" : undefined;
+      state.busy = !state.planning && state.queuedMessages.length > 0;
+      state.serverPending = state.busy ? "server" : undefined;
       for (const m of state.messages) {
         finalizeLiveThoughts(m);
-        if (m.id === msg.messageId) m.recordTs = msg.messageTs;
+        if (m.id === msg.messageId && msg.messageTs !== undefined) m.recordTs = msg.messageTs;
         if (m.id === msg.messageId && m.workStartedAt !== undefined && m.workEndedAt === undefined) {
           m.workEndedAt = Date.now();
         }
@@ -4704,7 +4697,6 @@ function handleHostMessage(msg: ExtToChat): void {
       render();
       break;
     case "chatModeChanged": state.mode = msg.mode; render(); break;
-    case "reasoningEffortChanged": state.reasoningEffort = msg.effort; render(); break;
   }
 }
 window.addEventListener("message", ev => handleHostMessage(ev.data as ExtToChat));
