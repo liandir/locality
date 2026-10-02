@@ -839,6 +839,7 @@ body.image-preview-open .chat-body { overflow: hidden; }
 .ctx-pill.danger { color: var(--error-foreground); background: color-mix(in srgb, var(--vscode-errorForeground) 8%, transparent); }
 .ctx-pill.danger:is(:hover, :focus-visible, .active-menu) { color: var(--error-highlight-foreground); }
 .ctx-pill.active-menu { background: var(--surface-fill); color: var(--vscode-foreground); }
+.ctx-pill[aria-busy="true"] { background: transparent; cursor: default; }
 .ctx-pill.nudge { animation: compact-wiggle 0.28s ease-in-out 0s 2; }
 .ctx-compacting-ring { position: relative; width: 13px; height: 13px; }
 .ctx-compacting-ring::before {
