@@ -1272,7 +1272,7 @@ export class ChatSession {
             temperature: s.temperature,
             top_k: s.topK,
             top_p: s.topP,
-            thinking_budget_tokens: s.reasoningBudget,
+            thinking_budget_tokens: this.turnReasoningEffort() === REASONING_NONE ? 0 : s.reasoningBudget ?? -1,
             ...reasoningOverrides,
             tools: this.toolProtocol === "native" ? asOpenAiTools(toolsForMode(this.turnMode(), "native", readSettings().memoryEnabled, this.supportsVision, readSettings())) : undefined,
             tool_choice: "auto",
@@ -1322,11 +1322,11 @@ export class ChatSession {
               aborted = true;
               break;
             }
-            if ((this.turnReasoningEffort() === REASONING_NONE || s.reasoningBudget === 0) && !disabledReasoningNoticeShown) {
+            if (this.turnReasoningEffort() === REASONING_NONE && !disabledReasoningNoticeShown) {
               disabledReasoningNoticeShown = true;
               this.emit({
                 kind: "notice",
-                text: "The model emitted reasoning even though reasoning is disabled by the selected effort or budget. " +
+                text: "The model emitted reasoning even though Activate Reasoning is off. " +
                   "If llama-server was started with a positive --reasoning-budget, that fixed server value overrides per-request budgets; " +
                   "otherwise this model's chat template may not support disabling reasoning."
               });
@@ -1993,6 +1993,11 @@ export class ChatSession {
     let processExitCode: number | undefined;
     try {
       if (this.abort?.signal.aborted || this.disposed) throw new Error("Action cancelled.");
+      const currentSettings = readSettings();
+      if (isMemoryToolName(e.name) && !currentSettings.memoryEnabled) throw new Error("Workspace memories are disabled.");
+      if (!toolsForMode(this.turnMode(), this.toolProtocol, currentSettings.memoryEnabled, this.supportsVision, currentSettings).some(tool => tool.name === e.name)) {
+        throw new Error("This tool has been disabled or is no longer available.");
+      }
       if (!explicitlyApproved && needsApproval(readSettings())) {
         throw new Error("Approval settings changed. Request the action again for approval.");
       }

@@ -9,6 +9,7 @@ const READ_FILE_DESCRIPTION = "Read a UTF-8 text file inside the open workspace,
 export const ALL_TOOLS: ToolSpec[] = [
   {
     name: "search_memories",
+    enabledSetting: "readToolsEnabled",
     description: "Search active memories from other chats in this workspace by deterministic keywords. Returns matching names, IDs, and full UTC dates, ranked by relevance; no memory contents. Use recall_memory to read a match.",
     parameters: objectParameters({
       query: { type: "string", description: "Non-empty keywords, names, paths, or symbols related to the current request." }
@@ -16,6 +17,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "recall_memory",
+    enabledSetting: "readToolsEnabled",
     description: "Read one active workspace memory using the exact name and ID from search_memories. Returns its name, ID, full UTC date, and contents. If the source changed or is no longer active, search again.",
     parameters: objectParameters({
       name: { type: "string", description: "Exact memory name from search_memories." },
@@ -24,6 +26,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "view_image",
+    enabledSetting: "readToolsEnabled",
     description: "View a JPEG, PNG, or WebP image inside the open workspace. Use this to inspect image files found by list_dir or glob; read_file only reads text. The image is supplied with the tool result for visual inspection.",
     parameters: objectParameters({
       path: { type: "string", description: "Workspace-relative image path." }
@@ -31,6 +34,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "read_file",
+    enabledSetting: "readToolsEnabled",
     description: `${READ_FILE_DESCRIPTION} Pass those numbers to insert_text and replace_range.`,
     parameters: objectParameters({
       path: { type: "string", description: "Workspace-relative path." },
@@ -40,6 +44,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "write_file",
+    enabledSetting: "editToolsEnabled",
     description: "Replace a UTF-8 text file inside the open workspace with complete file content. Creates parent directories. Prefer insert_text or replace_range for small localized edits.",
     parameters: objectParameters({
       path: { type: "string", description: "Workspace-relative path." },
@@ -48,6 +53,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "create_file",
+    enabledSetting: "editToolsEnabled",
     description: "Create a new UTF-8 text file inside the workspace. Fails if the path already exists; use edit_file for an existing file.",
     parameters: objectParameters({
       path: { type: "string", description: "Workspace-relative path." },
@@ -56,6 +62,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "edit_file",
+    enabledSetting: "editToolsEnabled",
     description: "Atomically edit an existing UTF-8 file using exact text replacements. First call read_file and pass its revision as baseRevision. Every oldText must occur exactly once in the progressively edited file; otherwise nothing is written.",
     parameters: objectParameters({
       path: { type: "string", description: "Workspace-relative path." },
@@ -78,6 +85,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "insert_text",
+    enabledSetting: "editToolsEnabled",
     description: "Insert UTF-8 text immediately BEFORE a 1-based line number in a workspace file. Obtain current target lines from read_file or a successful edit result. Use for imports and added blocks. Refuses an expectedLine mismatch without writing. Returns the updated region with fresh line numbers for follow-up edits.",
     parameters: objectParameters({
       path: { type: "string", description: "Workspace-relative path." },
@@ -88,6 +96,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "replace_range",
+    enabledSetting: "editToolsEnabled",
     description: "Replace an inclusive 1-based line range in a workspace file. Obtain current target lines from read_file or a successful edit result. expectedContent is the OLD/CURRENT text; content is the NEW replacement. Refuses an expectedContent mismatch without writing. Returns fresh numbered context for follow-up edits.",
     parameters: objectParameters({
       path: { type: "string", description: "Workspace-relative path." },
@@ -99,6 +108,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "list_dir",
+    enabledSetting: "readToolsEnabled",
     description: "List entries of a directory inside the open workspace.",
     parameters: objectParameters({
       path: { type: "string", description: "Workspace-relative directory path." }
@@ -106,6 +116,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   },
   {
     name: "glob",
+    enabledSetting: "readToolsEnabled",
     description: "List files matching a glob pattern inside the open workspace.",
     parameters: objectParameters({
       pattern: { type: "string", description: "Glob pattern, e.g. 'src/**/*.ts'." }
@@ -157,7 +168,8 @@ export function isMemoryToolName(name: string): boolean {
 
 export function toolsForMode(mode: ChatMode, transport: "native" | "legacy" = "legacy", memoryEnabled = false, supportsVision = false, settings?: object): ToolSpec[] {
   const available = ALL_TOOLS.filter(tool =>
-    (!tool.availability?.setting || !!(settings as Record<string, unknown> | undefined)?.[tool.availability.setting])
+    (!tool.enabledSetting || (settings as Record<string, unknown> | undefined)?.[tool.enabledSetting] !== false)
+    && (!tool.availability?.setting || !!(settings as Record<string, unknown> | undefined)?.[tool.availability.setting])
     && (!isMemoryToolName(tool.name) || memoryEnabled)
     && (tool.name !== "view_image" || (supportsVision && transport === "native"))
     && (!tool.availability || (tool.availability.modes.includes(mode) && (!tool.availability.transport || tool.availability.transport === transport)))
@@ -168,7 +180,9 @@ export function toolsForMode(mode: ChatMode, transport: "native" | "legacy" = "l
   const excluded = transport === "native"
     ? new Set(["write_file"])
     : new Set(["create_file", "edit_file"]);
-  return available.filter(tool => !excluded.has(tool.name));
+  return available.filter(tool => !excluded.has(tool.name))
+    .map(tool => tool.name === "read_file" && (settings as Record<string, unknown> | undefined)?.editToolsEnabled === false
+      ? { ...tool, description: READ_FILE_DESCRIPTION } : tool);
 }
 
 export function validateToolArguments(toolName: string, value: unknown): string | undefined {

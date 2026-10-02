@@ -13,6 +13,8 @@ export interface JsonSchema {
 }
 
 export interface ToolSpec {
+  /** User switch; omitted settings retain the default enabled behavior. */
+  enabledSetting?: string;
   availability?: { modes: ("plan" | "review" | "act")[]; transport?: "native" | "legacy"; setting?: string };
   name: string;
   description: string;
@@ -37,4 +39,3 @@ export const objectParameters = (
   required,
   additionalProperties: false
 });
-

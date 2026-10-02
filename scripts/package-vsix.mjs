@@ -58,12 +58,14 @@ for (const profile of targets) {
   delete manifest.overrides;
   delete manifest.allowScripts;
   const properties = manifest.contributes.configuration.properties;
+  if (profile === "no-commands") delete properties["locality.commandToolsEnabled"];
   if (profile === "no-commands" || profile === "safe-list") delete properties["locality.autoapproveCommands"];
   if (profile === "safe-list") {
     properties["locality.autoapproveSafeCommands"] = { type: "boolean", default: false, scope: "application", description: "Auto-approve all matching safe commands in Act mode, including deletion. User settings only." };
     properties["locality.safeCommandPatterns"] = { type: "array", items: { type: "string", maxLength: 2048 }, maxItems: 128, default: await defaultPatterns(), scope: "application", description: "Whole-command regexes over executable and literal arguments separated by spaces. Arguments needing quoting use shell-style single quotes. Built-in workspace restrictions also apply. An empty list denies all commands. User settings only." };
   }
   if (profile === "advanced") {
+    properties["locality.webRequestsEnabled"] = { type: "boolean", default: true, description: "Enable web search and webpage reads after the search connection has been verified." };
     properties["locality.webSearchEndpoint"] = { type: "string", default: "https://api.search.brave.com/res/v1/web/search", scope: "application", description: "Web search endpoint: Brave Web Search URL (https://api.search.brave.com/res/v1/web/search) or SearXNG base URL with JSON search enabled. Queries are sent to this service and its upstream engines. Public instances may be unavailable or rate limited. Use HTTPS, or HTTP on localhost/private IP. Blank or unverified disables both web tools. Configure and verify with Set in the Locality Settings tab; API keys are kept in secret storage. Brave requires a key; SearXNG keys are optional." };
     properties["locality.autoapproveWebSearch"] = { type: "boolean", default: false, scope: "application", description: "Auto-approve web requests (searches and webpage reads) in Act, Plan, and Review modes. Off by default. User settings only." };
   }

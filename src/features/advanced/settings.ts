@@ -3,7 +3,7 @@ import { BRAVE_SEARCH_ENDPOINT } from "../webSearch/providers.js";
 import type * as vscode from "vscode";
 import { readFeatureSettings as commands, featureSettingKeys as keys } from "../commands/full/settings.js";
 
-export const featureSettingKeys = [...keys, "webSearchEndpoint", "autoapproveWebSearch"];
+export const featureSettingKeys = [...keys, "webSearchEndpoint", "autoapproveWebSearch", "webRequestsEnabled"];
 export function readFeatureSettings(cfg: vscode.WorkspaceConfiguration) {
   const configured = cfg.inspect<unknown>("webSearchEndpoint")?.globalValue;
   const endpoint = configured === undefined ? BRAVE_SEARCH_ENDPOINT
@@ -11,6 +11,7 @@ export function readFeatureSettings(cfg: vscode.WorkspaceConfiguration) {
   return {
     ...commands(cfg),
     webSearchEndpoint: endpoint,
+    webRequestsEnabled: cfg.get<boolean>("webRequestsEnabled") !== false,
     webToolsEnabled: isWebSearchVerified(endpoint),
     autoapproveWebSearch: cfg.inspect<boolean>("autoapproveWebSearch")?.globalValue === true
   };

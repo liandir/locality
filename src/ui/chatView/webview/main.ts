@@ -4,7 +4,7 @@ import type { MemoryCreation, MemorySnapshot } from "../../../chat/memory.js";
 import { installChatContextMenu } from "../../chatContextMenu.js";
 import type { ChatTab, ChatToolProcess, ChatTurnPreparation } from "../../messaging.js";
 import { chatFeature } from "../../../build/chat.js";
-import { cloudIcon, pawnIcon, scrollIcon, searchIcon } from "../../icons.js";
+import { chevronIcon, cloudIcon, pawnIcon, scrollIcon, searchIcon } from "../../icons.js";
 import { chatModeIcon, chatModeLabel, renderMessageMode } from "./messageMode.js";
 import { renderMessageDate } from "../../memoryDate.js";
 import { renderMemoryContents, renderMemoryCreation, renderMemoryResult } from "./memoryResults.js";
@@ -4032,12 +4032,6 @@ function brainIcon(): string {
     <path d="M10.5 4.2A3.2 3.2 0 0 0 5.3 6.7a3.15 3.15 0 0 0-1 5.7 3.25 3.25 0 0 0 2.5 5.2 3.25 3.25 0 0 0 3.7 2.1Z"/>
     <path d="M13.5 4.2a3.2 3.2 0 0 1 5.2 2.5 3.15 3.15 0 0 1 1 5.7 3.25 3.25 0 0 1-2.5 5.2 3.25 3.25 0 0 1-3.7 2.1Z"/>
     <path d="M10.5 8.1H8.7a1.8 1.8 0 0 0-1.8 1.8M13.5 13.7h1.8a1.8 1.8 0 0 1 1.8 1.8"/>
-  </svg>`;
-}
-
-function chevronIcon(): string {
-  return `<svg class="disclosure-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false">
-    <path d="M6 3.5 10.5 8 6 12.5l-.85-.85L8.8 8 5.15 4.35 6 3.5Z" fill="currentColor"/>
   </svg>`;
 }
 

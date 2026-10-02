@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import { DEFAULT_MEMORY_MAX_COUNT, MAX_MEMORY_COUNT } from "../chat/memoryLimits.js";
 import { normalizeToolCallingProfile, type ToolCallingProfile } from "../llm/toolCallingProfile.js";
 import { normalizeReasoningEfforts, type ReasoningEfforts } from "../chat/reasoningEffort.js";
+import { isReasoningBudget } from "../chat/reasoningBudget.js";
 
 const NS = "locality";
 
@@ -18,7 +19,7 @@ export interface HarnessSettings {
   temperature: number;
   topK: number;
   topP: number;
-  reasoningBudget: number;
+  reasoningBudget: number | null;
   reasoningEfforts: ReasoningEfforts;
   titlePrompt: string;
   commitMessagePrompt: string;
@@ -32,6 +33,10 @@ export interface HarnessSettings {
   templateOverheadTokensPerMessage: number;
   autoapproveReads: boolean;
   autoapproveWrites: boolean;
+  readToolsEnabled?: boolean;
+  editToolsEnabled?: boolean;
+  commandToolsEnabled?: boolean;
+  webRequestsEnabled?: boolean;
   autoapproveCommands?: boolean;
   autoapproveSafeCommands?: boolean;
   safeCommandPatterns?: unknown;
@@ -45,6 +50,7 @@ export type AutoApprovalSetting = Extract<keyof HarnessSettings, `autoapprove${s
 
 export function readSettings(): HarnessSettings {
   const cfg = vscode.workspace.getConfiguration(NS);
+  const reasoningBudget = cfg.get<unknown>("reasoningBudget");
   return {
     endpoint: cfg.get<string>("endpoint") ?? "http://localhost:8080/v1",
     model: cfg.get<string>("model")?.trim() || "local",
@@ -52,12 +58,7 @@ export function readSettings(): HarnessSettings {
     temperature: clampNumber(cfg.get<number>("temperature") ?? 0.8, 0, 2, 0.8),
     topK: Math.round(clampNumber(cfg.get<number>("topK") ?? 40, 0, Number.MAX_SAFE_INTEGER, 40)),
     topP: clampNumber(cfg.get<number>("topP") ?? 0.95, 0, 1, 0.95),
-    reasoningBudget: Math.round(clampNumber(
-      Number(cfg.get<number>("reasoningBudget") ?? -1),
-      -1,
-      Number.MAX_SAFE_INTEGER,
-      -1
-    )),
+    reasoningBudget: isReasoningBudget(reasoningBudget) ? reasoningBudget : null,
     reasoningEfforts: normalizeReasoningEfforts(cfg.get<unknown>("reasoningEfforts")),
     titlePrompt: cfg.get<string>("titlePrompt")?.trim() || DEFAULT_TITLE_PROMPT,
     commitMessagePrompt: cfg.get<string>("commitMessagePrompt")?.trim() || DEFAULT_COMMIT_MESSAGE_PROMPT,
@@ -71,6 +72,8 @@ export function readSettings(): HarnessSettings {
     templateOverheadTokensPerMessage: clampNumber(Math.round(cfg.get<number>("templateOverheadTokensPerMessage") ?? 4), 0, 64, 4),
     autoapproveReads: cfg.get<boolean>("autoapproveReads") ?? true,
     autoapproveWrites: cfg.get<boolean>("autoapproveWrites") ?? false,
+    readToolsEnabled: cfg.get<boolean>("readToolsEnabled") !== false,
+    editToolsEnabled: cfg.get<boolean>("editToolsEnabled") !== false,
     ...readFeatureSettings(cfg)
   };
 }
@@ -91,6 +94,9 @@ export async function writeSetting<K extends keyof HarnessSettings>(
   scope: "global" | "effective" = "global"
 ): Promise<void> {
   if (!SETTING_KEYS.includes(key)) throw new Error("Setting is unavailable in this edition.");
+  if (key === "reasoningBudget" && !isReasoningBudget(value)) {
+    throw new Error("Enter a positive whole number or leave the reasoning budget empty for unlimited reasoning.");
+  }
   const cfg = vscode.workspace.getConfiguration(NS);
   let target = key === "memoryEnabled" || key === "memoryMaxCount" ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
   if (scope === "effective") {
@@ -123,6 +129,8 @@ export const SETTING_KEYS: (keyof HarnessSettings)[] = [
   "templateOverheadTokensPerMessage",
   "autoapproveReads",
   "autoapproveWrites",
+  "readToolsEnabled",
+  "editToolsEnabled",
   ...featureSettingKeys as (keyof HarnessSettings)[]
 ];
 

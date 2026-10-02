@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
     titlePrompt: "Summarize the user message in 2-6 words. Output ONLY the summary.",
     commitMessagePrompt: "Write a concise Git commit message.",
     toolCallingMode: "compat-gemma4",
-    reasoningBudget: 16384,
+    reasoningBudget: 16384 as number | null,
     reasoningEfforts: { Low: "low", Medium: "medium", High: "high" },
     showThinking: true,
     autoCompact: false,
@@ -26,7 +26,10 @@ const mocks = vi.hoisted(() => ({
     autoCompactThresholdPercent: 80,
     autoapproveReads: true,
     autoapproveWrites: false,
-    autoapproveCommands: false
+    autoapproveCommands: false,
+    readToolsEnabled: true,
+    editToolsEnabled: true,
+    commandToolsEnabled: true
   },
   streamChat: vi.fn(),
   tokenize: vi.fn(),
@@ -106,6 +109,9 @@ beforeEach(() => {
   mocks.settings.autoapproveReads = true;
   mocks.settings.autoapproveWrites = false;
   mocks.settings.autoapproveCommands = false;
+  mocks.settings.readToolsEnabled = true;
+  mocks.settings.editToolsEnabled = true;
+  mocks.settings.commandToolsEnabled = true;
   mocks.settings.autoCompact = false;
   mocks.settings.memoryEnabled = false;
   mocks.settings.memoryMaxCount = 10;
@@ -723,7 +729,7 @@ describe("ChatSession", () => {
       expect(request.chat_template_kwargs).toBeUndefined();
       expect(request.tools?.some(tool => tool.function.name === "create_file")).toBe(true);
     }
-    expect(requests[2].thinking_budget_tokens).toBe(16384);
+    expect(requests[2].thinking_budget_tokens).toBe(0);
     expect(requests[2].reasoning_effort).toBeUndefined();
     expect(requests[2].chat_template_kwargs).toEqual({ enable_thinking: false });
     expect(requests[2].tools?.some(tool => tool.function.name === "create_file")).toBe(false);
@@ -940,11 +946,31 @@ describe("ChatSession", () => {
     await session.sendUserMessage("answer briefly");
 
     expect(request).not.toHaveProperty("reasoning_effort");
+    expect(request).toHaveProperty("thinking_budget_tokens", selection === "none" ? 0 : 16384);
     if (templateArgs) expect(request).toHaveProperty("chat_template_kwargs", templateArgs);
     else expect(request).not.toHaveProperty("chat_template_kwargs");
   });
 
-  it("warns when the server still emits reasoning with effort set to None", async () => {
+  it("sends an unlimited budget when the setting is empty", async () => {
+    mocks.settings.reasoningBudget = null;
+    const { ChatSession } = await import("../src/chat/session.js");
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace",
+      record: newRecord(),
+      emit: () => undefined
+    });
+
+    await session.sendUserMessage("answer briefly");
+
+    expect(mocks.streamChat).toHaveBeenCalledWith(
+      mocks.settings.endpoint,
+      expect.objectContaining({ thinking_budget_tokens: -1 }),
+      expect.anything()
+    );
+  });
+
+  it("warns when the server still emits reasoning with Activate Reasoning off", async () => {
     mocks.settings.toolCallingMode = "native";
     mocks.streamChat.mockImplementation(async function* () {
       yield { kind: "thought", text: "unexpected reasoning" };
@@ -3446,6 +3472,25 @@ describe("live tool permissions", () => {
     await turn;
     expect(fixture.record.messages.filter(message => message.role === "tool").map(message => message.toolCall?.status))
       .toEqual(["executed", "executed", "executed", "executed"]);
+  });
+
+  it.each(cases)("refuses $name when its category is disabled before proposal or during approval", async tool => {
+    const key = tool.name === "read_file" ? "readToolsEnabled" : tool.name === "create_file" ? "editToolsEnabled" : "commandToolsEnabled";
+    const fixture = await setup(tool, 2);
+    const turn = fixture.session.sendUserMessage("perform the action");
+    const first = await fixture.proposed(0);
+    await mocks.updateSetting(key, false);
+    fixture.session.approve(first.toolId, true);
+    const second = await fixture.proposed(1);
+    expect(second).toMatchObject({ category: "unknown", approvalRequired: false });
+    await turn;
+    const results = fixture.record.messages.filter(message => message.role === "tool");
+    expect(results[0].content).toContain("disabled or is no longer available");
+    expect(results[1].toolCall?.status).toBe("rejected");
+    expect(mocks.startCommand).not.toHaveBeenCalled();
+    expect(mocks.streamChat.mock.calls[1][1].tools.map((item: { function: { name: string } }) => item.function.name)).not.toContain(tool.name);
+    if (tool.name === "create_file") await expect(fs.stat(path.join(workspaceRoot, "output-0.txt"))).rejects.toThrow();
+    if (tool.name === "read_file") expect(results.some(message => String(message.content).includes("1\tinput"))).toBe(false);
   });
 
   it.each(cases)("saves auto-approval and accepts the current $name", async tool => {

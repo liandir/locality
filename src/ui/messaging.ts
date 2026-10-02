@@ -96,6 +96,8 @@ export interface ChatResponseDiscarded {
 // --- Side view (welcome / chats / settings) ---
 
 export type SideTab = "welcome" | "chats" | "settings";
+export const SETTINGS_SECTIONS = ["model", "chat", "tools", "automation", "user", "reset"] as const;
+export type SettingsSection = typeof SETTINGS_SECTIONS[number];
 export type WorkspacePathType = "file" | "directory" | "other" | "missing";
 
 export interface ChatTab { id: string; title: string; running?: boolean; open?: boolean }
@@ -108,6 +110,7 @@ export type SideToExt =
   | { type: "deleteChat"; id: string }
   | { type: "clearChats" }
   | { type: "openTab"; tab: SideTab }
+  | { type: "setSettingsSectionExpanded"; section: SettingsSection; expanded: boolean }
   | { type: "openGithub" }
   | { type: "saveSetting"; key: string; value: unknown }
   | { type: "setReasoningEffort"; effort: ReasoningEffort }
@@ -125,6 +128,7 @@ export type SideToExt =
   | { type: "cancelMemoryGeneration" };
 
 export type ExtToSide =
+  | { type: "settingsSections"; expanded: SettingsSection[] }
   | { type: "revealMemory"; id: string }
   | { type: "memories"; memories: MemoryListItem[] }
   | { type: "memoryError"; error: string }

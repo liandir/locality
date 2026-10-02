@@ -58,6 +58,29 @@ async function probe(profile: string, values: Record<string, unknown> = {}, work
 }
 
 describe("edition composition", () => {
+  it.each(["no-commands", "safe-list", "commands", "advanced"])("honors tool switches across %s modes and transports", async profile => {
+    const { api } = await probe(profile, { webSearchEndpoint: "https://search.example" });
+    for (const key of ["readToolsEnabled", "editToolsEnabled", ...(profile !== "no-commands" ? ["commandToolsEnabled"] : []), ...(profile === "advanced" ? ["webRequestsEnabled"] : [])]) {
+      await api.writeSetting(key, false);
+    }
+    const settings = api.readSettings();
+    for (const mode of ["act", "plan", "review"] as const) for (const transport of ["native", "legacy"] as const) {
+      const names = api.toolsForMode(mode, transport, true, true, settings).map(tool => tool.name);
+      expect(names).toEqual(mode === "act" ? ["ask_user_question", "update_todos"] : ["ask_user_question"]);
+      const prompt = api.buildSystemPrompt({ family: "gemma4", mode, nativeTools: transport === "native", memoryEnabled: true, supportsVision: true, workspaceRoot: "/tmp", featureSettings: settings });
+      expect(prompt).not.toMatch(/run_command|wait_process|stop_process|web_search|read_webpage|search_memories|recall_memory|view_image is available|declaration:read_file|declaration:write_file/);
+    }
+    const disabled: string[] = [];
+    api.sideFeature.render(settings as unknown as Record<string, unknown>, (key, _label, _checked, inactive) => { if (inactive) disabled.push(key); return ""; }, value => value);
+    if (profile !== "no-commands") expect(disabled).toContain(profile === "safe-list" ? "autoapproveSafeCommands" : "autoapproveCommands");
+    if (profile === "advanced") expect(disabled).toContain("autoapproveWebSearch");
+    if (profile === "no-commands") await expect(api.writeSetting("commandToolsEnabled", true)).rejects.toThrow("unavailable");
+    if (profile !== "advanced") await expect(api.writeSetting("webRequestsEnabled", true)).rejects.toThrow("unavailable");
+    await api.writeSetting("readToolsEnabled", true);
+    expect(api.toolsForMode("act", "native", true, true, api.readSettings()).map(tool => tool.name)).toContain("read_file");
+    expect(api.toolsForMode("act", "native", true, true, api.readSettings()).map(tool => tool.name)).not.toContain("edit_file");
+  });
+
   it.each(["no-commands", "safe-list", "commands", "advanced"])("aligns %s tools, prompts, runtimes and settings", async profile => {
     const { api, text } = await probe(profile, { webSearchEndpoint: "http://localhost:8888", safeCommandPatterns: ["git status"] });
     const settings = api.readSettings();

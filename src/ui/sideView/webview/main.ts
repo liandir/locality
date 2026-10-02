@@ -3,13 +3,15 @@ import { installTooltips } from "../../tooltips.js";
 import type { MemoryListItem } from "../../../chat/memory.js";
 import { installChatContextMenu } from "../../chatContextMenu.js";
 import type { ChatTab } from "../../messaging.js";
-import { cloudIcon } from "../../icons.js";
+import { chevronIcon, cloudIcon } from "../../icons.js";
 import { renderMemoryDate } from "../../memoryDate.js";
 import { DEFAULT_MEMORY_MAX_COUNT, MAX_MEMORY_COUNT } from "../../../chat/memoryLimits.js";
+import { isReasoningBudget } from "../../../chat/reasoningBudget.js";
 import type { ExtToSide, SideToExt } from "../../messaging.js";
-import type { SideTab } from "../../messaging.js";
+import type { SettingsSection, SideTab } from "../../messaging.js";
 import {
   DEFAULT_REASONING_EFFORT,
+  REASONING_NONE,
   availableReasoningEffort,
   normalizeReasoningEfforts,
   reasoningEffortChoices,
@@ -31,6 +33,7 @@ interface State {
   settings: Record<string, unknown>;
   reasoningEffort: ReasoningEffort;
   reasoningEffortError?: string;
+  reasoningBudgetError?: string;
   endpointMsg?: { ok: boolean; text: string };
   endpointMetadata?: { modelAlias: string; contextSize: number; supportsVision: boolean };
   serverModels: { id: string }[];
@@ -55,11 +58,15 @@ const state: State = {
 
 const memoryDrafts = new Map<string, string>();
 const expandedMemories = new Set<string>();
+let expandedSettings = new Set<SettingsSection>();
 
 const root = document.getElementById("app")!;
 installTooltips();
 
-function send(msg: SideToExt): void { vscode.postMessage(msg); }
+function send(msg: SideToExt): void {
+  if (msg.type === "saveSetting") state.settings[msg.key] = msg.value;
+  vscode.postMessage(msg);
+}
 
 function render(): void {
   const active = document.activeElement as HTMLTextAreaElement | null;
@@ -121,6 +128,7 @@ function renderWelcome(): string {
       </section>
       <footer class="welcome-footer">
         ${state.version ? `<span>v${esc(state.version)}</span><span aria-hidden="true">·</span>` : ""}
+        <span>${esc(sideFeature.label.toLowerCase())}</span><span aria-hidden="true">·</span>
         <button id="openGithub" class="link-button" type="button">GitHub</button>
       </footer>
     </div>
@@ -172,10 +180,8 @@ function renderChats(): string {
 function renderMemorySettings(): string {
   return `<div class="memory-settings">
     ${switchControl("memoryEnabled", "Use workspace memories", state.settings.memoryEnabled === true)}
-    <p class="setting-help">Let the agent search and recall active memories from this workspace. Memories are created or updated only if this is enabled when an Act or Review response finishes. Manage memories in Recent Chats.</p>
     <label class="field-label" for="memoryMaxCount">Maximum search results</label>
     <input id="memoryMaxCount" type="number" min="1" max="${MAX_MEMORY_COUNT}" step="1" value="${esc(String(state.settings.memoryMaxCount ?? DEFAULT_MEMORY_MAX_COUNT))}" />
-    <p class="setting-help">Return up to 10 matches per search by default. The agent chooses which memories to recall.</p>
     ${state.memorySettingError ? `<p class="memory-error" role="alert">${esc(state.memorySettingError)}</p>` : ""}
   </div>`;
 }
@@ -220,21 +226,19 @@ function renderSettings(): string {
   const temperature = String(s["temperature"] ?? 0.8);
   const topK = String(s["topK"] ?? 40);
   const topP = String(s["topP"] ?? 0.95);
-  const reasoningBudget = String(s["reasoningBudget"] ?? -1);
+  const reasoningBudget = String(s["reasoningBudget"] ?? "");
   const reasoningEfforts = normalizeReasoningEfforts(s["reasoningEfforts"]);
   const reasoningEffort = availableReasoningEffort(state.reasoningEffort, reasoningEfforts);
+  const reasoningEnabled = reasoningEffort !== REASONING_NONE;
+  const selectedEffort = reasoningEnabled ? reasoningEffort : DEFAULT_REASONING_EFFORT;
   const showThinking = s["showThinking"] === true;
   const autoCompact = !!s["autoCompact"];
   const autoCompactPct = clampPercent(Number(s["autoCompactThresholdPercent"] ?? 80));
-  const arReads = !!s["autoapproveReads"];
-  const arWrites = !!s["autoapproveWrites"];
   const validationCls = state.endpointMsg?.ok ? "ok" : state.endpointMsg ? "err" : "";
 
   return `
-    <div class="panel">
-      <p class="setting-help">Edition: ${esc(sideFeature.label)}</p>
-      <section class="panel-section">
-        <h3>Model</h3>
+    <div class="panel settings-panel">
+      ${settingsSection("model", "Model", `
         <label class="field-label" for="endpoint">Server URL</label>
         <div class="setting-action-row">
           <input id="endpoint" type="text" value="${esc(endpoint)}" />
@@ -253,15 +257,6 @@ function renderSettings(): string {
           <div><span>Image input</span><strong>${state.endpointMetadata.supportsVision ? "Supported" : "Unavailable"}</strong></div>
         </div>` : ""}
 
-        <label class="field-label" for="toolCallingMode">Tool calling</label>
-        <select id="toolCallingMode">
-          <option value="native" ${toolCallingMode === "native" ? "selected" : ""}>Native server only</option>
-          <option value="compat-gemma4" ${toolCallingMode === "compat-gemma4" ? "selected" : ""}>Gemma 4 compatibility</option>
-          <option value="compat-qwen3" ${toolCallingMode === "compat-qwen3" ? "selected" : ""}>Qwen 3 compatibility</option>
-          <option value="compat-muse-glimmer" ${toolCallingMode === "compat-muse-glimmer" ? "selected" : ""}>Muse Glimmer compatibility</option>
-          <option value="compat-gpt-oss" ${toolCallingMode === "compat-gpt-oss" ? "selected" : ""}>GPT-OSS compatibility</option>
-        </select>
-
         <div class="field-row">
           <div class="field-cell">
             <label class="field-label" for="temperature">Temperature</label>
@@ -276,33 +271,46 @@ function renderSettings(): string {
             <input id="topP" type="number" min="0" max="1" step="0.05" value="${esc(topP)}" />
           </div>
         </div>
-        <div class="field-row">
-          <div class="field-cell">
-            <label class="field-label" for="reasoningEffort">Reasoning effort</label>
-            <select id="reasoningEffort" aria-describedby="reasoningEffortHelp">
-              ${reasoningEffortChoices(reasoningEfforts).map(choice => `<option value="${esc(choice.effort)}" ${choice.effort === reasoningEffort ? "selected" : ""}>${esc(choice.label)}</option>`).join("")}
-            </select>
-            <p id="reasoningEffortHelp" class="setting-help">Reasoning effort levels can be customized in user settings.</p>
-            ${state.reasoningEffortError ? `<p class="validation err" role="alert">${esc(state.reasoningEffortError)}</p>` : ""}
-          </div>
-          <div class="field-cell">
-            <label class="field-label" for="reasoningBudget">Reasoning budget</label>
-            <input id="reasoningBudget" type="number" min="-1" step="1" value="${esc(reasoningBudget)}" />
-            <p class="setting-help">Use -1 for unlimited reasoning, 0 for an instant answer, or a positive number for a token threshold.</p>
+        ${switchControl("reasoningEnabled", "Activate Reasoning", reasoningEnabled)}
+        <label class="field-label" for="reasoningEffort">Reasoning effort</label>
+        <select id="reasoningEffort" ${reasoningEnabled ? "" : "disabled"}>
+          ${reasoningEffortChoices(reasoningEfforts).map(choice => `<option value="${esc(choice.effort)}" ${choice.effort === selectedEffort ? "selected" : ""}>${esc(choice.label)}</option>`).join("")}
+        </select>
+        ${state.reasoningEffortError ? `<p class="validation err" role="alert">${esc(state.reasoningEffortError)}</p>` : ""}
+        <label class="field-label" for="reasoningBudget">Reasoning budget</label>
+        <div class="number-stepper">
+          <input id="reasoningBudget" type="number" min="1" max="${Number.MAX_SAFE_INTEGER}" step="1" placeholder="Unlimited" value="${esc(reasoningBudget)}" ${reasoningEnabled ? "" : "disabled"} />
+          <div class="number-stepper-actions">
+            <button type="button" data-budget-step="1" aria-label="Increase reasoning budget" ${reasoningEnabled ? "" : "disabled"}>${chevronIcon()}</button>
+            <button type="button" data-budget-step="-1" aria-label="Decrease reasoning budget" ${reasoningEnabled ? "" : "disabled"}>${chevronIcon()}</button>
           </div>
         </div>
-      </section>
+        ${state.reasoningBudgetError ? `<p class="validation err" role="alert">${esc(state.reasoningBudgetError)}</p>` : ""}
+      `)}
 
-      <section class="panel-section">
-        <h3>Chat</h3>
+      ${settingsSection("chat", "Chat", `
         ${switchControl("showThinking", "Show thoughts", showThinking)}
-        <p class="setting-help">When off, completed thoughts are hidden from tool history. Current thinking remains visible while it is active.</p>
         ${renderMemorySettings()}
-      </section>
+      `)}
 
-      ${sideFeature.renderSection?.(s, switchControl, esc) ?? ""}
-      <section class="panel-section">
-        <h3>Automation</h3>
+      ${settingsSection("tools", "Tools", `
+        <label class="field-label" for="toolCallingMode">Tool calling</label>
+        <select id="toolCallingMode">
+          <option value="native" ${toolCallingMode === "native" ? "selected" : ""}>Native server only</option>
+          <option value="compat-gemma4" ${toolCallingMode === "compat-gemma4" ? "selected" : ""}>Gemma 4 compatibility</option>
+          <option value="compat-qwen3" ${toolCallingMode === "compat-qwen3" ? "selected" : ""}>Qwen 3 compatibility</option>
+          <option value="compat-muse-glimmer" ${toolCallingMode === "compat-muse-glimmer" ? "selected" : ""}>Muse Glimmer compatibility</option>
+          <option value="compat-gpt-oss" ${toolCallingMode === "compat-gpt-oss" ? "selected" : ""}>GPT-OSS compatibility</option>
+        </select>
+
+        <div class="tool-toggles">
+          ${switchControl("readToolsEnabled", "Read", s.readToolsEnabled !== false)}
+          ${switchControl("editToolsEnabled", "Edit", s.editToolsEnabled !== false)}
+          ${sideFeature.renderTools?.(s, switchControl, esc) ?? ""}
+        </div>
+        ${sideFeature.renderSection?.(s, switchControl, esc) ?? ""}
+      `)}
+      ${settingsSection("automation", "Automation", `
         ${switchControl("autoCompact", "Auto-compact context", autoCompact)}
         <label class="range-setting" for="autoCompactThresholdPercent">
           <span class="range-setting-head">
@@ -312,28 +320,61 @@ function renderSettings(): string {
           <input id="autoCompactThresholdPercent" type="range" min="50" max="95" step="1" value="${autoCompactPct}" />
         </label>
 
-        ${switchControl("autoapproveReads", "Auto-approve reads", arReads)}
-        ${switchControl("autoapproveWrites", "Auto-approve edits", arWrites)}
-        ${sideFeature.render(s, switchControl, esc)}
-      </section>
+        <div id="toolAutoApprovals">${renderToolAutoApprovals()}</div>
+      `)}
 
-      <section class="panel-section">
-        <h3>User settings</h3>
-        <p class="setting-help">Edit user settings for preferences. Edit workspace prompts for chat-title instructions and commit-message formatting.</p>
+      ${settingsSection("user", "User", `
         <button id="editUserSettings" class="wide-button">Edit User Settings</button>
         <button id="editWorkspacePrompts" class="wide-button">Edit workspace prompts</button>
         <button id="restorePrompts" class="wide-button">Restore default prompts</button>
-      </section>
+      `)}
 
-      <section class="panel-section">
-        <h3>Reset</h3>
+      ${settingsSection("reset", "Reset", `
         <button id="resetDefaults" class="wide-button danger">Restore all defaults</button>
-      </section>
+      `)}
     </div>
   `;
 }
 
+function settingsSection(id: SettingsSection, label: string, content: string): string {
+  const expanded = expandedSettings.has(id);
+  return `<section class="panel-section settings-section">
+    <h3><button type="button" class="settings-section-heading" data-settings-section="${id}" aria-expanded="${expanded}" aria-controls="settings-${id}"><span>${label}</span>${chevronIcon()}</button></h3>
+    <div class="settings-section-content" id="settings-${id}" ${expanded ? "" : "hidden"}>${content}</div>
+  </section>`;
+}
+
+function updateSettingsSections(): void {
+  root.querySelectorAll<HTMLButtonElement>("[data-settings-section]").forEach(button => {
+    const expanded = expandedSettings.has(button.dataset.settingsSection as SettingsSection);
+    button.setAttribute("aria-expanded", String(expanded));
+    document.getElementById(button.getAttribute("aria-controls")!)!.hidden = !expanded;
+  });
+}
+
+function renderToolAutoApprovals(): string {
+  const s = state.settings;
+  return switchControl("autoapproveReads", "Auto-approve reads", !!s.autoapproveReads, s.readToolsEnabled === false)
+    + switchControl("autoapproveWrites", "Auto-approve edits", !!s.autoapproveWrites, s.editToolsEnabled === false)
+    + sideFeature.render(s, switchControl, esc);
+}
+
 function bind(): void {
+  root.querySelectorAll<HTMLButtonElement>("[data-settings-section]").forEach(button => button.addEventListener("click", () => {
+    const section = button.dataset.settingsSection as SettingsSection;
+    const expanded = !expandedSettings.has(section);
+    if (expanded) expandedSettings.add(section); else expandedSettings.delete(section);
+    updateSettingsSections();
+    send({ type: "setSettingsSectionExpanded", section, expanded });
+  }));
+  root.querySelectorAll<HTMLInputElement>(".tool-toggles input").forEach(input => input.addEventListener("change", () => {
+    state.settings[input.id] = input.checked;
+    const approvals = root.querySelector<HTMLElement>("#toolAutoApprovals")!;
+    approvals.innerHTML = renderToolAutoApprovals();
+    bindApprovalSettings();
+    sideFeature.bind(approvals, send);
+    send({ type: "saveSetting", key: input.id, value: input.checked });
+  }));
   root.querySelectorAll(".tab-btn").forEach(b => b.addEventListener("click", () => {
     const id = (b as HTMLElement).dataset.tab as SideTab;
     openTab(id);
@@ -368,7 +409,46 @@ function bind(): void {
   bindSetting("temperature", "change", v => Number(v));
   bindSetting("topK", "change", v => Number(v));
   bindSetting("topP", "change", v => Number(v));
-  bindSetting("reasoningBudget", "change", v => Math.round(Number(v)));
+  const budgetInput = root.querySelector<HTMLInputElement>("#reasoningBudget");
+  budgetInput?.addEventListener("input", () => budgetInput.setCustomValidity(""));
+  budgetInput?.addEventListener("change", () => {
+    budgetInput.setCustomValidity("");
+    const budget = budgetInput.value.trim() === "" ? null : Number(budgetInput.value);
+    if (!isReasoningBudget(budget)) {
+      budgetInput.setCustomValidity("Enter a positive whole number or leave empty for unlimited reasoning.");
+    }
+    if (!budgetInput.reportValidity()) return;
+    state.reasoningBudgetError = undefined;
+    state.settings.reasoningBudget = budget;
+    send({ type: "saveSetting", key: "reasoningBudget", value: budget });
+  });
+  const stepBudget = (direction: number): void => {
+    if (!budgetInput || budgetInput.disabled) return;
+    budgetInput.setCustomValidity("");
+    if (budgetInput.validity.badInput) { budgetInput.reportValidity(); return; }
+    if (budgetInput.value === "") budgetInput.value = "1024";
+    else if (budgetInput.reportValidity()) {
+      budgetInput.value = String(Math.max(1, Math.min(Number.MAX_SAFE_INTEGER, Number(budgetInput.value) + direction)));
+    } else return;
+    budgetInput.dispatchEvent(new Event("change"));
+  };
+  root.querySelectorAll<HTMLButtonElement>("[data-budget-step]").forEach(button => {
+    button.addEventListener("mousedown", event => event.preventDefault());
+    button.addEventListener("click", () => stepBudget(Number(button.dataset.budgetStep)));
+  });
+  budgetInput?.addEventListener("keydown", event => {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    event.preventDefault();
+    stepBudget(event.key === "ArrowUp" ? 1 : -1);
+  });
+  root.querySelector<HTMLInputElement>("#reasoningEnabled")?.addEventListener("change", event => {
+    const enabled = (event.currentTarget as HTMLInputElement).checked;
+    const effort = enabled ? DEFAULT_REASONING_EFFORT : REASONING_NONE;
+    state.reasoningEffort = effort;
+    state.reasoningEffortError = undefined;
+    render();
+    send({ type: "setReasoningEffort", effort });
+  });
   root.querySelector<HTMLSelectElement>("#reasoningEffort")?.addEventListener("change", event => {
     const effort = (event.currentTarget as HTMLSelectElement).value as ReasoningEffort;
     state.reasoningEffort = effort;
@@ -404,13 +484,17 @@ function bind(): void {
   bindSetting("showThinking", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoCompact", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindRangeSetting("autoCompactThresholdPercent");
-  bindSetting("autoapproveReads", "change", (_v, el) => (el as HTMLInputElement).checked);
-  bindSetting("autoapproveWrites", "change", (_v, el) => (el as HTMLInputElement).checked);
+  bindApprovalSettings();
   sideFeature.bind(root, send, render);
   root.querySelector("#editWorkspacePrompts")?.addEventListener("click", () => send({ type: "editWorkspacePrompts" }));
   root.querySelector("#editUserSettings")?.addEventListener("click", () => send({ type: "editUserSettingsJson" }));
   root.querySelector("#restorePrompts")?.addEventListener("click", () => send({ type: "restoreDefaultGeneratedPrompts" }));
   root.querySelector("#resetDefaults")?.addEventListener("click", () => send({ type: "resetAllDefaults" }));
+}
+
+function bindApprovalSettings(): void {
+  bindSetting("autoapproveReads", "change", (_v, el) => (el as HTMLInputElement).checked);
+  bindSetting("autoapproveWrites", "change", (_v, el) => (el as HTMLInputElement).checked);
 }
 
 function openTab(tab: SideTab): void {
@@ -489,10 +573,10 @@ function historyIcon(): string {
   </svg>`;
 }
 
-function switchControl(id: string, label: string, checked: boolean): string {
-  return `<label class="switch-row" for="${id}">
+function switchControl(id: string, label: string, checked: boolean, disabled = false): string {
+  return `<label class="switch-row${disabled ? " disabled" : ""}" for="${id}">
     <span>${esc(label)}</span>
-    <input id="${id}" type="checkbox" ${checked ? "checked" : ""}/>
+    <input id="${id}" type="checkbox" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""}/>
     <span class="switch" aria-hidden="true"></span>
   </label>`;
 }
@@ -509,6 +593,10 @@ window.addEventListener("message", ev => {
   const msg = ev.data as ExtToSide;
   if (sideFeature.receive?.(msg)) { render(); return; }
   switch (msg.type) {
+    case "settingsSections":
+      expandedSettings = new Set(msg.expanded);
+      updateSettingsSections();
+      break;
     case "revealMemory": {
       state.tab = "chats";
       state.search = "";
@@ -523,6 +611,7 @@ window.addEventListener("message", ev => {
     case "settingSaved":
       if ((msg.key === "memoryEnabled" || msg.key === "memoryMaxCount") && !msg.ok) { state.memorySettingError = msg.error; render(); }
       if (msg.key === "reasoningEffort" && !msg.ok) { state.reasoningEffortError = msg.error; render(); }
+      if (msg.key === "reasoningBudget" && !msg.ok) { state.reasoningBudgetError = msg.error; render(); }
       break;
     case "memories": state.memories = msg.memories; render(); break;
     case "memoryError": state.memoryError = msg.error; render(); break;
