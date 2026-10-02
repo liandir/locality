@@ -2304,8 +2304,8 @@ function updateContextPill(): void {
   if (compact) compact.dataset.tip = contextHint;
   const hint = root.querySelector("#compactHint") as HTMLElement | null;
   if (hint) {
-    hint.textContent = contextHint;
-    hint.classList.toggle("active", compacting || !!state.compactHintOverride);
+    hint.textContent = compacting ? "" : contextHint;
+    hint.classList.toggle("active", !compacting && !!state.compactHintOverride);
   }
   const menu = root.querySelector("#compactMenu") as HTMLElement | null;
   if (menu) menu.hidden = !state.compactMenuOpen;
@@ -2314,7 +2314,7 @@ function updateContextPill(): void {
   if (icon) setHtml(icon, compacting
     ? '<span class="ctx-compacting-ring" aria-hidden="true"></span>'
     : circleIcon(ratio));
-  if (pctEl) pctEl.textContent = compacting ? "?" : `${pct}%`;
+  if (pctEl) pctEl.textContent = compacting ? "" : `${pct}%`;
 }
 
 function updateChatModeControl(): void {
