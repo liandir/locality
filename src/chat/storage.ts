@@ -37,6 +37,8 @@ export interface ChatAttachment {
 export interface ChatMessage {
   role: Role;
   content: string;
+  /** Display-only terminal response; never included in model context. */
+  interruption?: { reason: string; mode: ChatMode; reasoningEffort: ReasoningEffort };
   /** Mode selected when a user message was submitted; absent in older history. */
   mode?: ChatMode;
   /** Native model reasoning associated with this assistant response. */
@@ -508,6 +510,11 @@ function normalizeWorkspaceRoot(root: string): string {
 
 /** The transcript and model context share an array until the first compaction. */
 export function modelMessages(rec: ChatRecord): ChatMessage[] {
+  // Rebuilt histories (for example an edited chat or historical fork) may
+  // contain terminal cards even when their separate context was discarded.
+  if (!rec.contextMessages && rec.messages.some(message => message.interruption)) {
+    rec.contextMessages = rec.messages.filter(message => !message.interruption);
+  }
   return rec.contextMessages ?? rec.messages;
 }
 

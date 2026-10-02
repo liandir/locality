@@ -20,6 +20,7 @@ interface FakeSession {
   cancel: ReturnType<typeof vi.fn>;
   approve: ReturnType<typeof vi.fn>;
   approveFutureTools: ReturnType<typeof vi.fn>;
+  continueTurn: ReturnType<typeof vi.fn>;
   shutdown: ReturnType<typeof vi.fn>;
   sent: string[];
   sentModes: ChatMode[];
@@ -38,6 +39,16 @@ vi.mock("../src/chat/session.js", () => ({
     cancel = vi.fn(() => this.finish());
     approve = vi.fn();
     approveFutureTools = vi.fn(async () => undefined);
+    continueTurn = vi.fn(async (_messageTs: number) => {
+      if (this.active) return false;
+      this.active = true;
+      this.emit({ kind: "turnPreparing", reason: "context" });
+      this.turn = new Promise<void>(resolve => { this.finishTurn = resolve; });
+      await this.turn;
+      this.active = false;
+      this.emit({ kind: "turnEnd", messageId: this.args.record.id, mode: this.args.record.mode });
+      return true;
+    });
     shutdown = vi.fn(async () => { this.cancel(); });
     renameTitle = vi.fn(async (title: string) => { this.args.record.title = title; });
     constructor(private args: { record: ChatRecord; emit: (event: UiEvent) => void }) {
@@ -127,6 +138,27 @@ beforeEach(() => {
   mocks.settings.reasoningEfforts = {};
   mocks.settings.memoryEnabled = true;
   mocks.metadata.mockReset().mockResolvedValue({ modelAlias: "model-a", contextSize: 32768, supportsVision: false });
+});
+
+describe("continue interrupted chats", () => {
+  it("targets the originating chat and drains messages queued during continuation", async () => {
+    const { provider, send } = setup();
+    provider.openChat(record("a"));
+    const a = mocks.sessions.get("a")!;
+    const continuation = send({ type: "continueChat", chatId: "a", messageTs: 123 });
+    expect(a.continueTurn).toHaveBeenCalledWith(123);
+    await send({ type: "send", chatId: "a", text: "Next request", mode: "act" });
+    expect(a.sent).toEqual([]);
+    provider.openChat(record("b"));
+    await send({ type: "continueChat", chatId: "a", messageTs: 123 });
+    expect(a.continueTurn).toHaveBeenCalledTimes(1);
+    expect(mocks.sessions.get("b")!.continueTurn).not.toHaveBeenCalled();
+    a.finish();
+    await continuation;
+    await vi.waitFor(() => expect(a.sent).toEqual(["Next request"]));
+    a.finish();
+    await provider.closeAll();
+  });
 });
 
 describe("reasoning effort from Settings", () => {

@@ -1123,7 +1123,12 @@ function renderMessageActionsInnerHtml(m: Message): string {
     actions.push(`<button class="copy-btn" type="button" data-edit-message="${m.recordTs}" data-tip="Edit message" aria-label="Edit message">${pencilIcon()}</button>`);
   }
   if (m.role === "assistant" && m.responseToTs !== undefined && !state.busy) {
-    actions.push(`<button class="copy-btn" type="button" data-fork-chat="${m.responseToTs}" data-tip="Fork chat" aria-label="Fork chat">${forkIcon()}</button>`);
+    const latestResponse = [...state.messages].reverse().find(message => message.role === "assistant" || message.role === "user");
+    if (m.aborted && m.recordTs !== undefined && latestResponse === m) {
+      actions.push(`<button class="copy-btn" type="button" data-continue-chat="${m.recordTs}" data-tip="Continue" aria-label="Continue">${rightArrowIcon()}</button>`);
+    } else if (!m.aborted) {
+      actions.push(`<button class="copy-btn" type="button" data-fork-chat="${m.responseToTs}" data-tip="Fork chat" aria-label="Fork chat">${forkIcon()}</button>`);
+    }
   }
   const date = (m.role === "user" || m.role === "assistant") && m.recordTs !== undefined
     ? renderMessageDate(m.recordTs) : "";
@@ -2941,6 +2946,10 @@ function summaryRepeatsVisibleText(m: Message, summary: string): boolean {
 
 function restoreAssistantParts(msg: Message, recordMessage: ChatRecord["messages"][number]): void {
   msg.recordTs = recordMessage.ts;
+  if (recordMessage.interruption) {
+    msg.aborted = recordMessage.interruption.reason;
+    msg.parts.push({ id: nextPartId("abort"), kind: "abort", reason: msg.aborted });
+  }
   let restoredText = "";
   let restoredThought = "";
   let runThought: Extract<MessagePart, { kind: "thought" }> | null = null;
@@ -3001,6 +3010,7 @@ function restoreAssistantParts(msg: Message, recordMessage: ChatRecord["messages
   if (msg.workStartedAt !== undefined && msg.workEndedAt === undefined) {
     msg.workEndedAt = restoredStarts.length > 0 ? Math.max(...restoredStarts) : msg.workStartedAt;
   }
+  if (recordMessage.interruption && msg.workStartedAt !== undefined) msg.workEndedAt = recordMessage.ts;
 }
 
 
@@ -3328,6 +3338,15 @@ function bindOnce(): void {
     }
     if (target.closest("[data-edit-submit]")) {
       submitMessageEdit();
+      return;
+    }
+    const continueChat = target.closest("[data-continue-chat]") as HTMLElement | null;
+    if (continueChat) {
+      if (state.busy) return;
+      send({ type: "continueChat", messageTs: Number(continueChat.dataset.continueChat) });
+      state.busy = true;
+      state.serverPending = "context";
+      render();
       return;
     }
     const forkChat = target.closest("[data-fork-chat]") as HTMLElement | null;
@@ -4006,6 +4025,12 @@ function forkIcon(): string {
   </svg>`;
 }
 
+function rightArrowIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="M4 12h16m-6-6 6 6-6 6"/>
+  </svg>`;
+}
+
 
 
 function compactIcon(): string {
@@ -4108,10 +4133,10 @@ function loadFromRecord(rec: ChatRecord): void {
       // A turn that looped over tools is persisted as one assistant message
       // per LLM round-trip. Merge consecutive assistant/tool rounds into a
       // single message so a restored turn renders as the same connected
-      // timeline the user watched stream live. (Only a user message can sit
-      // between two turns, so a run of assistant/tool rows is always one turn.)
+      // timeline the user watched stream live. An interruption also ends a
+      // turn; its continuation starts a new response without a user message.
       const prev = state.messages[state.messages.length - 1];
-      if (prev?.role === "assistant") {
+      if (prev?.role === "assistant" && !prev.aborted) {
         restoreAssistantParts(prev, m);
       } else {
         const msg: Message = { id, role: "assistant", responseToTs: currentUserTs, parts: [], text: "", thought: "", toolCards: [] };
@@ -4127,7 +4152,7 @@ function loadFromRecord(rec: ChatRecord): void {
       // summary (rendered as stray cards after its final reply); start a fresh
       // stub instead, which the turn's later assistant message merges into.
       const lastMsg = state.messages[state.messages.length - 1];
-      let last = lastMsg?.role === "assistant" ? lastMsg : undefined;
+      let last = lastMsg?.role === "assistant" && !lastMsg.aborted ? lastMsg : undefined;
       if (!last) {
         last = { id, role: "assistant", responseToTs: currentUserTs, parts: [], text: "", thought: "", toolCards: [] };
         state.messages.push(last);
@@ -4647,6 +4672,7 @@ function handleHostMessage(msg: ExtToChat): void {
         state.messages.push(target);
       }
       target.aborted = msg.reason;
+      target.recordTs = msg.messageTs ?? Date.now();
       finalizeLiveThoughts(target);
       if (target.workStartedAt !== undefined && target.workEndedAt === undefined) {
         target.workEndedAt = Date.now();
@@ -4706,7 +4732,7 @@ function handleHostMessage(msg: ExtToChat): void {
       state.serverPending = state.busy ? "server" : undefined;
       for (const m of state.messages) {
         finalizeLiveThoughts(m);
-        if (m.id === msg.messageId) m.recordTs = msg.messageTs;
+        if (m.id === msg.messageId && msg.messageTs !== undefined) m.recordTs = msg.messageTs;
         if (m.id === msg.messageId && m.workStartedAt !== undefined && m.workEndedAt === undefined) {
           m.workEndedAt = Date.now();
         }

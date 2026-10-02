@@ -608,6 +608,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.onChatListChanged();
         break;
       }
+      case "continueChat": {
+        const runtime = this.active;
+        if (!runtime.session) break;
+        if (runtime.messageLoopRunning) { this.activateRuntime(runtime, true); break; }
+        if (await runtime.session.continueTurn(m.messageTs)) {
+          if (runtime.removed) break;
+          this.onChatOpened(runtime.session.getRecord());
+          this.onChatListChanged();
+          await this.pushRecentChats();
+          this.drainMessageQueueIfIdle(runtime);
+        } else if (runtime === this.active) this.activateRuntime(runtime, true);
+        break;
+      }
       case "openChat": await this.openChatById(m.id); break;
       case "openMemory": await this.onOpenMemory?.(m.id); break;
       case "cancel": {

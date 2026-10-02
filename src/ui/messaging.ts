@@ -84,6 +84,13 @@ export interface ChatTurnEnd {
   messageTs?: number;
 }
 
+/** Terminal response timestamp comes from the saved host transcript. */
+export interface ChatTurnAbort {
+  kind: "abort";
+  reason: string;
+  messageTs?: number;
+}
+
 /** Remove only the unfinished output of a generation that will be retried. */
 export interface ChatResponseDiscarded {
   kind: "responseDiscarded";
@@ -162,6 +169,7 @@ export type ChatToExt = (
   | { type: "requestAttachmentText"; attachmentId: string; requestId: number }
   | { type: "discardAttachment"; attachmentId: string }
   | { type: "forkChat"; throughUserMessageTs: number }
+  | { type: "continueChat"; messageTs: number }
   | { type: "openChat"; id: string }
   | { type: "cancel" }
   | { type: "approveTool"; toolId: string; approved: boolean; autoApprove?: boolean }

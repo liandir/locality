@@ -16,7 +16,7 @@ import {
   type LlmMessage
 } from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
-import type { ChatContextActivity, ChatContextState, ChatMemoryCreations, ChatPlanFinal, ChatPlanningState, ChatResponseDiscarded, ChatToolProcess, ChatToolResultDisplay, ChatTurnEnd, ChatTurnPreparation, ChatUserMessage } from "../ui/messaging.js";
+import type { ChatContextActivity, ChatContextState, ChatMemoryCreations, ChatPlanFinal, ChatPlanningState, ChatResponseDiscarded, ChatToolProcess, ChatToolResultDisplay, ChatTurnAbort, ChatTurnEnd, ChatTurnPreparation, ChatUserMessage } from "../ui/messaging.js";
 import { createFeatures } from "../build/runtime.js";
 import type { FeatureRuntime, FeatureResultUpdate } from "../build/contracts.js";
 import { loadRootAgentsMd } from "../llm/agentsMd.js";
@@ -58,6 +58,7 @@ import { countTokens, promptTokens, recomputeTokens, truncateToTokenBudget } fro
 import { lineDiffStats, renderLineDiff } from "./diffPreview.js";
 import { rememberFileWrite, summarizeFileChanges, type FileChangeSummary, type TrackedFileWrite } from "./fileChanges.js";
 import { generateChatTitle } from "./chatTitle.js";
+import { continuationContext } from "./continuation.js";
 import type { ChatMode } from "./mode.js";
 import { asOpenAiTools, toolsForMode, isMemoryToolName, validateToolArguments } from "../tools/toolDefinitions.js";
 import {
@@ -88,7 +89,7 @@ export type UiEvent =
   | { kind: "summary"; messageId: string; text: string }
   | ChatPlanFinal
   | ChatPlanningState
-  | { kind: "abort"; reason: string }
+  | ChatTurnAbort
   | { kind: "notice"; text: string }
   | ChatTurnEnd
   | ChatResponseDiscarded
@@ -247,6 +248,7 @@ export class ChatSession {
   // its mode choices stable if the composer changes while the turn is active;
   // the new record values take effect when the next user turn starts.
   private activeTurnModes?: { mode: ChatMode; reasoningEffort: ReasoningEffort };
+  private pendingInterruption?: ChatMessage;
 
   constructor(args: {
     storage: ChatStorage;
@@ -259,7 +261,20 @@ export class ChatSession {
     this.storage = args.storage;
     this.workspaceRoot = args.workspaceRoot;
     this.record = args.record;
-    this.emit = args.emit;
+    this.emit = event => {
+      // Publish terminal errors only after tool cleanup and persistence. This
+      // prevents Continue from racing a still-running or still-saving tool.
+      if (event.kind === "abort" && event.messageTs === undefined && this.activeTurnModes) {
+        this.pendingInterruption ??= {
+          role: "assistant", content: "",
+          ts: Math.max(Date.now(), (this.record.messages.at(-1)?.ts ?? 0) + 1),
+          interruption: { reason: event.reason, ...this.activeTurnModes }
+        };
+        return;
+      }
+      if (event.kind === "turnEnd" && this.pendingInterruption) return;
+      args.emit(event);
+    };
     this.features = createFeatures({
       workspaceRoot: this.workspaceRoot,
       secrets: args.secrets,
@@ -681,6 +696,41 @@ export class ChatSession {
     }
   }
 
+  async continueTurn(messageTs: number): Promise<boolean> {
+    const interrupted = this.record.messages.at(-1);
+    if (this.disposed || this.activeTurn || !interrupted?.interruption || interrupted.ts !== messageTs) return false;
+    const { mode, reasoningEffort } = interrupted.interruption;
+    this.activeTurnModes = { mode, reasoningEffort };
+    this.record.mode = mode;
+    delete this.record.pendingPlanMessageTs;
+    this.record.planning = mode === "plan";
+    this.record.contextMessages = continuationContext(this.record);
+    this.record.totalTokens = this.record.contextMessages.reduce((total, message) => total + (message.tokens ?? 0), 0);
+    this.loadedChatContextPending = true;
+    this.contextActivities.clear();
+    const turn = this.runForegroundTurn(async (ready, waitingForMemory) => {
+      this.emitLoaded();
+      this.emit({ kind: "turnPreparing", reason: waitingForMemory ? "memory" : "context" });
+      await this.saveRecord();
+      await ready();
+      const messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      this.emit({ kind: "turnWorkStarted", messageId, startedAt: Date.now() });
+      const s = readSettings();
+      if (await this.prepareContextForModelRequest(s, { reload: false })) await this.runTurn(s, messageId);
+    });
+    this.activeTurn = turn;
+    try {
+      await turn;
+      return true;
+    } finally {
+      this.completeContextIngestion();
+      if (this.activeTurn === turn) {
+        this.activeTurn = undefined;
+        this.activeTurnModes = undefined;
+      }
+    }
+  }
+
   private async runForegroundTurn(run: (ready: () => Promise<void>, waitingForMemory: boolean) => Promise<void>): Promise<void> {
     this.abort = new AbortController();
     const signal = this.abort.signal;
@@ -702,13 +752,25 @@ export class ChatSession {
         if (!result.ok) throw result.error;
       }, waitingForMemory);
     } catch (error) {
-      if (!signal.aborted) throw error;
-      this.emit({ kind: "abort", reason: "Stopped by user." });
+      this.emit({ kind: "abort", reason: signal.aborted ? "Stopped by user." : (error as Error).message });
     } finally {
       // A failed save can exit before the reservation has resolved.
       if (!endForeground) this.abort.abort();
       await acquired;
       endForeground?.();
+      const interrupted = this.pendingInterruption;
+      if (interrupted?.interruption) {
+        // Keep terminal cards in the transcript without sending errors or
+        // unfinished assistant text back to the model on continuation.
+        this.record.contextMessages ??= this.record.messages.slice();
+        this.record.messages.push(interrupted);
+        try {
+          await this.saveRecord();
+        } finally {
+          this.pendingInterruption = undefined;
+          this.emit({ kind: "abort", reason: interrupted.interruption.reason, messageTs: interrupted.ts });
+        }
+      }
     }
   }
 
@@ -1426,6 +1488,7 @@ export class ChatSession {
           }
         }
         finishPrompt();
+        if (this.abort.signal.aborted) aborted = true;
         if (!aborted) {
           const tail = this.toolProtocol === "native"
             ? [
@@ -1546,13 +1609,16 @@ export class ChatSession {
       // The model truncated mid-tool-call (an unclosed write_file the parser
       // dropped). Feed the error back as a tool result and re-prompt so the
       // agent can re-emit the call, instead of stopping with a dead red card.
-      if (!aborted && this.streamingTools.size > 0) {
+      if (!aborted && !this.abort.signal.aborted && this.streamingTools.size > 0) {
         await this.feedBackIncompleteStreamingTools(s);
         toolLoop = true;
       }
 
       // If a tool ran this iteration, the LLM needs another pass; otherwise we are done.
-      if (aborted) break;
+      if (aborted || this.abort.signal.aborted) {
+        this.emit({ kind: "abort", reason: "Stopped by user." });
+        break;
+      }
       if (toolLoop) {
         ranAnyTool = true;
         // Native interleaved-thinking models require the reasoning that led to
