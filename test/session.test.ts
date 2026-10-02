@@ -176,7 +176,11 @@ describe("interrupted turn continuation", () => {
       expect(loaded.messages.at(-1)).toEqual(terminal);
       session = new ChatSession({ storage, workspaceRoot: ws, record: loaded, emit: event => events.push(event) });
       const checkpointEvents = events.length;
+      const completedHistory = structuredClone(loaded.messages.slice(0, -1));
       mocks.streamChat.mockImplementation(async function* (_endpoint, request) {
+        // The terminal card is already gone from disk while continuation streams.
+        expect(loaded.messages).toEqual(completedHistory);
+        expect((await storage.load(record.id))!.messages).toEqual(completedHistory);
         const serialized = JSON.stringify(request.messages);
         expect(request.messages.filter((message: { role: string }) => message.role === "user")).toHaveLength(1);
         expect(request.messages.at(-1)).toMatchObject({ role: "tool", tool_call_id: "completed_call" });
@@ -189,9 +193,14 @@ describe("interrupted turn continuation", () => {
       expect(await session.continueTurn(terminal.ts)).toBe(true);
       expect(events.slice(checkpointEvents).some(event => event.kind === "userMessage" || event.kind === "toolCallProposed")).toBe(false);
       expect(events.slice(checkpointEvents)).toContainEqual({ kind: "turnPreparing", reason: "context" });
+      const resumed = events.slice(checkpointEvents).find(event => event.kind === "turnWorkStarted");
+      expect(resumed).toMatchObject({ continued: true });
+      expect(events.slice(checkpointEvents)).toContainEqual({ kind: "turnStart", messageId: resumed!.messageId });
       expect(loaded.messages.filter(message => message.role === "user")).toHaveLength(1);
       expect(loaded.messages.filter(message => message.toolCall?.name === "create_file")).toHaveLength(1);
       expect(loaded.messages.at(-1)?.content).toBe("Finished from the completed file.");
+      expect(loaded.messages.some(message => message.interruption)).toBe(false);
+      expect((await storage.load(record.id))!.messages).toEqual(loaded.messages);
       expect(await session.continueTurn(terminal.ts)).toBe(false);
     } finally {
       await session.shutdown();
@@ -212,6 +221,7 @@ describe("interrupted turn continuation", () => {
       expect(await session.continueTurn(first)).toBe(true);
       const second = record.messages.at(-1)!.ts;
       expect(second).toBeGreaterThan(first);
+      expect(record.messages.filter(message => message.interruption)).toHaveLength(1);
       expect(await session.continueTurn(first)).toBe(false);
       let ready!: (size: number) => void;
       mocks.fetchServerContextSize.mockImplementation(() => new Promise<number>(resolve => { ready = resolve; }));
@@ -221,6 +231,7 @@ describe("interrupted turn continuation", () => {
       });
       const resumed = session.continueTurn(second);
       await vi.waitFor(() => expect(ready).toBeDefined());
+      expect(record.messages.some(message => message.interruption)).toBe(false);
       expect(await session.continueTurn(second)).toBe(false);
       mocks.fetchServerContextSize.mockResolvedValue(32768);
       ready(32768);
@@ -229,6 +240,29 @@ describe("interrupted turn continuation", () => {
       expect(record.messages.filter(message => message.role === "user")).toHaveLength(1);
       expect(events.filter(event => event.kind === "abort")).toHaveLength(2);
     } finally { await session.shutdown(); }
+  });
+
+  it("keeps retry actions unique when repeated failures occur in the same millisecond", async () => {
+    mocks.fetchServerContextSize.mockRejectedValue(new Error("offline"));
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const session = new ChatSession({ storage: { save: vi.fn() } as never, workspaceRoot: "/tmp/workspace", record, emit: vi.fn() });
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    try {
+      await session.sendUserMessage("Try this");
+      const first = record.messages.at(-1)!.ts;
+      expect(await session.continueTurn(first)).toBe(true);
+      const second = record.messages.at(-1)!.ts;
+      expect(second).toBeGreaterThan(first);
+      expect(await session.continueTurn(first)).toBe(false);
+      expect(record.messages.filter(message => message.interruption)).toHaveLength(1);
+      expect(await session.continueTurn(second)).toBe(true);
+      expect(record.messages.at(-1)!.ts).toBeGreaterThan(second);
+      expect(record.messages.filter(message => message.interruption)).toHaveLength(1);
+    } finally {
+      now.mockRestore();
+      await session.shutdown();
+    }
   });
 
   it("requires a fresh approval after cancelling an unexecuted write", async () => {
@@ -4347,9 +4381,12 @@ describe("steering an active turn", () => {
     ]);
     expect(events.filter(e => e.kind === "turnEnd")).toEqual([expect.objectContaining({ mode })]);
     expect(events.some(e => e.kind === "abort")).toBe(false);
-    const before = events.find(e => e.kind === "text" && e.delta === "Initial approach.")!;
-    const after = events.find(e => e.kind === "text" && e.delta === "Revised approach.")!;
-    expect("messageId" in before && "messageId" in after && before.messageId !== after.messageId).toBe(true);
+    const textEvents = events.filter(e => e.kind === "text");
+    const before = textEvents.find(e => e.delta === "Initial approach.")!;
+    const after = textEvents.find(e => e.delta === "Revised approach.")!;
+    expect(after.messageId).toBe(before.messageId);
+    expect(events.filter(e => e.kind === "turnStart")).toHaveLength(1);
+    expect(events.find(e => e.kind === "turnEnd")).toMatchObject({ messageId: before.messageId });
     expect((await storage.load(record.id))?.messages.find(m => m.steering)).toMatchObject({
       role: "user", content: "Use the smaller change", steering: true
     });

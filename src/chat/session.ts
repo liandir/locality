@@ -16,7 +16,7 @@ import {
   type LlmMessage
 } from "../llm/client.js";
 import { buildSystemPrompt, coalesceSameRole, renderToolCallForPrompt } from "../llm/prompt.js";
-import type { ChatContextActivity, ChatContextState, ChatMemoryCreations, ChatPlanFinal, ChatPlanningState, ChatResponseDiscarded, ChatToolProcess, ChatToolResultDisplay, ChatTurnAbort, ChatTurnEnd, ChatTurnPreparation, ChatUserMessage } from "../ui/messaging.js";
+import type { ChatContextActivity, ChatContextState, ChatMemoryCreations, ChatPlanFinal, ChatPlanningState, ChatResponseDiscarded, ChatToolProcess, ChatToolResultDisplay, ChatTurnAbort, ChatTurnEnd, ChatTurnPreparation, ChatTurnWorkStarted, ChatUserMessage } from "../ui/messaging.js";
 import { createFeatures } from "../build/runtime.js";
 import type { FeatureRuntime, FeatureResultUpdate } from "../build/contracts.js";
 import { loadRootAgentsMd } from "../llm/agentsMd.js";
@@ -75,7 +75,7 @@ export type UiEvent =
   | ChatTurnPreparation
   | ChatContextActivity
   | ChatMemoryCreations
-  | { kind: "turnWorkStarted"; messageId: string; startedAt: number }
+  | ChatTurnWorkStarted
   | { kind: "titleGenerationFinished" }
   | { kind: "turnStart"; messageId: string }
   | { kind: "text"; messageId: string; delta: string }
@@ -253,6 +253,7 @@ export class ChatSession {
   // the new record values take effect when the next user turn starts.
   private activeTurnModes?: { mode: ChatMode; reasoningEffort: ReasoningEffort };
   private pendingInterruption?: ChatMessage;
+  private lastInterruptionTs = 0;
   private pendingSteering: ChatMessage[] = [];
   private acceptingSteering = false;
   /** Cancels only generation; the current tool keeps the turn's signal. */
@@ -275,9 +276,10 @@ export class ChatSession {
       if (event.kind === "abort" && event.messageTs === undefined && this.activeTurnModes) {
         this.pendingInterruption ??= {
           role: "assistant", content: "",
-          ts: Math.max(Date.now(), (this.record.messages.at(-1)?.ts ?? 0) + 1),
+          ts: Math.max(Date.now(), (this.record.messages.at(-1)?.ts ?? 0) + 1, this.lastInterruptionTs + 1),
           interruption: { reason: event.reason, ...this.activeTurnModes }
         };
+        this.lastInterruptionTs = this.pendingInterruption.ts;
         return;
       }
       if (event.kind === "turnEnd" && this.pendingInterruption) return;
@@ -747,16 +749,20 @@ export class ChatSession {
     delete this.record.pendingPlanMessageTs;
     this.record.planning = mode === "plan";
     this.record.contextMessages = continuationContext(this.record);
+    // Continue reopens the interrupted response in both saved history and the
+    // live view. Keep completed work, but remove its terminal error card.
+    this.lastInterruptionTs = interrupted.ts;
+    this.record.messages.pop();
     this.record.totalTokens = this.record.contextMessages.reduce((total, message) => total + (message.tokens ?? 0), 0);
     this.loadedChatContextPending = true;
     this.contextActivities.clear();
     const turn = this.runForegroundTurn(async (ready, waitingForMemory) => {
       this.emitLoaded();
       this.emit({ kind: "turnPreparing", reason: waitingForMemory ? "memory" : "context" });
+      const messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      this.emit({ kind: "turnWorkStarted", messageId, startedAt: Date.now(), continued: true });
       await this.saveRecord();
       await ready();
-      const messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      this.emit({ kind: "turnWorkStarted", messageId, startedAt: Date.now() });
       const s = readSettings();
       if (await this.prepareContextForModelRequest(s, { reload: false })) await this.runTurn(s, messageId);
     });
@@ -1327,8 +1333,6 @@ export class ChatSession {
     while (true) {
       if (this.pendingSteering.length) {
         await this.flushSteeringMessages();
-        messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        this.emit({ kind: "turnStart", messageId });
         serverUsageTotal = undefined;
       }
       this.resumeContextActivities();

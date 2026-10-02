@@ -11,7 +11,8 @@ import { renderMemoryContents, renderMemoryCreation, renderMemoryResult } from "
 import { CARD_SEPARATOR_HTML, renderToolOutputSurface } from "./toolOutputSurface.js";
 import { parseQuestionPayload, renderQuestionResult } from "./questionResult.js";
 import { copyableAssistantText } from "./messageCopy.js";
-import { discardResponseParts } from "./responseRecovery.js";
+import { discardResponseParts, resumeResponseMessage } from "./responseRecovery.js";
+import { isAssistantTurnLive, isWorkPart, partStartedAt, resolveWorkTimeline, type ResolvedUnit as WorkTimelineUnit } from "./workTimeline.js";
 import { ScrollFollow } from "./scrollFollow.js";
 import MarkdownIt from "markdown-it";
 import type { RenderRule } from "markdown-it/lib/renderer.mjs";
@@ -59,7 +60,6 @@ import { createAttachmentGallery, moveAttachmentGallery, type AttachmentGallery 
 import {
   rendersSingleWorkItemDirectly,
   thinkingPresentation,
-  workPresentationForTurn,
   workSectionPresentation
 } from "./workPresentation.js";
 import {
@@ -187,6 +187,7 @@ type MessagePart =
   | { id: string; kind: "text"; text: string; startedAt?: number }
   | { id: string; kind: "thought"; text: string; live: boolean; userExpanded?: boolean; startedAt?: number; durationMs?: number }
   | { id: string; kind: "tool"; card: ToolCard; startedAt?: number }
+  | { id: string; kind: "steering"; message: Message; startedAt?: number }
   | { id: string; kind: "summary"; text: string }
   | { id: string; kind: "abort"; reason: string };
 
@@ -205,6 +206,7 @@ interface Message {
   aborted?: string;
   workStartedAt?: number;
   workEndedAt?: number;
+  startNewPart?: boolean;
   hasTurnWorkSummary?: boolean;
   workGroupExpanded?: Map<string, boolean>;
   fileChanges?: FileChangeSummary[];
@@ -454,6 +456,21 @@ function getOrCreateMsg(id: string, role: Message["role"]): Message {
   return m;
 }
 
+/** Guidance belongs to the response chronology, including in saved history. */
+function appendUserMessage(message: Message): void {
+  if (!message.steering) {
+    state.messages.push(message);
+    return;
+  }
+  let response = state.messages.at(-1);
+  if (response?.role !== "assistant" || response.aborted) {
+    response = getOrCreateMsg(`steering_${message.id}`, "assistant");
+    response.responseToTs = [...state.messages].reverse().find(m => m.role === "user" && !m.steering)?.recordTs;
+  }
+  finalizeLiveThoughts(response);
+  response.parts.push({ id: nextPartId("steering"), kind: "steering", message, startedAt: message.recordTs });
+}
+
 function markWorkStarted(m: Message): void {
   if (m.workStartedAt === undefined) m.workStartedAt = Date.now();
   if (m.workEndedAt !== undefined) m.workEndedAt = undefined;
@@ -473,13 +490,14 @@ function finalizeLiveThoughts(m: Message): void {
 function appendPartText(m: Message, kind: "text" | "thought", delta: string): void {
   const last = m.parts[m.parts.length - 1];
   if (kind === "text" && !delta.trim()) {
-    if (last?.kind === "text") last.text += delta;
+    if (last?.kind === "text" && !m.startNewPart) last.text += delta;
     return;
   }
-  if (last?.kind === kind) {
+  if (last?.kind === kind && !m.startNewPart) {
     last.text += delta;
     return;
   }
+  m.startNewPart = false;
   if (kind === "thought") {
     markWorkStarted(m);
     finalizeLiveThoughts(m);
@@ -1195,125 +1213,14 @@ function fileChangeKey(index: number): string {
   return String(index);
 }
 
-interface ResolvedUnit {
-  kind: "work" | "inline";
-  groupId?: string;
-  parts: MessagePart[];
-  expanded: boolean;
-  live?: boolean;
-  liveStatus?: string;
-  collapsible?: boolean;
-  conglomerate?: boolean;
-  children?: ResolvedUnit[];
-  startedAt?: number;
-  endedAt?: number;
-}
+type ResolvedUnit = WorkTimelineUnit<MessagePart>;
 
-/**
- * Split an assistant message's parts into chronological render units. Every
- * run of work before a model text output gets its own disclosure group. During
- * a live turn the top-level Worked-for summary is absent: completed sessions
- * stay collapsed, while the active session shows its current activity until
- * another tool or a following status switches it to the live summary. Once
- * the turn settles, every session moves under one collapsed Worked-for summary.
- */
 function resolveRenderUnits(m: Message): ResolvedUnit[] {
-  const parts = m.parts.filter(part => !isBlankTextPart(part)
-    && (part.kind !== "thought" || thinkingPresentation(state.showThinking, part.live).visible));
-  const turnLive = isAssistantTurnLive(m);
-  const workPresentation = workPresentationForTurn(turnLive);
-  if (!parts.some(isWorkPart)) {
-    const inlineUnits: ResolvedUnit[] = parts.map(part => ({
-      kind: "inline" as const,
-      parts: [part],
-      expanded: false
-    }));
-    return wrapTurnWorkSummary(m, parts, inlineUnits);
-  }
-
-  const units: ResolvedUnit[] = [];
-  let workParts: MessagePart[] = [];
-  let sessionIndex = 0;
-  const flushWork = (endedAt: number | undefined, live: boolean): void => {
-    if (workParts.length === 0) return;
-    const stableId = `${m.id}:worked:${sessionIndex++}`;
-    // Changing identity when the live session settles makes it collapse again,
-    // even when the user had expanded it while watching the tools run.
-    const groupId = live ? `${stableId}:live` : stableId;
-    const firstPartStart = partStartedAt(workParts[0]);
-    const startedAt = sessionIndex === 1 ? (m.workStartedAt ?? firstPartStart) : firstPartStart;
-    const currentPart = workParts.at(-1);
-    const liveStatus = live
-      ? visibleServerPendingLabel
-        ?? (!state.serverPending && currentPart?.kind === "thought" && currentPart.live ? "Thinking" : undefined)
-      : undefined;
-    units.push({
-      kind: "work",
-      groupId,
-      parts: workParts,
-      expanded: workPresentation.expandSessions ? true : (m.workGroupExpanded?.get(groupId) ?? false),
-      live,
-      liveStatus,
-      collapsible: workPresentation.sessionsCollapsible,
-      startedAt,
-      endedAt
-    });
-    workParts = [];
-  };
-
-  for (const part of parts) {
-    if (isWorkPart(part)) {
-      workParts.push(part);
-      continue;
-    }
-    flushWork(partStartedAt(part), false);
-    units.push({ kind: "inline", parts: [part], expanded: false });
-  }
-  const trailingLive = workParts.length > 0 && isAssistantTurnLive(m);
-  flushWork(trailingLive ? undefined : m.workEndedAt, trailingLive);
-  return wrapTurnWorkSummary(m, parts, units);
-}
-
-function wrapTurnWorkSummary(m: Message, parts: MessagePart[], units: ResolvedUnit[]): ResolvedUnit[] {
-  if (m.workStartedAt === undefined) return units;
-  if (!parts.some(isWorkPart)) return units;
-  const live = isAssistantTurnLive(m);
-  if (!workPresentationForTurn(live).showTurnSummary) return units;
-  const finalPartIndex = lastFinalOutputIndex(parts);
-  const finalPart = finalPartIndex >= 0 ? parts[finalPartIndex] : undefined;
-  const finalUnitIndex = finalPart
-    ? units.findIndex(unit => unit.kind === "inline" && unit.parts[0]?.id === finalPart.id)
-    : -1;
-  const hasTrailingAnswer = finalUnitIndex >= 0 && finalUnitIndex === units.length - 1;
-  const children = hasTrailingAnswer ? units.slice(0, finalUnitIndex) : units;
-  const outputUnits = hasTrailingAnswer ? units.slice(finalUnitIndex) : [];
-  const stableId = `${m.id}:worked:all`;
-  const summary: ResolvedUnit = {
-    kind: "work",
-    groupId: stableId,
-    parts: children.flatMap(unit => unit.parts),
-    children,
-    conglomerate: true,
-    expanded: m.workGroupExpanded?.get(stableId) ?? false,
-    live: false,
-    startedAt: m.workStartedAt,
-    endedAt: (finalPart ? partStartedAt(finalPart) : undefined) ?? m.workEndedAt
-  };
-  return [summary, ...outputUnits];
-}
-
-/** Final text and terminal aborts remain visible outside collapsed work. */
-function lastFinalOutputIndex(parts: MessagePart[]): number {
-  for (let index = parts.length - 1; index >= 0; index--) {
-    if (parts[index].kind === "text" || parts[index].kind === "abort") return index;
-  }
-  return -1;
-}
-
-function partStartedAt(part: MessagePart): number | undefined {
-  return part.kind === "text" || part.kind === "thought" || part.kind === "tool"
-    ? part.startedAt
-    : undefined;
+  return resolveWorkTimeline(m, {
+    showThinking: state.showThinking,
+    serverPending: state.serverPending,
+    liveStatus: visibleServerPendingLabel
+  });
 }
 
 function reconcileAssistantParts(el: HTMLElement, m: Message): void {
@@ -1398,21 +1305,9 @@ function ensureWorkElement(parent: HTMLElement, groupId: string): HTMLElement {
   return el;
 }
 
-function isWorkPart(part: MessagePart): part is Extract<MessagePart, { kind: "thought" | "tool" }> {
-  return part.kind === "thought" || part.kind === "tool";
-}
-
 function messageUsesTimeline(m: Message): boolean {
   return m.parts.some(part => isWorkPart(part)
     && (part.kind !== "thought" || thinkingPresentation(state.showThinking, part.live).visible));
-}
-
-function isAssistantTurnLive(m: Message): boolean {
-  return m.workEndedAt === undefined && m.workStartedAt !== undefined;
-}
-
-function isBlankTextPart(part: MessagePart): part is Extract<MessagePart, { kind: "text" }> {
-  return part.kind === "text" && !part.text.trim();
 }
 
 function renderWorkHead(el: HTMLElement, group: ResolvedUnit): void {
@@ -1693,6 +1588,10 @@ function renderPartInto(
   } else if (part.kind === "summary") {
     cls = "part summary-part";
     html = `<div class="card summary">${md.render(part.text)}</div>`;
+  } else if (part.kind === "steering") {
+    if (el.className !== "part msg user steering-part") el.className = "part msg user steering-part";
+    renderUserMessage(el, part.message);
+    return;
   } else {
     cls = "part abort-part";
     html = `<div class="card answer bubble abort">${escapeHtml(part.reason)}</div>`;
@@ -3011,8 +2910,8 @@ function restoreAssistantParts(msg: Message, recordMessage: ChatRecord["messages
   }
   // appendPartText marks work as started; finalize it so a restored message is
   // never treated as live (its work parts collapse into a labelled group).
-  if (msg.workStartedAt !== undefined && msg.workEndedAt === undefined) {
-    msg.workEndedAt = restoredStarts.length > 0 ? Math.max(...restoredStarts) : msg.workStartedAt;
+  if (msg.workStartedAt !== undefined) {
+    msg.workEndedAt = Math.max(msg.workEndedAt ?? msg.workStartedAt, recordMessage.ts, ...restoredStarts);
   }
   if (recordMessage.interruption && msg.workStartedAt !== undefined) msg.workEndedAt = recordMessage.ts;
 }
@@ -3629,7 +3528,8 @@ function openAttachmentPreview(trigger: HTMLElement): void {
   attachmentGallery = createAttachmentGallery([
     state.draftAttachments,
     ...state.queuedMessages.map(message => message.attachments ?? []),
-    ...state.messages.map(message => (message.attachments ?? []).filter(attachment =>
+    ...state.messages.flatMap(message => [message, ...message.parts.flatMap(part => part.kind === "steering" ? [part.message] : [])])
+      .map(message => (message.attachments ?? []).filter(attachment =>
       message.recordTs !== state.editingMessageTs || !state.editingRemovedAttachmentIds.has(attachment.id)
     ))
   ], trigger.dataset.openAttachment ?? "");
@@ -4127,7 +4027,7 @@ function loadFromRecord(rec: ChatRecord): void {
     const id = restoredRecordMessageId(index, m.ts);
     if (m.role === "user") {
       if (!m.steering) currentUserTs = m.ts;
-      state.messages.push({
+      appendUserMessage({
         id,
         role: "user",
         recordTs: m.ts,
@@ -4143,8 +4043,8 @@ function loadFromRecord(rec: ChatRecord): void {
       // A turn that looped over tools is persisted as one assistant message
       // per LLM round-trip. Merge consecutive assistant/tool rounds into a
       // single message so a restored turn renders as the same connected
-      // timeline the user watched stream live. An interruption also ends a
-      // turn; its continuation starts a new response without a user message.
+      // timeline the user watched stream live. Continue removes the terminal
+      // interruption record so the resumed rounds join this same response.
       const prev = state.messages[state.messages.length - 1];
       if (prev?.role === "assistant" && !prev.aborted) {
         restoreAssistantParts(prev, m);
@@ -4397,7 +4297,8 @@ function handleHostMessage(msg: ExtToChat): void {
       break;
     case "turnWorkStarted": {
       state.busy = true;
-      const m = getOrCreateMsg(msg.messageId, "assistant");
+      const m = (msg.continued ? resumeResponseMessage(state.messages, msg.messageId) : undefined)
+        ?? getOrCreateMsg(msg.messageId, "assistant");
       const lastUser = [...state.messages].reverse().find(message => message.role === "user" && !message.steering);
       m.responseToTs = lastUser?.recordTs;
       m.workStartedAt ??= msg.startedAt;
@@ -4428,13 +4329,7 @@ function handleHostMessage(msg: ExtToChat): void {
       break;
     case "userMessage": {
       if (!msg.steering) state.pendingPlanMessageTs = undefined;
-      else {
-        for (const message of state.messages.filter(isAssistantTurnLive)) {
-          finalizeLiveThoughts(message);
-          message.workEndedAt = Date.now();
-        }
-      }
-      state.messages.push({
+      appendUserMessage({
         id: msg.messageId,
         role: "user",
         recordTs: msg.messageTs,

@@ -101,6 +101,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .user-edit-input:focus { border-color: transparent; outline: none; }
 .user-edit-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .msg.assistant .bubble { padding: 4px 0; }
+.msg.assistant .steering-part .bubble { padding: 0; color: var(--vscode-foreground); }
 .assistant-markdown { color: var(--vscode-foreground); line-height: 1.55; padding: 2px 0; }
 .msg.assistant .card.answer { padding: 8px 11px; }
 .msg.assistant.has-file-changes > .part.final-answer-part .card.answer {

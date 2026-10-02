@@ -1,7 +1,7 @@
 type CopyablePart =
   | { kind: "text" | "summary"; text: string }
   | { kind: "abort"; reason: string }
-  | { kind: "thought" | "tool" };
+  | { kind: "thought" | "tool" | "steering" };
 
 interface RenderUnit {
   kind: "work" | "inline";

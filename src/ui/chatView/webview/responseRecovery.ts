@@ -3,7 +3,32 @@ import type { ChatResponseDiscarded } from "../../messaging.js";
 type ResponsePart =
   | { kind: "text" | "thought"; text: string }
   | { kind: "tool"; card: { toolId: string } }
-  | { kind: "summary" | "abort" };
+  | { kind: "summary" | "abort" | "steering" };
+
+interface ResumableResponse {
+  id: string;
+  role: string;
+  aborted?: string;
+  recordTs?: number;
+  workStartedAt?: number;
+  workEndedAt?: number;
+  startNewPart?: boolean;
+  parts: { kind: string; startedAt?: number }[];
+}
+
+/** Bind resumed events to the saved work instead of creating a second response. */
+export function resumeResponseMessage<T extends ResumableResponse>(messages: T[], messageId: string): T | undefined {
+  const message = messages.at(-1);
+  if (message?.role !== "assistant" || message.aborted !== undefined) return;
+  message.id = messageId;
+  message.recordTs = undefined;
+  message.workEndedAt = undefined;
+  // A restored thought is settled; new deltas must start a live activity.
+  message.startNewPart = true;
+  const starts = message.parts.flatMap(part => part.startedAt === undefined ? [] : [part.startedAt]);
+  if (starts.length) message.workStartedAt ??= Math.min(...starts);
+  return message;
+}
 
 /** Keep completed work while removing a failed generation's trailing output. */
 export function discardResponseParts<T extends ResponsePart>(parts: readonly T[], discarded: ChatResponseDiscarded): T[] {

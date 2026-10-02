@@ -49,6 +49,14 @@ export interface ChatTurnPreparation {
   reason: "server" | "title" | "context" | "memory";
 }
 
+export interface ChatTurnWorkStarted {
+  kind: "turnWorkStarted";
+  messageId: string;
+  startedAt: number;
+  /** Reopen the saved response after the host removes its terminal error. */
+  continued?: boolean;
+}
+
 export interface ChatMemoryCreations {
   kind: "memoryCreations";
   /** Includes the create/update operation for both live cards and saved history. */
