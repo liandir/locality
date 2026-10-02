@@ -711,12 +711,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   border-radius: var(--control-radius); font: inherit; line-height: 1.4; box-sizing: border-box; outline: none;
 }
 .question-composer textarea.question-other-input:focus { background: transparent; border-color: transparent; }
-.question-submit { align-self: flex-end; margin-bottom: 1px; padding: 0; border: 1px solid transparent; border-radius: var(--control-radius); cursor: pointer; outline: none; }
-.question-other:hover .question-submit:not(:disabled), .question-other:focus-within .question-submit:not(:disabled) { opacity: 1; }
+.question-submit { align-self: flex-end; margin-bottom: 1px; padding: 0; background: transparent; border: 1px solid transparent; border-radius: var(--control-radius); cursor: pointer; outline: none; pointer-events: none; }
+.question-other:focus-within .question-submit:not(:disabled) { opacity: 1; pointer-events: auto; }
 .question-submit:hover:not(:disabled), .question-submit:focus-visible:not(:disabled) { color: var(--vscode-foreground); }
 .question-submit:disabled { cursor: default; }
-.question-actions { display: flex; justify-content: flex-end; }
-.question-actions .cancel-btn { border-radius: var(--control-radius); }
+.question-cancel .question-option-badge { background: transparent; color: inherit; }
 #sendSlot { position: absolute; right: 10px; bottom: 10px; display: inline-flex; gap: 5px; }
 .composer-attach { position: absolute; right: 49px; bottom: 13px; width: var(--icon-action-size); height: var(--icon-action-size); display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: var(--control-radius); cursor: pointer; outline: none; }
 .composer-row.busy .composer-attach { right: 88px; }

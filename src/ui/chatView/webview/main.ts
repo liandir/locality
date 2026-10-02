@@ -2213,10 +2213,11 @@ function renderQuestionLayout(config: {
           <textarea id="questionOther" class="question-other-input" rows="1" placeholder="${escapeHtml(config.placeholder)}" aria-label="${escapeHtml(config.inputLabel)}"></textarea>
           <button class="question-option-arrow question-submit" type="button" ${config.submit.attribute} aria-label="${escapeHtml(config.submit.label)}" disabled>${sendIcon()}</button>
         </div>
+        ${config.secondary ? `<button class="question-option question-cancel" type="button" ${config.secondary.attribute}>
+          <span class="question-option-badge" aria-hidden="true">${stopIcon()}</span>
+          <span class="question-option-label">${escapeHtml(config.secondary.label)}</span>
+        </button>` : ""}
       </div>
-      ${config.secondary ? `<div class="question-actions">
-        <button class="send-btn cancel-btn" type="button" ${config.secondary.attribute} aria-label="${escapeHtml(config.secondary.label)}">${stopIcon()}</button>
-      </div>` : ""}
     </div>
   </div>`;
 }

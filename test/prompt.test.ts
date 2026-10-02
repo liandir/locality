@@ -330,11 +330,25 @@ describe("system prompt policy", () => {
     expect(normal.indexOf("You work step by step")).toBeLessThan(normal.indexOf("Available tools"));
   });
 
-  it("plan mode offers read-only and question tools and asks for a checklist", () => {
-    expect(plan).toContain("You are in plan mode");
-    expect(plan).toContain("read_file, list_dir, glob, and ask_user_question are available");
-    expect(plan).toContain("markdown checklist");
-    expect(plan).not.toContain("You work step by step");
+  it.each(["gemma4", "qwen3", "muse-glimmer", "gpt-oss"] as const)("requires clarification before a final implementation plan for %s in both transports", family => {
+    for (const nativeTools of [false, true]) {
+      const prompt = buildSystemPrompt({ family, mode: "plan", nativeTools, workspaceRoot: "/tmp/ws" });
+      expect(prompt).toContain("You are in plan mode");
+      expect(prompt).toContain("read_file, list_dir, glob, and ask_user_question are available");
+      expect(prompt).toContain("call ask_user_question and wait for the user's answer before drafting it");
+      expect(prompt).toContain("Your final response must always contain a concrete implementation plan");
+      expect(prompt).toContain("markdown checklist of ordered, actionable steps");
+      expect(prompt).toContain("include how to verify the result");
+      expect(prompt).toContain("Do not include questions in the final response");
+      expect(prompt).toContain("Do not ask for approval in prose or assume the plan will be approved");
+      expect(prompt).toContain("only after the user accepts the plan and the chat switches to Act mode");
+      expect(prompt).toContain("finish with the complete revised implementation plan");
+      expect(prompt).not.toContain("You work step by step");
+    }
+    for (const mode of ["act", "review"] as const) {
+      expect(buildSystemPrompt({ family, mode, workspaceRoot: "/tmp/ws" }))
+        .not.toContain("Your final response must always contain a concrete implementation plan");
+    }
   });
 
   it("review mode offers read-only tools while asking for a direct review", () => {

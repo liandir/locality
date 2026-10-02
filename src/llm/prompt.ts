@@ -78,9 +78,12 @@ function policySections(opts: PromptOptions): string[] {
   }
 
   if (mode === "plan") {
-    sections.push(
-      `You are in plan mode: ${readsEnabled ? "read_file, list_dir, glob, and " : ""}ask_user_question ${readsEnabled ? "are" : "is"} available${opts.memoryEnabled && readsEnabled ? ", along with search_memories and recall_memory" : ""}. ${readsEnabled ? "Explore the code" : "Use the supplied context"}, clarify any unresolved material user choice, and reply with a GitHub-flavored markdown checklist of concrete steps — name the file for each step and describe the change. The user reviews and accepts the plan before any change is made.`
-    );
+    sections.push([
+      `You are in plan mode. Your task is to prepare a concrete implementation plan for the user to review. ${readsEnabled ? "read_file, list_dir, glob, and " : ""}ask_user_question ${readsEnabled ? "are" : "is"} available${opts.memoryEnabled && readsEnabled ? ", along with search_memories and recall_memory" : ""}.`,
+      `${readsEnabled ? "Explore the code" : "Use the supplied context"}, clarify any unresolved material user choice before writing the plan. If missing information prevents a concrete plan, call ask_user_question and wait for the user's answer before drafting it. Continue gathering evidence or asking necessary questions until you can produce the plan. Use reasonable assumptions for nonblocking details and state them briefly.`,
+      `Your final response must always contain a concrete implementation plan. Write a GitHub-flavored markdown checklist of ordered, actionable steps: identify the files or components to change, describe the intended changes, and include how to verify the result. Do not include questions in the final response, offer to create a plan later, or leave material decisions unresolved. Resolve necessary questions through ask_user_question before the final response.`,
+      `Present the completed plan and stop. The user may approve it, request changes, or cancel planning through the plan controls. Do not ask for approval in prose or assume the plan will be approved. Implementation may begin only after the user accepts the plan and the chat switches to Act mode. When the user requests changes, clarify anything necessary with ask_user_question first, then finish with the complete revised implementation plan.`
+    ].join("\n\n"));
   } else if (mode === "review") {
     sections.push([
       `You are in review mode. Inspect the workspace and answer the user's question with evidence from the code. Use the available tools to gather evidence.`,
