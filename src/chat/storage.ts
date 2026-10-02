@@ -41,6 +41,8 @@ export interface ChatMessage {
   interruption?: { reason: string; mode: ChatMode; reasoningEffort: ReasoningEffort };
   /** Mode selected when a user message was submitted; absent in older history. */
   mode?: ChatMode;
+  /** User guidance injected into the current turn without changing its mode. */
+  steering?: boolean;
   /** Native model reasoning associated with this assistant response. */
   reasoningContent?: string;
   /** Parser events captured during this assistant turn (text, thought, toolCall, summary). */
@@ -326,7 +328,7 @@ export class ChatStorage {
       );
       if (userIndex >= 0) {
         const nextUser = rec.messages.findIndex(
-          (message, index) => index > userIndex && message.role === "user"
+          (message, index) => index > userIndex && message.role === "user" && !message.steering
         );
         end = nextUser >= 0 ? nextUser : rec.messages.length;
       }

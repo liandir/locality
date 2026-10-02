@@ -195,6 +195,7 @@ interface Message {
   role: "user" | "assistant" | "tool" | "system";
   recordTs?: number;
   mode?: ChatMode;
+  steering?: boolean;
   responseToTs?: number;
   parts: MessagePart[];
   text: string;
@@ -239,6 +240,7 @@ interface State {
   serverPending?: ChatTurnPreparation["reason"];
   contextActivityIds: Set<string>;
   showThinking: boolean;
+  steerWithEnter: boolean;
   autoCompact: boolean;
   autoCompactThresholdPercent: number;
   workspaceRoot?: string;
@@ -311,6 +313,7 @@ const state: State = {
   serverPending: undefined,
   contextActivityIds: new Set(),
   showThinking: false,
+  steerWithEnter: false,
   autoCompact: true,
   autoCompactThresholdPercent: 80,
   busy: false,
@@ -1107,6 +1110,7 @@ function renderMessageActionsHtml(m: Message): string {
 }
 
 function renderMessageActionsInnerHtml(m: Message): string {
+  if (m.steering) return "";
   if (m.role === "assistant" && isAssistantTurnLive(m)) return "";
   const actions: string[] = [];
   let persistentHint = "";
@@ -2073,7 +2077,7 @@ function updateComposer(): void {
   const sendSlot = root.querySelector("#sendSlot") as HTMLElement | null;
   if (sendSlot && renderedBusy !== state.busy) {
     const html = state.busy
-      ? `<button id="queueMessage" class="send-btn" data-tip="Queue message" aria-label="Queue message">${sendIcon()}</button><button id="cancel" class="send-btn cancel-btn" data-tip="Cancel" aria-label="Cancel">${stopIcon()}</button>`
+      ? `<button id="queueMessage" class="send-btn" data-tip="${state.steerWithEnter ? "Steer" : "Queue"} message" aria-label="${state.steerWithEnter ? "Steer" : "Queue"} message">${sendIcon()}</button><button id="cancel" class="send-btn cancel-btn" data-tip="Cancel" aria-label="Cancel">${stopIcon()}</button>`
       : `<button id="send" class="send-btn" data-tip="Send" aria-label="Send">${sendIcon()}</button>`;
     sendSlot.innerHTML = html;
     renderedBusy = state.busy;
@@ -3115,7 +3119,7 @@ function bindOnce(): void {
     resizeComposerInput(input);
   });
   input?.addEventListener("keydown", e => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(e.ctrlKey); }
   });
   input?.addEventListener("paste", e => { void handleComposerPaste(e); });
   window.addEventListener("resize", () => {
@@ -3835,7 +3839,7 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
-function submit(): void {
+function submit(alternate = false): void {
   if (state.attachmentPastePending) return;
   const input = root.querySelector("#input") as HTMLTextAreaElement | null;
   const text = input?.value.trim();
@@ -3844,12 +3848,14 @@ function submit(): void {
   if (!text && attachments.length === 0) return;
   if (state.busy) {
     const id = `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    state.queuedMessages.push({ id, text: text ?? "", mode, attachments });
+    const steer = alternate ? !state.steerWithEnter : state.steerWithEnter;
+    if (!steer) state.queuedMessages.push({ id, text: text ?? "", mode, attachments });
     state.draft = "";
     send({ type: "saveDraft", text: "" });
     if (input) input.value = "";
     state.draftAttachments = [];
-    send({ type: "queueMessage", id, text: text ?? "", mode, attachmentIds: attachments.map(attachment => attachment.id) });
+    if (steer) send({ type: "steerMessage", text: text ?? "", mode, attachmentIds: attachments.map(attachment => attachment.id) });
+    else send({ type: "queueMessage", id, text: text ?? "", mode, attachmentIds: attachments.map(attachment => attachment.id) });
     render();
     return;
   }
@@ -4120,12 +4126,13 @@ function loadFromRecord(rec: ChatRecord): void {
   for (const [index, m] of rec.messages.entries()) {
     const id = restoredRecordMessageId(index, m.ts);
     if (m.role === "user") {
-      currentUserTs = m.ts;
+      if (!m.steering) currentUserTs = m.ts;
       state.messages.push({
         id,
         role: "user",
         recordTs: m.ts,
         mode: m.mode,
+        steering: m.steering,
         parts: [],
         text: m.content,
         thought: "",
@@ -4234,6 +4241,8 @@ function handleHostMessage(msg: ExtToChat): void {
     if (msg.type === "settings") {
       state.mode = msg.mode;
       state.showThinking = msg.showThinking;
+      if (state.steerWithEnter !== msg.steerWithEnter) renderedBusy = undefined;
+      state.steerWithEnter = msg.steerWithEnter;
       state.autoCompact = msg.autoCompact;
       state.autoCompactThresholdPercent = msg.autoCompactThresholdPercent;
       if (state.workspaceRoot !== msg.workspaceRoot) {
@@ -4389,7 +4398,7 @@ function handleHostMessage(msg: ExtToChat): void {
     case "turnWorkStarted": {
       state.busy = true;
       const m = getOrCreateMsg(msg.messageId, "assistant");
-      const lastUser = [...state.messages].reverse().find(message => message.role === "user");
+      const lastUser = [...state.messages].reverse().find(message => message.role === "user" && !message.steering);
       m.responseToTs = lastUser?.recordTs;
       m.workStartedAt ??= msg.startedAt;
       m.workEndedAt = undefined;
@@ -4410,7 +4419,7 @@ function handleHostMessage(msg: ExtToChat): void {
       state.chatModeMenuOpen = false;
       {
         const m = getOrCreateMsg(msg.messageId, "assistant");
-        const lastUser = [...state.messages].reverse().find(message => message.role === "user");
+        const lastUser = [...state.messages].reverse().find(message => message.role === "user" && !message.steering);
         m.responseToTs = lastUser?.recordTs;
         markWorkStarted(m);
         m.hasTurnWorkSummary = true;
@@ -4418,12 +4427,19 @@ function handleHostMessage(msg: ExtToChat): void {
       render();
       break;
     case "userMessage": {
-      state.pendingPlanMessageTs = undefined;
+      if (!msg.steering) state.pendingPlanMessageTs = undefined;
+      else {
+        for (const message of state.messages.filter(isAssistantTurnLive)) {
+          finalizeLiveThoughts(message);
+          message.workEndedAt = Date.now();
+        }
+      }
       state.messages.push({
         id: msg.messageId,
         role: "user",
         recordTs: msg.messageTs,
         mode: msg.mode,
+        steering: msg.steering,
         parts: [],
         text: msg.text,
         thought: "",
@@ -4662,7 +4678,7 @@ function handleHostMessage(msg: ExtToChat): void {
       // assistant timeline parts; create a response row so the error is
       // visible in the chat instead.
       if (!target || target.role !== "assistant" || !isAssistantTurnLive(target)) {
-        const lastUser = [...state.messages].reverse().find(message => message.role === "user");
+        const lastUser = [...state.messages].reverse().find(message => message.role === "user" && !message.steering);
         target = {
           id: `abort_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           role: "assistant",

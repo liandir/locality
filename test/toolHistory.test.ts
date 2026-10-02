@@ -60,6 +60,12 @@ describe("restored edit diffs", () => {
     expect(restore([edit(), { role: "user", content: "Again", ts: 4 }, summary(second)]).size).toBe(0);
   });
 
+  it("keeps edits before and after steering in the same turn", () => {
+    const guidance: ChatMessage = { role: "user", content: "Guidance", steering: true, ts: 3 };
+    expect(restore([edit(), guidance, summary(first)])).toEqual(new Map([[0, first]]));
+    expect(restore([edit(), guidance, edit(), summary(total)]).size).toBe(0);
+  });
+
   it("excludes failed edits, including those with old approval metadata", () => {
     const failed = edit("src/app.ts", first);
     failed.toolCall!.status = "failed";

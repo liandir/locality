@@ -179,6 +179,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       type: "settings",
       mode: this.session?.getRecord().mode ?? "act",
       showThinking: s.showThinking,
+      steerWithEnter: s.steerWithEnter,
       autoCompact: s.autoCompact,
       autoCompactThresholdPercent: s.autoCompactThresholdPercent,
       workspaceRoot: this.getWorkspaceRoot()
@@ -488,6 +489,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "saveDraft": this.active.draft = m.text; break;
       case "closeChatTab": this.closeTab(m.id); break;
       case "send":
+      case "steerMessage":
         this.active.draft = "";
         if (!this.session) {
           this.sessionCreationPending = true;
@@ -501,7 +503,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             this.sessionCreationPending = false;
           }
         }
-        await this.sendAndDrainQueue(this.active, m.text, this.takeStagedAttachments(m.attachmentIds), normalizeChatMode(m.mode));
+        {
+          const attachments = this.takeStagedAttachments(m.attachmentIds);
+          if (m.type !== "steerMessage" || !this.session?.steerUserMessage(m.text, attachments)) {
+            await this.sendAndDrainQueue(this.active, m.text, attachments, normalizeChatMode(m.mode));
+          }
+        }
         break;
       case "selectAttachment":
         await this.selectAttachment();

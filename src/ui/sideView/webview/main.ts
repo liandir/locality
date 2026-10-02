@@ -290,6 +290,8 @@ function renderSettings(): string {
 
       ${settingsSection("chat", "Chat", `
         ${switchControl("showThinking", "Show thoughts", showThinking)}
+        ${switchControl("steerWithEnter", "Steer/Queue messages", s.steerWithEnter === true)}
+        <p class="setting-help">${s.steerWithEnter === true ? "Enter steers; Ctrl+Enter queues." : "Enter queues; Ctrl+Enter steers."}</p>
         ${renderMemorySettings()}
       `)}
 
@@ -482,6 +484,7 @@ function bind(): void {
     send({ type: "regenerateMemory", id });
   }));
   bindSetting("showThinking", "change", (_v, el) => (el as HTMLInputElement).checked);
+  bindSetting("steerWithEnter", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindSetting("autoCompact", "change", (_v, el) => (el as HTMLInputElement).checked);
   bindRangeSetting("autoCompactThresholdPercent");
   bindApprovalSettings();

@@ -19,6 +19,7 @@ export interface ChatUserMessage {
   messageTs: number;
   text: string;
   mode: ChatMode;
+  steering?: boolean;
   attachments?: ChatAttachment[];
 }
 
@@ -156,6 +157,7 @@ export type ChatToExt = (
   | { type: "openMemory"; id: string }
   | { type: "ready" }
   | { type: "send"; text: string; mode: ChatMode; attachmentIds?: string[] }
+  | { type: "steerMessage"; text: string; mode: ChatMode; attachmentIds?: string[] }
   | { type: "queueMessage"; id: string; text: string; mode: ChatMode; attachmentIds?: string[] }
   | { type: "updateQueuedMessage"; id: string; text: string }
   | { type: "reorderQueuedMessages"; ids: string[] }
@@ -199,7 +201,7 @@ export type ChatToExt = (
 export type ExtToChat = UiEvent
   | { type: "chatTabs"; tabs: ChatTab[]; activeId?: string }
   | { type: "chatSnapshot"; id: string; events: ExtToChat[]; busy: boolean; draft: string }
-  | { type: "settings"; mode: ChatMode; showThinking: boolean; autoCompact: boolean; autoCompactThresholdPercent: number; workspaceRoot?: string }
+  | { type: "settings"; mode: ChatMode; showThinking: boolean; steerWithEnter: boolean; autoCompact: boolean; autoCompactThresholdPercent: number; workspaceRoot?: string }
   | { type: "attachmentSelected"; attachment: UiAttachment }
   | { type: "attachmentText"; attachmentId: string; requestId: number; text?: string; error?: string }
   | { type: "attachmentImportState"; pending: boolean }

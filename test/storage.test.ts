@@ -18,6 +18,21 @@ afterEach(async () => {
 });
 
 describe("ChatStorage", () => {
+  it("includes steering and the whole response when forking a user turn", async () => {
+    const storage = new ChatStorage(ws, chatsRoot);
+    const rec = storage.newRecord("native");
+    rec.messages = [
+      { role: "user", content: "Request", mode: "act", ts: 1 },
+      { role: "assistant", content: "Initial response", ts: 2 },
+      { role: "user", content: "Guidance", steering: true, ts: 3 },
+      { role: "assistant", content: "Revised response", ts: 4 },
+      { role: "user", content: "Next turn", ts: 5 }
+    ];
+    const forked = await storage.fork(rec, 1);
+    expect(forked.messages).toEqual(rec.messages.slice(0, 4));
+    expect((await storage.load(forked.id))?.messages[2].steering).toBe(true);
+  });
+
   it("retains pending plan approval only in forks containing that plan", async () => {
     const storage = new ChatStorage(ws, chatsRoot);
     const rec = storage.newRecord("native");

@@ -253,6 +253,10 @@ export class ChatSession {
   // the new record values take effect when the next user turn starts.
   private activeTurnModes?: { mode: ChatMode; reasoningEffort: ReasoningEffort };
   private pendingInterruption?: ChatMessage;
+  private pendingSteering: ChatMessage[] = [];
+  private acceptingSteering = false;
+  /** Cancels only generation; the current tool keeps the turn's signal. */
+  private responseAbort?: AbortController;
 
   constructor(args: {
     storage: ChatStorage;
@@ -394,7 +398,7 @@ export class ChatSession {
     // Use the full transcript so compaction and tool continuations retain the
     // original request time instead of taking the time of a later tool result.
     for (let i = this.record.messages.length - 1; i >= 0; i--) {
-      if (this.record.messages[i].role === "user") return this.record.messages[i].ts;
+      if (this.record.messages[i].role === "user" && !this.record.messages[i].steering) return this.record.messages[i].ts;
     }
     return undefined;
   }
@@ -646,6 +650,32 @@ export class ChatSession {
     this.emit({ kind: "toolCallResolved", toolId, status: "executed", diffPreview });
   }
 
+  steerUserMessage(text: string, attachments: ChatAttachment[] = []): boolean {
+    if (this.disposed || !this.activeTurn || !this.acceptingSteering || this.abort?.signal.aborted) return false;
+    text = text.trim();
+    if (!text && !attachments.length) return true;
+    const ts = Math.max(Date.now(), (this.pendingSteering.at(-1)?.ts ?? this.record.messages.at(-1)?.ts ?? 0) + 1);
+    this.pendingSteering.push({
+      role: "user", content: text, steering: true, ts,
+      attachments: attachments.length ? attachments.slice(0, MAX_ATTACHMENTS_PER_MESSAGE) : undefined
+    });
+    this.responseAbort?.abort();
+    return true;
+  }
+
+  private async flushSteeringMessages(): Promise<void> {
+    const messages = this.pendingSteering.splice(0);
+    if (!messages.length) return;
+    for (const message of messages) appendChatMessage(this.record, message);
+    await this.saveRecord();
+    for (const message of messages) {
+      this.emit({
+        kind: "userMessage", messageId: `u_${message.ts}`, messageTs: message.ts,
+        text: message.content, mode: this.turnMode(), steering: true, attachments: message.attachments
+      });
+    }
+  }
+
   async sendUserMessage(text: string, attachments: ChatAttachment[] = [], mode: ChatMode = this.record.mode): Promise<void> {
     if (this.disposed) return;
     if (this.isPlanning() && mode !== "plan") {
@@ -745,6 +775,7 @@ export class ChatSession {
 
   private async runForegroundTurn(run: (ready: () => Promise<void>, waitingForMemory: boolean) => Promise<void>): Promise<void> {
     this.abort = new AbortController();
+    this.acceptingSteering = true;
     const signal = this.abort.signal;
     let endForeground: (() => void) | undefined;
     let waitingForMemory = false;
@@ -766,10 +797,14 @@ export class ChatSession {
     } catch (error) {
       this.emit({ kind: "abort", reason: signal.aborted ? "Stopped by user." : (error as Error).message });
     } finally {
+      this.acceptingSteering = false;
+      this.responseAbort = undefined;
       // A failed save can exit before the reservation has resolved.
       if (!endForeground) this.abort.abort();
       await acquired;
       endForeground?.();
+      // Keep accepted guidance in history even when Stop or a tool failure wins.
+      await this.flushSteeringMessages();
       const interrupted = this.pendingInterruption;
       if (interrupted?.interruption) {
         // Keep terminal cards in the transcript without sending errors or
@@ -1290,6 +1325,12 @@ export class ChatSession {
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
+      if (this.pendingSteering.length) {
+        await this.flushSteeringMessages();
+        messageId = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        this.emit({ kind: "turnStart", messageId });
+        serverUsageTotal = undefined;
+      }
       this.resumeContextActivities();
       this.emit({ kind: "turnPreparing", reason: "server" });
       finishReason = undefined;
@@ -1316,6 +1357,8 @@ export class ChatSession {
       if (!messages) {
         break;
       }
+      // Guidance can arrive during context preparation or compaction.
+      if (this.pendingSteering.length) continue;
 
       const loadingChatContext = this.loadedChatContextPending;
       const pendingActivityIds = this.activeContextActivityIds();
@@ -1336,6 +1379,9 @@ export class ChatSession {
 
       let processingPrompt = false;
       let receivedPromptProgress = false;
+      let streamError: unknown;
+      const responseAbort = new AbortController();
+      this.responseAbort = responseAbort;
       try {
         const reasoningOverrides = reasoningRequestOverrides(this.turnReasoningEffort(), s.reasoningEfforts);
         for await (const chunk of streamChat(
@@ -1359,8 +1405,9 @@ export class ChatSession {
               this.startPendingTitle();
             }
           },
-          this.abort.signal
+          AbortSignal.any([this.abort.signal, responseAbort.signal])
         )) {
+          if (this.pendingSteering.length) break;
           if (chunk.kind === "promptProgress") {
             const processing = chunk.processedTokens < chunk.totalTokens;
             if (!receivedPromptProgress || (loadingChatContext && processing !== processingPrompt)) {
@@ -1501,7 +1548,7 @@ export class ChatSession {
         }
         finishPrompt();
         if (this.abort.signal.aborted) aborted = true;
-        if (!aborted) {
+        if (!aborted && !this.pendingSteering.length) {
           const tail = this.toolProtocol === "native"
             ? [
                 ...asThoughtEvents(nativeThoughtRecovery?.end() ?? []).filter(event => event.kind !== "done"),
@@ -1524,6 +1571,14 @@ export class ChatSession {
           toolLoop = toolLoop || (continueAfterTail.toolLoop ?? false);
         }
       } catch (e) {
+        streamError = e;
+      } finally {
+        this.responseAbort = undefined;
+      }
+      // Steering aborts generation only. Tools have already settled using the
+      // turn signal, so this interruption can resume without an error card.
+      if (streamError !== undefined && !(responseAbort.signal.aborted && this.pendingSteering.length && !this.abort.signal.aborted)) {
+        const e = streamError;
         if (e instanceof GenerationLengthError && readSettings().autoCompact
           && !this.abort.signal.aborted && !this.disposed && !toolLoop
           && lengthRecoveryRetries < MAX_LENGTH_RECOVERY_RETRIES) {
@@ -1618,6 +1673,28 @@ export class ChatSession {
         aborted = true;
       }
 
+      if (this.pendingSteering.length && !aborted && !this.abort.signal.aborted) {
+        // Discard unfinished tool arguments, retaining completed tools and prose.
+        this.emit({ kind: "responseDiscarded", messageId, textChars: 0, thoughtChars: 0,
+          toolIds: [...this.streamingTools.values()].map(tool => tool.toolId) });
+        this.streamingTools.clear();
+        this.lastProgressEmitAt.clear();
+        this.streamingFileState.clear();
+        if (assistantBuf.trim() || thoughtBuf.trim() || turnEvents.length) {
+          appendChatMessage(this.record, {
+            role: "assistant", content: assistantBuf,
+            reasoningContent: this.toolProtocol === "native" ? thoughtBuf || undefined : undefined,
+            events: turnEvents.splice(0), ts: Date.now()
+          });
+        }
+        assistantBuf = "";
+        thoughtBuf = "";
+        turnEvents.length = 0;
+        ranAnyTool ||= toolLoop;
+        repairNote = undefined;
+        continue;
+      }
+
       // The model truncated mid-tool-call (an unclosed write_file the parser
       // dropped). Feed the error back as a tool result and re-prompt so the
       // agent can re-emit the call, instead of stopping with a dead red card.
@@ -1674,6 +1751,7 @@ export class ChatSession {
         continue;
       }
       // Done — flush the final assistant message, or report an empty turn.
+      this.acceptingSteering = false;
       const fileChanges = summarizeFileChanges(fileWrites.values());
       if (assistantBuf.trim()) {
         if (this.turnMode() !== "plan") {
@@ -1714,6 +1792,7 @@ export class ChatSession {
     }
 
     this.completeContextIngestion();
+    this.acceptingSteering = false;
     await Promise.all(this.features.map(feature => feature.endTurn?.()));
     this.featureDisplays.clear();
     this.featureMessages.clear();
@@ -1748,6 +1827,7 @@ export class ChatSession {
   ): Promise<{ continue: boolean; abort?: boolean; toolLoop?: boolean }> {
     let toolLoop = false;
     for (const e of events) {
+      if (toolLoop && this.pendingSteering.length) break;
       if (e.kind === "text") {
         // Suppress any text emitted after a tool call in this batch: it was
         // generated before the tool results existed and is superseded by the

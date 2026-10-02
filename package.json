@@ -228,6 +228,11 @@
           "default": false,
           "description": "Show completed model thoughts in chat and tool history. Current thinking remains visible while active."
         },
+        "locality.steerWithEnter": {
+          "type": "boolean",
+          "default": false,
+          "description": "Steer/Queue messages: when enabled, Enter steers the running response and Ctrl+Enter queues. When disabled, Enter queues and Ctrl+Enter steers."
+        },
         "locality.memoryEnabled": {
           "type": "boolean",
           "default": false,

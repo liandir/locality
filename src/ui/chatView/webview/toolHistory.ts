@@ -21,7 +21,7 @@ export function restoredToolFileChanges(record: ChatRecord): Map<number, FileCha
     unknownEditPath = false;
   };
   for (const [index, message] of record.messages.entries()) {
-    if (message.role === "user") finishTurn();
+    if (message.role === "user" && !message.steering) finishTurn();
     for (const change of message.fileChanges ?? []) {
       const key = fileChangeKey(change.path, record.workspaceRoot);
       summaries.set(key, [...summaries.get(key) ?? [], change]);

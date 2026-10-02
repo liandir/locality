@@ -24,6 +24,7 @@ export interface HarnessSettings {
   titlePrompt: string;
   commitMessagePrompt: string;
   showThinking: boolean;
+  steerWithEnter: boolean;
   autoCompact: boolean;
   memoryEnabled: boolean;
   memoryMaxCount: number;
@@ -63,6 +64,7 @@ export function readSettings(): HarnessSettings {
     titlePrompt: cfg.get<string>("titlePrompt")?.trim() || DEFAULT_TITLE_PROMPT,
     commitMessagePrompt: cfg.get<string>("commitMessagePrompt")?.trim() || DEFAULT_COMMIT_MESSAGE_PROMPT,
     showThinking: cfg.get<boolean>("showThinking") ?? false,
+    steerWithEnter: cfg.get<boolean>("steerWithEnter") === true,
     memoryEnabled: cfg.inspect?.<boolean>("memoryEnabled")?.workspaceValue === true,
     memoryMaxCount: Math.floor(clampNumber(cfg.get<number>("memoryMaxCount") ?? DEFAULT_MEMORY_MAX_COUNT, 1, MAX_MEMORY_COUNT, DEFAULT_MEMORY_MAX_COUNT)),
     autoCompact: cfg.get<boolean>("autoCompact") ?? true,
@@ -120,6 +122,7 @@ export const SETTING_KEYS: (keyof HarnessSettings)[] = [
   "titlePrompt",
   "commitMessagePrompt",
   "showThinking",
+  "steerWithEnter",
   "autoCompact",
   "memoryEnabled",
   "memoryMaxCount",

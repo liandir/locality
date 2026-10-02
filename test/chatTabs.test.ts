@@ -21,6 +21,7 @@ interface FakeSession {
   approve: ReturnType<typeof vi.fn>;
   approveFutureTools: ReturnType<typeof vi.fn>;
   continueTurn: ReturnType<typeof vi.fn>;
+  steerUserMessage: ReturnType<typeof vi.fn>;
   shutdown: ReturnType<typeof vi.fn>;
   sent: string[];
   sentModes: ChatMode[];
@@ -39,6 +40,7 @@ vi.mock("../src/chat/session.js", () => ({
     cancel = vi.fn(() => this.finish());
     approve = vi.fn();
     approveFutureTools = vi.fn(async () => undefined);
+    steerUserMessage = vi.fn((_text: string, _attachments: ChatAttachment[]) => this.active);
     continueTurn = vi.fn(async (_messageTs: number) => {
       if (this.active) return false;
       this.active = true;
@@ -714,5 +716,60 @@ describe("image attachment capabilities", () => {
     provider.openChat(record("b"));
     await provider.openChatById("a");
     expect(snapshot().events.some(event => "kind" in event && event.kind === "visionCapability")).toBe(false);
+  });
+});
+
+describe("steering messages from the chat view", () => {
+  it("routes guidance to the active turn while preserving the normal queue", async () => {
+    const { provider, send, posted } = setup();
+    provider.openChat(record("a"));
+    const a = mocks.sessions.get("a")!;
+    const turn = send({ type: "send", text: "Start", mode: "act", chatId: "a" });
+    await send({ type: "queueMessage", id: "queued", text: "Later", mode: "review", chatId: "a" });
+    await send({ type: "steerMessage", text: "Change direction", mode: "plan", chatId: "a" });
+    expect(a.steerUserMessage).toHaveBeenCalledExactlyOnceWith("Change direction", []);
+    expect(a.sent).toEqual(["Start"]);
+    expect(a.cancel).not.toHaveBeenCalled();
+    expect(posted.filter(m => "type" in m && m.type === "messageQueue").at(-1)).toMatchObject({
+      messages: [{ id: "queued", text: "Later", mode: "review" }]
+    });
+    a.finish();
+    await vi.waitFor(() => expect(a.sent).toEqual(["Start", "Later"]));
+    a.finish();
+    await turn;
+    await provider.closeAll();
+  });
+
+  it("sends normally when the active turn has already finished", async () => {
+    const { provider, send } = setup();
+    provider.openChat(record("a"));
+    const a = mocks.sessions.get("a")!;
+    const turn = send({ type: "steerMessage", text: "Arrived late", mode: "review", chatId: "a" });
+    expect(a.steerUserMessage).toHaveBeenCalledExactlyOnceWith("Arrived late", []);
+    expect(a.sent).toEqual(["Arrived late"]);
+    expect(a.sentModes).toEqual(["review"]);
+    a.finish();
+    await turn;
+    await provider.closeAll();
+  });
+
+  it("ignores stale-tab guidance and replays steering bubbles after a reload", async () => {
+    const { provider, send, snapshot } = setup();
+    provider.openChat(record("a"));
+    const a = mocks.sessions.get("a")!;
+    const turn = send({ type: "send", text: "Start", mode: "act", chatId: "a" });
+    const guidance: UiEvent = { kind: "userMessage", messageId: "guidance", messageTs: 12, text: "Guidance", mode: "act", steering: true };
+    a.emit(guidance);
+    provider.openChat(record("b"));
+    await send({ type: "steerMessage", text: "Stale", mode: "act", chatId: "a" });
+    expect(a.steerUserMessage).not.toHaveBeenCalled();
+    expect(mocks.sessions.get("b")!.steerUserMessage).not.toHaveBeenCalled();
+    await provider.openChatById("a");
+    await send({ type: "ready" });
+    expect(snapshot().events).toContainEqual(guidance);
+    expect(snapshot().busy).toBe(true);
+    a.finish();
+    await turn;
+    await provider.closeAll();
   });
 });

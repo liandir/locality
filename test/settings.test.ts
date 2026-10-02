@@ -58,6 +58,18 @@ describe("tool calling settings", () => {
 });
 
 describe("reasoning and model settings", () => {
+  it("defaults Enter to queue and persists the steering preference", async () => {
+    const { readSettings, writeSetting, resetAllSettings } = await import("../src/config/settings.js");
+    expect(readSettings().steerWithEnter).toBe(false);
+    mocks.values.set("steerWithEnter", true);
+    expect(readSettings().steerWithEnter).toBe(true);
+    await writeSetting("steerWithEnter", true);
+    expect(mocks.update).toHaveBeenCalledWith("steerWithEnter", true, 1);
+    await resetAllSettings();
+    expect(mocks.update).toHaveBeenCalledWith("steerWithEnter", undefined, 1);
+    expect(mocks.update).toHaveBeenCalledWith("steerWithEnter", undefined, 2);
+  });
+
   it("hides thinking by default and accepts an explicit visible setting", async () => {
     const { readSettings } = await import("../src/config/settings.js");
     expect(readSettings().showThinking).toBe(false);
