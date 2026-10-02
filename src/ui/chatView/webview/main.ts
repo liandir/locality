@@ -2197,7 +2197,6 @@ function renderQuestionLayout(config: {
   submit: { attribute: string; label: string };
   placeholder: string;
   inputLabel: string;
-  inputIcon?: string;
 }): string {
   return `<div class="approval-composer question-composer" data-no-tooltip>
     <div class="question-header">
@@ -2209,7 +2208,7 @@ function renderQuestionLayout(config: {
       <div class="question-options">
         ${config.options}
         <div class="question-other">
-          <span class="question-option-badge question-reply-icon" aria-hidden="true">${config.inputIcon ?? pencilIcon()}</span>
+          <span class="question-option-badge question-reply-icon" aria-hidden="true">${pencilIcon()}</span>
           <textarea id="questionOther" class="question-other-input" rows="1" placeholder="${escapeHtml(config.placeholder)}" aria-label="${escapeHtml(config.inputLabel)}"></textarea>
           <button class="question-option-arrow question-submit" type="button" ${config.submit.attribute} aria-label="${escapeHtml(config.submit.label)}" disabled>${sendIcon()}</button>
         </div>
@@ -2260,7 +2259,7 @@ function renderPlanApprovalComposer(messageTs?: number): string {
     </button>`,
     secondary: { attribute: `data-cancel-planning="${messageTs ?? ""}"`, label: "Cancel planning" },
     submit: { attribute: `data-plan-changes="${messageTs ?? ""}"`, label: "Request changes" },
-    placeholder: "Request changes", inputLabel: "Suggest changes to the plan", inputIcon: scrollIcon()
+    placeholder: "Request changes", inputLabel: "Suggest changes to the plan"
   });
 }
 

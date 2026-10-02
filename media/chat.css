@@ -698,6 +698,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .question-option:disabled { opacity: 0.5; cursor: default; }
 .question-option-badge { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 20px; height: 20px; background: var(--surface-fill); color: var(--vscode-descriptionForeground); border-radius: var(--control-radius); font-size: 0.85em; }
+.question-option-badge svg { display: block; flex: 0 0 auto; }
 .question-option-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .question-option-arrow { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 20px; width: 20px; height: 20px; color: var(--vscode-descriptionForeground); opacity: 0; transition: opacity 0.12s; }
 .question-option:hover:not(:disabled) .question-option-arrow, .question-option:focus-visible:not(:disabled) .question-option-arrow { opacity: 1; }
@@ -715,7 +716,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .question-other:focus-within .question-submit:not(:disabled) { opacity: 1; pointer-events: auto; }
 .question-submit:hover:not(:disabled), .question-submit:focus-visible:not(:disabled) { color: var(--vscode-foreground); }
 .question-submit:disabled { cursor: default; }
-.question-cancel .question-option-badge { background: transparent; color: inherit; }
+.question-cancel .question-option-badge { color: var(--error-foreground); }
+.question-cancel:is(:hover, :focus-visible):not(:disabled) .question-option-badge { color: var(--error-highlight-foreground); }
 #sendSlot { position: absolute; right: 10px; bottom: 10px; display: inline-flex; gap: 5px; }
 .composer-attach { position: absolute; right: 49px; bottom: 13px; width: var(--icon-action-size); height: var(--icon-action-size); display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid transparent; border-radius: var(--control-radius); cursor: pointer; outline: none; }
 .composer-row.busy .composer-attach { right: 88px; }
