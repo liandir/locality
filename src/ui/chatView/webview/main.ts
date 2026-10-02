@@ -2186,7 +2186,7 @@ function renderQuestionComposer(tc: ToolCard): string {
     .join("");
   return renderQuestionLayout({
     title: "Question", icon: questionIcon(), content: renderedQuestion, options,
-    secondary: { attribute: "data-cancel-question", label: "Cancel" },
+    secondary: { attribute: `data-skip-question="${toolId}"`, label: "Skip", kind: "skip" },
     submit: { attribute: `data-answer-submit="${toolId}"`, label: "Send" },
     placeholder: "Or write your own response…", inputLabel: "Your answer"
   });
@@ -2198,7 +2198,7 @@ function renderQuestionLayout(config: {
   icon: string;
   content: string;
   options: string;
-  secondary?: { attribute: string; label: string };
+  secondary?: { attribute: string; label: string; kind: "skip" | "cancel" };
   submit: { attribute: string; label: string };
   placeholder: string;
   inputLabel: string;
@@ -2217,8 +2217,8 @@ function renderQuestionLayout(config: {
           <textarea id="questionOther" class="question-other-input" rows="1" placeholder="${escapeHtml(config.placeholder)}" aria-label="${escapeHtml(config.inputLabel)}"></textarea>
           <button class="question-option-arrow question-submit" type="button" ${config.submit.attribute} aria-label="${escapeHtml(config.submit.label)}" disabled>${sendIcon()}</button>
         </div>
-        ${config.secondary ? `<button class="question-option question-cancel" type="button" ${config.secondary.attribute}>
-          <span class="question-option-badge" aria-hidden="true">${stopIcon()}</span>
+        ${config.secondary ? `<button class="question-option question-${config.secondary.kind}" type="button" ${config.secondary.attribute}>
+          ${config.secondary.kind === "cancel" ? `<span class="question-option-badge" aria-hidden="true">${stopIcon()}</span>` : ""}
           <span class="question-option-label">${escapeHtml(config.secondary.label)}</span>
         </button>` : ""}
       </div>
@@ -2262,7 +2262,7 @@ function renderPlanApprovalComposer(messageTs?: number): string {
       <span class="question-option-label">Accept plan</span>
       <span class="question-option-arrow" aria-hidden="true">${sendIcon()}</span>
     </button>`,
-    secondary: { attribute: `data-cancel-planning="${messageTs ?? ""}"`, label: "Cancel planning" },
+    secondary: { attribute: `data-cancel-planning="${messageTs ?? ""}"`, label: "Cancel planning", kind: "cancel" },
     submit: { attribute: `data-plan-changes="${messageTs ?? ""}"`, label: "Request changes" },
     placeholder: "Request changes", inputLabel: "Suggest changes to the plan"
   });
@@ -3475,7 +3475,7 @@ function bindOnce(): void {
       const reject = target.closest("[data-reject]") as HTMLElement | null;
       const answerOption = target.closest("[data-answer-option]") as HTMLElement | null;
       const answerSubmit = target.closest("[data-answer-submit]") as HTMLElement | null;
-      const cancelQuestion = target.closest("[data-cancel-question]") as HTMLElement | null;
+      const skipQuestion = target.closest("[data-skip-question]") as HTMLElement | null;
       const acceptPlan = target.closest("[data-accept-plan]") as HTMLElement | null;
       const planChanges = target.closest("[data-plan-changes]") as HTMLElement | null;
       const cancelPlanning = target.closest("[data-cancel-planning]") as HTMLElement | null;
@@ -3517,9 +3517,12 @@ function bindOnce(): void {
         const answer = state.questionDraft.trim();
         if (answer) submitQuestionAnswer(answerSubmit.dataset.answerSubmit!, answer);
       }
-      else if (cancelQuestion) {
+      else if (skipQuestion) {
+        const toolId = skipQuestion.dataset.skipQuestion!;
+        hiddenApprovalToolIds.add(toolId);
         state.questionDraft = "";
-        send({ type: "cancel" });
+        send({ type: "skipQuestion", toolId });
+        render();
       }
       else if (acceptPlan) {
         submitPlanResponse(planTimestamp(acceptPlan.dataset.acceptPlan));

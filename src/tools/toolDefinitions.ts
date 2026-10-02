@@ -126,7 +126,7 @@ export const ALL_TOOLS: ToolSpec[] = [
   {
     name: "ask_user_question",
     description:
-      "Ask a single clarifying question when a material user choice remains unresolved after considering the request and relevant workspace evidence. Provide 2-3 short, distinct suggested answers; the user picks one or types their own. Emit this tool on its own (not alongside other tool calls) and wait for the answer before continuing. Prefer acting on sensible defaults — use this only when a wrong guess would waste real work.",
+      "Ask a single clarifying question when a material user choice remains unresolved after considering the request and relevant workspace evidence. Provide 2-3 short, distinct suggested answers; the user picks one, types their own, or skips the question. Emit this tool on its own (not alongside other tool calls) and wait for the response before continuing. If the user skips, continue without an answer. Prefer acting on sensible defaults — use this only when a wrong guess would waste real work.",
     parameters: objectParameters({
       question: { type: "string", description: "The question to ask, phrased clearly for the user." },
       suggestions: {

@@ -70,6 +70,18 @@ describe("expanded question results", () => {
     expect(html).not.toContain("[ask_user_question dismissed]");
   });
 
+  it("shows a skipped question as completed without an answer or error styling", () => {
+    const card = { argsJson, status: "executed", resultPreview: "The user skipped this question" };
+    const html = renderQuestionResult(card, md);
+    expect(answeredValue(card)).toBeUndefined();
+    expect(html).toContain('class="tool-output-surface"');
+    expect(html).toContain("Which <strong>database</strong> should we use?");
+    expect(html).toContain("Option B: SQLite");
+    expect(html).toContain("The user skipped this question");
+    expect(html).not.toContain("The user chose");
+    expect(html).not.toContain("The user answered:");
+  });
+
   it("preserves diagnostics when arguments or result formats are unavailable", () => {
     const html = renderQuestionResult({ argsJson: "{", status: "failed", resultPreview: "error: Missing question" }, md);
     expect(html).toContain('class="tool-output-surface error"');

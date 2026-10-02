@@ -162,6 +162,11 @@ interface PendingApproval {
   enablingAutoApproval?: boolean;
 }
 
+type QuestionResponse =
+  | { kind: "answered"; answer: string }
+  | { kind: "skipped" }
+  | { kind: "cancelled" };
+
 interface ToolCompletion extends ChatToolProcess, ChatToolResultDisplay {
   toolId: string;
   toolName: string;
@@ -183,9 +188,8 @@ export class ChatSession {
   private memory?: WorkspaceMemory;
   private pending = new Map<string, PendingApproval>();
   private settingsSubscription: Disposable;
-  // ask_user_question parks the turn here until the user answers; the resolver
-  // gets the chosen/typed answer, or null if the turn was cancelled first.
-  private pendingQuestions = new Map<string, (answer: string | null) => void>();
+  // ask_user_question parks the turn until the user answers, skips, or cancels.
+  private pendingQuestions = new Map<string, (response: QuestionResponse) => void>();
   private abort: AbortController | undefined;
   private activeTurn: Promise<void> | undefined;
   private disposed = false;
@@ -570,7 +574,7 @@ export class ChatSession {
     this.cancelPendingTitle();
     for (const p of this.pending.values()) p.resolve({ approved: false });
     this.pending.clear();
-    for (const resolve of this.pendingQuestions.values()) resolve(null);
+    for (const resolve of this.pendingQuestions.values()) resolve({ kind: "cancelled" });
     this.pendingQuestions.clear();
   }
 
@@ -619,10 +623,18 @@ export class ChatSession {
   }
 
   answerQuestion(toolId: string, answer: string): void {
+    this.resolveQuestion(toolId, { kind: "answered", answer });
+  }
+
+  skipQuestion(toolId: string): void {
+    this.resolveQuestion(toolId, { kind: "skipped" });
+  }
+
+  private resolveQuestion(toolId: string, response: QuestionResponse): void {
     const resolve = this.pendingQuestions.get(toolId);
     if (resolve) {
       this.pendingQuestions.delete(toolId);
-      resolve(answer);
+      resolve(response);
     }
   }
 
@@ -2004,18 +2016,20 @@ export class ChatSession {
         });
         return "executed";
       }
-      // Park the turn until the user answers (or the turn is cancelled).
-      const answer = await new Promise<string | null>(res => {
+      // Park the turn until the user answers, skips, or cancels.
+      const response = await new Promise<QuestionResponse>(res => {
         this.pendingQuestions.set(toolId, res);
       });
-      if (answer === null) {
+      if (response.kind === "cancelled") {
         const note = "[ask_user_question dismissed] The user did not answer the question.";
         await this.finishToolCall(s, {
           toolId, toolName: e.name, argsJson: e.argsJson, content: note, callId: e.id, status: "rejected"
         });
         return "aborted";
       }
-      const result = `the user has answered your question: "${answer}"`;
+      const result = response.kind === "skipped"
+        ? "The user skipped this question"
+        : `the user has answered your question: "${response.answer}"`;
       await this.finishToolCall(s, {
         toolId, toolName: e.name, argsJson: e.argsJson, content: result, callId: e.id, status: "executed", fullResult: true
       });

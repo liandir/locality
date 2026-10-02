@@ -1879,6 +1879,97 @@ describe("ChatSession", () => {
     expect(events.some(event => event.kind === "thought" && event.delta.includes("<tool_call>"))).toBe(false);
   });
 
+  it.each(["act", "plan"] as const)("continues in %s mode after skipping a question without supplying an answer", async mode => {
+    mocks.settings.toolCallingMode = "native";
+    let pass = 0;
+    mocks.streamChat.mockImplementation(async function* (_endpoint, request, signal) {
+      if (pass++ === 0) {
+        yield {
+          kind: "toolCall", name: "ask_user_question", id: "call_question",
+          argsJson: JSON.stringify({ question: "Which scope?", suggestions: ["Source files", "All files"] })
+        };
+      } else {
+        expect(signal.aborted).toBe(false);
+        expect(request.messages.at(-1)).toMatchObject({
+          role: "tool", tool_call_id: "call_question", content: "The user skipped this question"
+        });
+        yield { kind: "text", text: "Continuing with the available information." };
+      }
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const save = vi.fn(async () => undefined);
+    const session = new ChatSession({
+      storage: { save } as never, workspaceRoot: "/tmp/workspace", record,
+      emit: event => events.push(event)
+    });
+    try {
+      const turn = session.sendUserMessage("Review the project", [], mode);
+      await vi.waitFor(() => expect(events.some(event =>
+        event.kind === "toolCallProposed" && event.toolName === "ask_user_question"
+      )).toBe(true));
+      const question = events.find((event): event is Extract<UiEvent, { kind: "toolCallProposed" }> =>
+        event.kind === "toolCallProposed" && event.toolName === "ask_user_question"
+      )!;
+      session.skipQuestion("stale-question-id");
+      expect(mocks.streamChat).toHaveBeenCalledOnce();
+      session.skipQuestion(question.toolId);
+      session.skipQuestion(question.toolId);
+      session.answerQuestion(question.toolId, "All files");
+      await turn;
+
+      expect(mocks.streamChat).toHaveBeenCalledTimes(2);
+      expect(events).toContainEqual(expect.objectContaining({
+        kind: "toolCallResolved", toolId: question.toolId, status: "executed",
+        resultPreview: "The user skipped this question"
+      }));
+      expect(record.messages.filter(message => message.role === "tool")).toEqual([
+        expect.objectContaining({ content: "The user skipped this question", toolCall: expect.objectContaining({ status: "executed" }) })
+      ]);
+      expect(record.messages.filter(message => message.role === "user")).toHaveLength(1);
+      expect(record.messages.at(-1)?.content).toBe("Continuing with the available information.");
+      expect(record.mode).toBe(mode);
+      expect(session.isPlanning()).toBe(mode === "plan");
+      expect(events.some(event => event.kind === "abort")).toBe(false);
+      expect(save).toHaveBeenCalledWith(record);
+    } finally {
+      await session.shutdown();
+    }
+  });
+
+  it("still stops the turn when a pending question is cancelled", async () => {
+    mocks.settings.toolCallingMode = "native";
+    mocks.streamChat.mockImplementation(async function* () {
+      yield {
+        kind: "toolCall", name: "ask_user_question", id: "call_question",
+        argsJson: JSON.stringify({ question: "Which scope?", suggestions: ["Source files", "All files"] })
+      };
+    });
+    const { ChatSession } = await import("../src/chat/session.js");
+    const record = newRecord();
+    const events: UiEvent[] = [];
+    const session = new ChatSession({
+      storage: { save: vi.fn(async () => undefined) } as never,
+      workspaceRoot: "/tmp/workspace", record, emit: event => events.push(event)
+    });
+    try {
+      const turn = session.sendUserMessage("Review the project");
+      await vi.waitFor(() => expect(events.some(event =>
+        event.kind === "toolCallProposed" && event.toolName === "ask_user_question"
+      )).toBe(true));
+      session.cancel();
+      await turn;
+      expect(mocks.streamChat).toHaveBeenCalledOnce();
+      expect(record.messages.find(message => message.role === "tool")).toMatchObject({
+        content: "[ask_user_question dismissed] The user did not answer the question.",
+        toolCall: { status: "rejected" }
+      });
+    } finally {
+      await session.shutdown();
+    }
+  });
+
   it("strictly validates native arguments instead of applying legacy aliases", async () => {
     mocks.settings.toolCallingMode = "native";
     let pass = 0;

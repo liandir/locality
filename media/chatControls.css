@@ -19,6 +19,7 @@
   font: inherit;
 }
 .question-option, .question-other { padding-left: 6px; }
+.question-option.question-skip { padding-left: 12px; text-align: center; }
 
 /* Decision controls keep a gray fill at rest, half the hover/focus strength. */
 .approval-actions .approve, .question-option, .question-other {

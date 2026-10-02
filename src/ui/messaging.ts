@@ -174,6 +174,7 @@ export type ChatToExt = (
   | { type: "cancel" }
   | { type: "approveTool"; toolId: string; approved: boolean; autoApprove?: boolean }
   | { type: "answerQuestion"; toolId: string; answer: string }
+  | { type: "skipQuestion"; toolId: string }
   | { type: "featureAction"; id: string }
   | { type: "setChatMode"; mode: ChatMode }
   | { type: "compactNow" }
